@@ -116,6 +116,20 @@ fn run_webrtc(socket: &Socket, peer: &str, id: &str) -> Result<String> {
         }
         Ok((attempt.control_ready(), attempt.video_snapshot()))
     });
+    let result = result.map_err(|error| {
+        let state = attempt.snapshot();
+        let message = format!(
+            "{error}. Offer ready: {}; remote description: {}; ICE candidates (local/remote): {}/{}; open channels: {}; transport: {}",
+            state["offer_ready"],
+            state["remote_description_set"],
+            state["local_candidates"],
+            state["remote_candidates"],
+            state["channels_open"],
+            state["transport_states"],
+        );
+        eprintln!("{message}");
+        anyhow::anyhow!(message)
+    });
     attempt.disconnect();
     result
 }
