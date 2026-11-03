@@ -59,8 +59,19 @@ fn body(login: &Login) -> Value {
     // Same service scopes and optional second-factor contract as lowlat.
     let mut body = json!({"email":login.email.trim(), "password":login.password.as_str(),
         "session_scopes":["ws.host", "ws.client", "api.writer"]});
-    if !login.tfa.trim().is_empty() {
-        body["tfa"] = json!(login.tfa.trim());
+    let tfa = login.tfa.trim();
+    if !tfa.is_empty() {
+        let digits = zeroize::Zeroizing::new(
+            tfa.chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>(),
+        );
+        let code = if digits.len() == 6 && digits.bytes().all(|b| b.is_ascii_digit()) {
+            digits.as_str()
+        } else {
+            tfa
+        };
+        body["tfa"] = json!(code);
     }
     body
 }
@@ -78,6 +89,31 @@ fn accepted(status: u16, value: Value) -> Result<Session> {
     }
     match status {
         200 | 201 => {}
+        400 => {
+            let fields: Vec<_> = ["email", "password", "tfa", "session_scopes"]
+                .into_iter()
+                .filter(|field| {
+                    value["codes"].as_array().is_some_and(|codes| {
+                        codes.iter().any(|code| {
+                            code["type"] == "request_body_invalid"
+                                && code["values"].as_array().is_some_and(|values| {
+                                    values.iter().any(|value| value.as_str() == Some(*field))
+                                })
+                        })
+                    })
+                })
+                .collect();
+            if fields == ["tfa"] {
+                anyhow::bail!("Parsec rejected the two-factor code format (HTTP 400). Enter the six digits from your authenticator app.");
+            }
+            if !fields.is_empty() {
+                anyhow::bail!(
+                    "Parsec rejected these sign-in fields (HTTP 400): {}.",
+                    fields.join(", ")
+                );
+            }
+            anyhow::bail!("Sign-in refused (HTTP 400). Parsec did not identify an invalid field.");
+        }
         401 => anyhow::bail!(
             "Sign-in refused (HTTP 401). Check your email, password and current two-factor code."
         ),
@@ -167,12 +203,21 @@ mod tests {
         };
         assert!(body(&login).get("tfa").is_none());
         assert_eq!(body(&login)["email"], "user@example.invalid");
-        login.tfa = zeroize::Zeroizing::new("012345".into());
+        login.tfa = zeroize::Zeroizing::new("012 345".into());
         assert_eq!(body(&login)["tfa"], "012345");
         let e = accepted(403, json!({"codes":[{"type":"ip_unverified"}]}))
             .err()
             .unwrap();
         assert!(e.to_string().contains("Confirm"));
+        let invalid_code = accepted(
+            400,
+            json!({"codes":[{"type":"request_body_invalid","values":["tfa", "secret-sentinel"]}]}),
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(invalid_code.contains("two-factor code format"));
+        assert!(!invalid_code.contains("secret-sentinel"));
     }
 }
 
