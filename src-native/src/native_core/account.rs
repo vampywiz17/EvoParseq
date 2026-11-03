@@ -67,16 +67,29 @@ fn body(login: &Login) -> Value {
 
 fn accepted(status: u16, value: Value) -> Result<Session> {
     if status == 403
-        && value["codes"]
-            .as_array()
-            .is_some_and(|codes| codes.iter().any(|code| code["type"] == "ip_unverified"))
+        && (value["error"] == "ip_unverified"
+            || value["codes"].as_array().is_some_and(|codes| {
+                codes
+                    .iter()
+                    .any(|code| code == "ip_unverified" || code["type"] == "ip_unverified")
+            }))
     {
         anyhow::bail!("Confirm the sign-in email from Parsec, then try again.");
     }
-    ensure!(
-        matches!(status, 200 | 201),
-        "Sign-in refused. Check your credentials and two-factor code."
-    );
+    match status {
+        200 | 201 => {}
+        401 => anyhow::bail!(
+            "Sign-in refused (HTTP 401). Check your email, password and current two-factor code."
+        ),
+        403 => {
+            anyhow::bail!("Sign-in blocked (HTTP 403). Check for a confirmation email from Parsec.")
+        }
+        429 => anyhow::bail!("Too many sign-in attempts (HTTP 429). Wait before retrying."),
+        500..=599 => {
+            anyhow::bail!("Parsec sign-in service returned HTTP {status}. Try again later.")
+        }
+        _ => anyhow::bail!("Sign-in refused (HTTP {status})."),
+    }
     let token = value["session_id"]
         .as_str()
         .context("No session returned by Parsec")?;
@@ -108,8 +121,11 @@ pub fn login(login: &Login) -> Result<Session> {
         .read_to_end(&mut bytes)
         .map_err(|_| anyhow::anyhow!("Could not read the sign-in response."))?;
     ensure!(bytes.len() <= 131072, "Sign-in response exceeds limit");
-    let value =
-        serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("Invalid sign-in response."))?;
+    let value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(_) if !matches!(status, 200 | 201) => Value::Null,
+        Err(_) => anyhow::bail!("Invalid sign-in response."),
+    };
     let session = accepted(status, value)?;
     session
         .revoke_on_drop
@@ -138,6 +154,7 @@ mod tests {
             .err()
             .unwrap();
             assert!(!error.to_string().contains("secret-sentinel"));
+            assert!(error.to_string().contains(&format!("HTTP {status}")));
         }
         assert!(accepted(201, json!({})).is_err());
     }
