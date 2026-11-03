@@ -1,0 +1,28 @@
+app-id: io.github.vampywiz17.EvoParseq
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: evoparseq-linux
+finish-args:
+  - --share=network
+  - --socket=wayland
+  - --device=dri
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+modules:
+  - name: evoparseq-linux
+    buildsystem: simple
+    build-commands:
+      - >-
+        cargo build --manifest-path linux/Cargo.toml --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
+      - >-
+        install -Dm755 target/$(rustc -vV | sed -n 's/^host: //p')/release/evoparseq-linux /app/bin/evoparseq-linux
+      - install -Dm644 linux/flatpak/io.github.vampywiz17.EvoParseq.desktop -t /app/share/applications
+      - install -Dm644 assets/evoparseq.svg /app/share/icons/hicolor/scalable/apps/io.github.vampywiz17.EvoParseq.svg
+      - install -Dm644 LICENSE /app/share/licenses/evoparseq/LICENSE
+      - install -Dm644 src-native/crates/bud/vendor/lowlat-client/LICENSE /app/share/licenses/evoparseq/LOWLAT-LICENSE
+    sources:
+      - type: dir
+        path: ../..

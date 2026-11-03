@@ -1,0 +1,46 @@
+name: EvoParseq Linux Flatpak
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/linux-flatpak]
+    paths: ['linux/**', '.github/workflows/linux-flatpak.yml', 'src-native/src/native_core/account.rs', 'src-native/src/event_log.rs', 'assets/evoparseq.svg']
+
+permissions:
+  contents: read
+
+jobs:
+  flatpak:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Prepare locked offline sources
+        run: |
+          stage="$RUNNER_TEMP/linux-flatpak-src"
+          mkdir -p "$stage"
+          git archive HEAD linux .cargo assets/evoparseq.svg LICENSE src-native/src/native_core/account.rs src-native/src/event_log.rs src-native/crates/bud/vendor/lowlat-client/LICENSE | tar -x -C "$stage"
+          cd "$stage"
+          rustfmt --edition 2024 --config skip_children=true --check linux/src/main.rs linux/src/video_probe.rs
+          cargo vendor --manifest-path linux/Cargo.toml --locked --versioned-dirs vendor > .cargo/config.toml
+      - name: Install Flatpak SDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 org.freedesktop.Sdk.Extension.rust-stable//25.08
+      - name: Build and bundle
+        working-directory: ${{ runner.temp }}/linux-flatpak-src
+        run: |
+          flatpak-builder --user --force-clean --repo="$RUNNER_TEMP/flatpak-repo" "$RUNNER_TEMP/flatpak-build" linux/flatpak/io.github.vampywiz17.EvoParseq.yml
+          flatpak build-bundle "$RUNNER_TEMP/flatpak-repo" "$RUNNER_TEMP/EvoParseq-Linux.flatpak" io.github.vampywiz17.EvoParseq
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EvoParseq-Linux-Flatpak
+          path: ${{ runner.temp }}/EvoParseq-Linux.flatpak
+          if-no-files-found: error
