@@ -77,7 +77,7 @@ fn run_webrtc(socket: &Socket, peer: &str, id: &str) -> Result<String> {
                 match socket.next() {
                     Ok(Some(text)) => {
                         ensure!(
-                            !native_wire::incoming(&text, id, attempt)?,
+                            !native_wire::incoming(&text, id, &attempt)?,
                             "The host closed the connection"
                         );
                     }
