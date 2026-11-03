@@ -1,8 +1,37 @@
 #[path = "../../src-native/src/native_core/account.rs"]
 mod account;
+#[path = "../../src-native/src/native_core/signaling.rs"]
+mod account_signaling;
+#[path = "../../src-native/src/attempt.rs"]
+pub mod attempt;
+#[path = "../../src-native/src/audio_layout.rs"]
+pub mod audio_layout;
+#[path = "../../src-native/src/audio_stream.rs"]
+pub mod audio_stream;
+#[path = "../../src-native/src/codec_initialization.rs"]
+pub mod codec_initialization;
+mod connection_probe;
+#[path = "../../src-native/src/control.rs"]
+pub mod control;
 #[path = "../../src-native/src/event_log.rs"]
 mod event_log;
+#[path = "../../src-native/src/frame_timing.rs"]
+pub mod frame_timing;
+#[path = "../../src-native/src/media_ingress.rs"]
+pub mod media_ingress;
+#[path = "../../src-native/src/native_wire.rs"]
+pub mod native_wire;
+#[path = "../../src-native/src/rtc_configuration.rs"]
+pub mod rtc_configuration;
+#[path = "../../src-native/src/signaling.rs"]
+pub mod signaling;
+#[path = "../../src-native/src/transport.rs"]
+pub mod transport;
+#[path = "../../src-native/src/video_output.rs"]
+pub mod video_output;
 mod video_probe;
+#[path = "../../src-native/src/video_stream.rs"]
+pub mod video_stream;
 
 use eframe::{egui, egui_wgpu};
 use std::sync::mpsc;
@@ -12,11 +41,13 @@ enum Command {
     SignIn(account::Login),
     Refresh,
     SignOut,
+    Probe(String),
 }
 
 enum Reply {
     Hosts(Vec<account::Host>),
     SignedOut,
+    ProbePassed(String),
     Error { signed_in: bool, message: String },
 }
 
@@ -30,6 +61,7 @@ struct Desktop {
     signed_in: bool,
     busy: bool,
     error: Option<String>,
+    probe_result: Option<String>,
     show_video: bool,
     video: Vec<String>,
     renderer: String,
@@ -47,6 +79,24 @@ fn account_worker(
                 session = Some(new_session);
             }),
             Command::Refresh => Ok(()),
+            Command::Probe(peer) => {
+                let reply = match session
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Sign in first."))
+                    .and_then(|session| connection_probe::run(session, &peer))
+                {
+                    Ok(message) => Reply::ProbePassed(message),
+                    Err(error) => Reply::Error {
+                        signed_in: session.is_some(),
+                        message: error.to_string(),
+                    },
+                };
+                if replies.send(reply).is_err() {
+                    break;
+                }
+                ui.request_repaint();
+                continue;
+            }
             Command::SignOut => {
                 session = None;
                 if replies.send(Reply::SignedOut).is_err() {
@@ -88,6 +138,7 @@ impl Desktop {
             Ok(()) => {
                 self.busy = true;
                 self.error = None;
+                self.probe_result = None;
             }
             Err(_) => self.error = Some("Account worker is unavailable.".into()),
         }
@@ -108,6 +159,7 @@ impl eframe::App for Desktop {
                     self.signed_in = false;
                     self.error = None;
                 }
+                Reply::ProbePassed(message) => self.probe_result = Some(message),
                 Reply::Error { signed_in, message } => {
                     self.signed_in = signed_in;
                     self.error = Some(message);
@@ -158,8 +210,20 @@ impl eframe::App for Desktop {
                                 self.send(Command::SignOut);
                             }
                         });
+                        let mut probe = None;
                         for host in &self.hosts {
-                            ui.label(&host.name);
+                            ui.horizontal(|ui| {
+                                ui.label(&host.name);
+                                if ui.button("Test connection").clicked() {
+                                    probe = Some(host.peer.clone());
+                                }
+                            });
+                        }
+                        if let Some(peer) = probe {
+                            self.send(Command::Probe(peer));
+                        }
+                        if let Some(result) = &self.probe_result {
+                            ui.label(result);
                         }
                         if self.hosts.is_empty() {
                             ui.label("No computers listed.");
@@ -252,6 +316,7 @@ fn main() -> anyhow::Result<()> {
                 signed_in: false,
                 busy: false,
                 error: None,
+                probe_result: None,
                 show_video: false,
             }))
         }),

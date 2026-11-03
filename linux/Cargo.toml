@@ -9,6 +9,15 @@ publish = false
 [dependencies]
 anyhow = "1"
 ash = "0.38"
+bytes = "1"
+futures-util = { version = "0.3", features = ["sink"] }
+getrandom = "0.3"
+libopus_sys = { version = "=0.3.3", features = ["bundled", "static"] }
+rtrb = "=0.4.1"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync", "time", "net"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+webrtc = "=0.14.0"
 eframe = { version = "=0.33.3", default-features = false, features = ["default_fonts", "wayland", "wgpu"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 serde_json = "1"
@@ -18,3 +27,9 @@ zeroize = "1"
 [profile.release]
 strip = true
 lto = "thin"
+
+[patch.crates-io]
+dtls = { path = "../src-native/vendor/dtls-0.13.0" }
+webrtc = { path = "../src-native/vendor/webrtc-0.14.0" }
+webrtc-ice = { path = "../src-native/vendor/webrtc-ice-0.14.0" }
+turn = { path = "../src-native/vendor/turn-0.11.0" }

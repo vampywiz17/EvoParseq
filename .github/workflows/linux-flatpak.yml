@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [codex/linux-flatpak]
-    paths: ['linux/**', '.github/workflows/linux-flatpak.yml', 'src-native/src/native_core/account.rs', 'src-native/src/event_log.rs', 'assets/evoparseq.svg']
+    paths: ['linux/**', '.github/workflows/linux-flatpak.yml', 'src-native/**', 'assets/evoparseq.svg']
 
 permissions:
   contents: read
@@ -24,9 +24,9 @@ jobs:
         run: |
           stage="$RUNNER_TEMP/linux-flatpak-src"
           mkdir -p "$stage"
-          git archive HEAD linux .cargo assets/evoparseq.svg LICENSE src-native/src/native_core/account.rs src-native/src/event_log.rs src-native/crates/bud/vendor/lowlat-client/LICENSE | tar -x -C "$stage"
+          git archive HEAD linux .cargo assets/evoparseq.svg LICENSE src-native | tar -x -C "$stage"
           cd "$stage"
-          rustfmt --edition 2024 --config skip_children=true --check linux/src/main.rs linux/src/video_probe.rs
+          rustfmt --edition 2024 --config skip_children=true --check linux/src/main.rs linux/src/video_probe.rs linux/src/connection_probe.rs
           cargo vendor --manifest-path linux/Cargo.toml --locked --versioned-dirs vendor > .cargo/config.toml
       - name: Install Flatpak SDK
         run: |

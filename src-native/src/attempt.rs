@@ -699,6 +699,21 @@ impl Attempt {
             .control_ready
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn video_snapshot(&self) -> crate::video_stream::Snapshot {
+        let inspector = self
+            .completion
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .video_stream
+            .clone();
+        let snapshot = inspector
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshot();
+        snapshot
+    }
+
     #[cfg(windows)]
     pub fn start_video(&self, window: Arc<crate::window::Window>) {
         {
