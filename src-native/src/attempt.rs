@@ -776,7 +776,7 @@ impl Attempt {
         let mut snapshot = serde_json::json!({ "offer_ready": state.progress.ready, "mid":state.progress.mid, "peer_closed": state.progress.closed, "failed": state.progress.failed, "failure_stage": state.progress.failure_stage, "negotiated_channels": state.progress.channels, "channels_open": state.progress.open_mask.count_ones(), "transport_connected":state.progress.transport_connected, "local_candidates":state.progress.local_candidates, "remote_candidates":state.progress.remote_candidates, "messages_received":state.progress.messages_received, "worker_finished": *self.finished.0.lock().unwrap_or_else(|e| e.into_inner()), "host_connected": false,
         "local_description_set":state.progress.local_description_set,"remote_description_set":state.progress.remote_description_set,"sync_received":state.progress.sync_received,"transport_states":state.progress.transport_states,"transport_states_before_close":state.progress.transport_states_before_close,"transport_states_at_failure":state.progress.transport_states_at_failure,
         "local_host_candidates":state.progress.local_host_candidates,"local_srflx_candidates":state.progress.local_srflx_candidates,
-        "data_channel_only":true,"legacy_rsa_1024_enabled":state.progress.legacy_rsa_1024,"ice_servers_configured":state.progress.stun_provider.server().is_some(),"stun_provider":state.progress.stun_provider.server().map(|(name, _)| name),"network_types":["udp4"],"connection_deadline_seconds":30,"connection_deadline_scope":"establishment-only","connection_established":state.progress.connection_established,
+        "data_channel_only":true,"network_types":["udp4"],"connection_deadline_seconds":30,"connection_deadline_scope":"establishment-only","connection_established":state.progress.connection_established,
         "channel_receive_api":"detached","unavailable_media_bypasses_control_queue":state.discard_unavailable_media,"queued_messages":state.messages.len(),"queued_message_bytes":state.message_bytes,"channel_message_limit_bytes":MAX_CHANNEL_MESSAGE,
         "channel_messages_received":state.progress.channel_messages_received,
         "channel_bytes_received":state.progress.channel_bytes_received,
@@ -787,22 +787,28 @@ impl Attempt {
             serde_json::json!(state.progress.local_candidates.saturating_sub(
                 state.progress.local_host_candidates + state.progress.local_srflx_candidates
             ));
-        snapshot["relay_only_policy"] = serde_json::json!(state.progress.relay_only);
-        snapshot["relay_only_connectivity"] =
-            serde_json::json!(state.progress.relay_only_connectivity);
-        snapshot["ice_gathering_policy"] = serde_json::json!(if state.progress.relay_only {
-            "relay"
-        } else {
-            "all"
-        });
         snapshot["local_gathering_complete"] =
             serde_json::json!(state.progress.local_gathering_complete);
         snapshot["local_sync_queued"] = serde_json::json!(state.progress.local_sync_queued);
 
-        snapshot["ice_servers_configured"] =
-            serde_json::json!(state.progress.resolved_ice_servers.map(|count| count != 0));
-        snapshot["resolved_ice_server_entries"] =
-            serde_json::json!(state.progress.resolved_ice_servers);
+        #[cfg(test)]
+        {
+            snapshot["relay_only_policy"] = serde_json::json!(state.progress.relay_only);
+            snapshot["relay_only_connectivity"] =
+                serde_json::json!(state.progress.relay_only_connectivity);
+            snapshot["ice_gathering_policy"] = serde_json::json!(if state.progress.relay_only {
+                "relay"
+            } else {
+                "all"
+            });
+            snapshot["ice_servers_configured"] =
+                serde_json::json!(state.progress.resolved_ice_servers.map(|count| count != 0));
+            snapshot["resolved_ice_server_entries"] =
+                serde_json::json!(state.progress.resolved_ice_servers);
+            snapshot["legacy_rsa_1024_enabled"] = serde_json::json!(state.progress.legacy_rsa_1024);
+            snapshot["stun_provider"] =
+                serde_json::json!(state.progress.stun_provider.server().map(|(name, _)| name));
+        }
         snapshot
     }
 
