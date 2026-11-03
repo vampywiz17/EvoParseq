@@ -4,7 +4,7 @@ mod account;
 mod event_log;
 mod video_probe;
 
-use eframe::{egui, egui_wgpu, wgpu};
+use eframe::{egui, egui_wgpu};
 use std::sync::mpsc;
 use zeroize::Zeroizing;
 
@@ -208,7 +208,9 @@ fn main() -> anyhow::Result<()> {
     setup.instance_descriptor.backends = wgpu::Backends::VULKAN;
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
-        viewport: egui::ViewportBuilder::default().with_inner_size([780.0, 500.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_title("EvoParseq")
+            .with_inner_size([780.0, 500.0]),
         wgpu_options: egui_wgpu::WgpuConfiguration {
             wgpu_setup: setup.into(),
             ..Default::default()
