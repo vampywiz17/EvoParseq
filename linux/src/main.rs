@@ -6,6 +6,7 @@ mod account_signaling;
 pub mod attempt;
 #[path = "../../src-native/src/audio_layout.rs"]
 pub mod audio_layout;
+mod audio_pipewire;
 #[path = "../../src-native/src/audio_stream.rs"]
 pub mod audio_stream;
 #[path = "../../src-native/src/codec_initialization.rs"]
@@ -41,7 +42,7 @@ enum Command {
     SignIn(account::Login),
     Refresh,
     SignOut,
-    Probe(String),
+    Probe(String, connection_probe::Mode),
 }
 
 enum Reply {
@@ -79,11 +80,11 @@ fn account_worker(
                 session = Some(new_session);
             }),
             Command::Refresh => Ok(()),
-            Command::Probe(peer) => {
+            Command::Probe(peer, mode) => {
                 let reply = match session
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("Sign in first."))
-                    .and_then(|session| connection_probe::run(session, &peer))
+                    .and_then(|session| connection_probe::run(session, &peer, mode))
                 {
                     Ok(message) => Reply::ProbePassed(message),
                     Err(error) => Reply::Error {
@@ -214,13 +215,15 @@ impl eframe::App for Desktop {
                         for host in &self.hosts {
                             ui.horizontal(|ui| {
                                 ui.label(&host.name);
-                                if ui.button("Test connection").clicked() {
-                                    probe = Some(host.peer.clone());
+                                for mode in [connection_probe::Mode::WebRtc, connection_probe::Mode::Bud] {
+                                    if ui.button(format!("Test {}", mode.label())).clicked() {
+                                        probe = Some((host.peer.clone(), mode));
+                                    }
                                 }
                             });
                         }
-                        if let Some(peer) = probe {
-                            self.send(Command::Probe(peer));
+                        if let Some((peer, mode)) = probe {
+                            self.send(Command::Probe(peer, mode));
                         }
                         if let Some(result) = &self.probe_result {
                             ui.label(result);
@@ -228,7 +231,7 @@ impl eframe::App for Desktop {
                         if self.hosts.is_empty() {
                             ui.label("No computers listed.");
                         }
-                        ui.label("Streaming is not available in this preview.");
+                        ui.label("Play audio on the host during the test. Video playback is not available in this preview.");
                     } else {
                         ui.heading("Sign in to Parsec");
                         ui.label("Email");

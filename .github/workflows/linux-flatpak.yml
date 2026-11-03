@@ -26,7 +26,7 @@ jobs:
           mkdir -p "$stage"
           git archive HEAD linux .cargo assets/evoparseq.svg LICENSE src-native | tar -x -C "$stage"
           cd "$stage"
-          rustfmt --edition 2024 --config skip_children=true --check linux/src/main.rs linux/src/video_probe.rs linux/src/connection_probe.rs
+          rustfmt --edition 2024 --config skip_children=true --check linux/src/main.rs linux/src/video_probe.rs linux/src/connection_probe.rs linux/src/audio_pipewire.rs
           cargo vendor --manifest-path linux/Cargo.toml --locked --versioned-dirs vendor > .cargo/config.toml
       - name: Install Flatpak SDK
         run: |

@@ -70,7 +70,7 @@ impl Transport {
                 true,
                 Some(network),
             )?;
-            attempt.start_android_media(video);
+            attempt.start_native_media(video);
             return Ok(Self::WebRtc(Box::new(attempt)));
         }
         let mut session = Session::external_video_depth(config.allow_hevc, config.ten_bit)?;

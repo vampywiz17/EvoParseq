@@ -484,7 +484,7 @@ pub enum StunProvider {
     Cloudflare,
 }
 impl StunProvider {
-    fn server(self) -> Option<(&'static str, &'static str)> {
+    pub(crate) fn server(self) -> Option<(&'static str, &'static str)> {
         match self {
             Self::None => None,
             // Audited constructor in the pinned public parsec.js (150-104a).
@@ -742,11 +742,17 @@ impl Attempt {
         state.video_output = Some(video);
     }
 
-    #[cfg(target_os = "android")]
-    pub fn start_android_media(&self, video: Arc<crate::video_android::Pipeline>) {
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    pub fn start_native_media(
+        &self,
+        #[cfg(target_os = "android")] video: Arc<crate::video_android::Pipeline>,
+    ) {
         let mut state = self.completion.lock().unwrap_or_else(|e| e.into_inner());
         state.audio_stream = Some(crate::audio_stream::Pipeline::start_with_budget(Some(100)));
-        state.video_output = Some(video);
+        #[cfg(target_os = "android")]
+        {
+            state.video_output = Some(video);
+        }
     }
 
     pub fn audio_receiver(&self) -> Option<crate::audio_stream::NativeReceiver> {

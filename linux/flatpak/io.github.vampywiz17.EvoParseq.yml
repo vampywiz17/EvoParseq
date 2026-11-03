@@ -8,6 +8,7 @@ command: evoparseq-linux
 finish-args:
   - --share=network
   - --socket=wayland
+  - --filesystem=xdg-run/pipewire-0
   - --device=dri
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
