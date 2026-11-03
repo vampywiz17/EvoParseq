@@ -770,7 +770,7 @@ impl Attempt {
         Some(message)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, target_os = "linux"))]
     pub fn snapshot(&self) -> serde_json::Value {
         let state = self.completion.lock().unwrap_or_else(|e| e.into_inner());
         let mut snapshot = serde_json::json!({ "offer_ready": state.progress.ready, "mid":state.progress.mid, "peer_closed": state.progress.closed, "failed": state.progress.failed, "failure_stage": state.progress.failure_stage, "negotiated_channels": state.progress.channels, "channels_open": state.progress.open_mask.count_ones(), "transport_connected":state.progress.transport_connected, "local_candidates":state.progress.local_candidates, "remote_candidates":state.progress.remote_candidates, "messages_received":state.progress.messages_received, "worker_finished": *self.finished.0.lock().unwrap_or_else(|e| e.into_inner()), "host_connected": false,
