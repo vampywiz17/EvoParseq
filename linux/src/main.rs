@@ -219,7 +219,7 @@ fn main() -> anyhow::Result<()> {
     };
     let mut worker = None;
     let result = eframe::run_native(
-        "EvoParseq",
+        "io.github.vampywiz17.EvoParseq",
         options,
         Box::new(|cc| {
             let mut visuals = egui::Visuals::dark();

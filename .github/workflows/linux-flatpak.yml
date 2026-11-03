@@ -38,7 +38,7 @@ jobs:
         working-directory: ${{ runner.temp }}/linux-flatpak-src
         run: |
           flatpak-builder --user --force-clean --repo="$RUNNER_TEMP/flatpak-repo" "$RUNNER_TEMP/flatpak-build" linux/flatpak/io.github.vampywiz17.EvoParseq.yml
-          flatpak build-bundle "$RUNNER_TEMP/flatpak-repo" "$RUNNER_TEMP/EvoParseq-Linux.flatpak" io.github.vampywiz17.EvoParseq
+          flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo "$RUNNER_TEMP/flatpak-repo" "$RUNNER_TEMP/EvoParseq-Linux.flatpak" io.github.vampywiz17.EvoParseq
       - uses: actions/upload-artifact@v4
         with:
           name: EvoParseq-Linux-Flatpak
