@@ -239,99 +239,6 @@ impl Desktop {
                 );
             });
     }
-    fn settings(&mut self, ui: &mut egui::Ui) {
-        use app_style::settings as s;
-        ui.visuals_mut().override_text_color = Some(color(app_style::SETTINGS_TEXT));
-        ui.visuals_mut().extreme_bg_color = color(app_style::SETTINGS_FIELD);
-        ui.visuals_mut().selection.bg_fill = color(app_style::SETTINGS_ACCENT);
-        ui.visuals_mut().widgets.inactive.weak_bg_fill = color(app_style::SETTINGS_FIELD);
-        ui.visuals_mut().widgets.hovered.weak_bg_fill = color(app_style::SETTINGS_FIELD);
-        ui.visuals_mut().widgets.active.weak_bg_fill = color(app_style::SETTINGS_FIELD);
-        ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::NONE;
-        ui.visuals_mut().widgets.hovered.bg_stroke = egui::Stroke::NONE;
-        ui.visuals_mut().widgets.active.bg_stroke = egui::Stroke::NONE;
-        ui.style_mut().override_font_id = Some(egui::FontId::proportional(s::BODY as f32));
-        let origin = ui.cursor().min
-            + egui::vec2(((ui.available_width() - s::WIDTH as f32) / 2.).max(24.), 0.);
-        let r = |rect| rect_at(origin, s::positioned(rect));
-        ui.allocate_space(egui::vec2(
-            s::WIDTH as f32 + 48.,
-            (s::TRANSPORT_Y + 64) as f32,
-        ));
-        label(
-            ui,
-            r(s::TITLE_RECT),
-            s::TITLE,
-            s::HEADING as f32,
-            color(app_style::SETTINGS_TEXT),
-        );
-        label(
-            ui,
-            r(s::SUBTITLE_RECT),
-            s::SUBTITLE,
-            s::BODY as f32,
-            color(app_style::SETTINGS_TEXT),
-        );
-        ui.put(
-            r(s::TABS[0]),
-            egui::Button::new(
-                RichText::new(app_style::SETTINGS_TABS[0]).color(color(app_style::SETTINGS_FIELD)),
-            )
-            .fill(color(app_style::SETTINGS_ACCENT)),
-        );
-        // Video/Audio/Input have no editable settings integrated yet. The raw
-        // Vulkan capability report remains in --probe-video, outside product UI.
-        if ui
-            .put(r(s::BACK), egui::Button::new(s::BACK_TEXT))
-            .clicked()
-        {
-            self.show_video = false;
-        }
-        ui.painter().line_segment(
-            [
-                origin + egui::vec2(0., 147.),
-                origin + egui::vec2(s::WIDTH as f32, 147.),
-            ],
-            egui::Stroke::new(1., color(app_style::FIELD)),
-        );
-        label(
-            ui,
-            r(s::NETWORK_RECT),
-            s::NETWORK,
-            s::BODY as f32,
-            color(app_style::SETTINGS_ACCENT),
-        );
-        // Preserve the Windows Transport row and column coordinates. Controls
-        // for unavailable features are hidden, rather than replaced with copy.
-        label(
-            ui,
-            r(s::label(s::TRANSPORT_Y)),
-            s::TRANSPORT,
-            s::BODY as f32,
-            color(app_style::SETTINGS_TEXT),
-        );
-        ui.scope_builder(
-            egui::UiBuilder::new().max_rect(r(s::field(s::TRANSPORT_Y, 32))),
-            |ui| {
-                egui::ComboBox::from_id_salt("transport")
-                    .selected_text(self.transport.label())
-                    .width(400.)
-                    .height(160.)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut self.transport,
-                            connection::Mode::WebRtc,
-                            s::TRANSPORT_CHOICES[0],
-                        );
-                        ui.selectable_value(
-                            &mut self.transport,
-                            connection::Mode::Bud,
-                            s::TRANSPORT_CHOICES[1],
-                        );
-                    });
-            },
-        );
-    }
 }
 
 pub fn rect_at(origin: egui::Pos2, [x, y, w, h]: [i32; 4]) -> egui::Rect {
@@ -340,7 +247,7 @@ pub fn rect_at(origin: egui::Pos2, [x, y, w, h]: [i32; 4]) -> egui::Rect {
         egui::vec2(w as f32, h as f32),
     )
 }
-fn label(ui: &mut egui::Ui, rect: egui::Rect, text: &str, size: f32, color: Color32) {
+pub(crate) fn label(ui: &mut egui::Ui, rect: egui::Rect, text: &str, size: f32, color: Color32) {
     ui.put(
         rect,
         egui::Label::new(RichText::new(text).size(size).color(color)).halign(egui::Align::Min),
@@ -376,6 +283,7 @@ mod tests {
             status_text: app_style::LOGIN_NOTICE,
             error: None,
             show_video: false,
+            ui_state: Default::default(),
             badge: Default::default(),
             fitted_stream: None,
             launcher_size: None,
@@ -385,9 +293,19 @@ mod tests {
             decoder: None,
             playback: None,
         };
-        for (signed_in, settings) in [(false, false), (true, false), (true, true)] {
+        for (signed_in, settings) in [
+            (false, false),
+            (true, false),
+            (true, true),
+            (true, true),
+            (true, true),
+            (true, true),
+        ] {
             app.signed_in = signed_in;
             app.show_video = settings;
+            if settings {
+                app.ui_state.tab = (app.ui_state.tab + 1) % 4;
+            }
             let raw = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,

@@ -66,9 +66,24 @@ impl Pages {
 }
 pub unsafe fn append_help(menu: HMENU) {
     let help = CreatePopupMenu();
-    AppendMenuW(help, MF_STRING, ABOUT, wide("About EvoParseq").as_ptr());
-    AppendMenuW(help, MF_STRING, OPEN, wide("Check for updates").as_ptr());
-    AppendMenuW(menu, MF_POPUP, help as usize, wide("Help").as_ptr());
+    AppendMenuW(
+        help,
+        MF_STRING,
+        ABOUT,
+        wide(crate::app_style::forms::MENU_ABOUT).as_ptr(),
+    );
+    AppendMenuW(
+        help,
+        MF_STRING,
+        OPEN,
+        wide(crate::app_style::forms::MENU_UPDATES).as_ptr(),
+    );
+    AppendMenuW(
+        menu,
+        MF_POPUP,
+        help as usize,
+        wide(crate::app_style::forms::MENU_HELP).as_ptr(),
+    );
 }
 const CHECK: usize = 4400;
 const DOWNLOAD: usize = 4401;

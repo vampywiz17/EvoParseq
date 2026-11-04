@@ -19,7 +19,7 @@ pub trait VideoTarget {
 }
 
 /// Both the initial attempt and an automatic relay retry use the same capabilities.
-pub(crate) fn session(
+pub fn session(
     hevc: bool,
     ten_bit: bool,
     chroma_444: bool,

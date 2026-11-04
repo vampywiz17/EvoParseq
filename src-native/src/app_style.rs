@@ -18,6 +18,8 @@ pub const SETTINGS_TABS: [&str; 4] = ["Network", "Video", "Audio", "Input"];
 /// Canonical Windows desktop geometry, in logical pixels: [x, y, width, height].
 /// Platform adapters convert these rectangles; they must not invent new layouts.
 pub mod desktop {
+    pub const WINDOW: [i32; 2] = [744, 551];
+    pub const SETTINGS_WINDOW: [i32; 2] = [984, 721];
     pub const BODY: i32 = 17;
     pub const HEADING: i32 = 32;
     pub const CANVAS: [i32; 2] = [728, 560];
@@ -111,3 +113,6 @@ pub mod session {
         ]
     }
 }
+
+#[path = "desktop_forms.rs"]
+pub mod forms;

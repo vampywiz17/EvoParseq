@@ -1,5 +1,10 @@
 //! Native desktop session presentation; no media surfaces are copied here.
-use crate::{Desktop, app_style::session as s, playback::Playback};
+use crate::{
+    Desktop,
+    app_style::{forms as f, session as s},
+    launcher::{color, label, rect_at},
+    playback::Playback,
+};
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Vec2};
 use std::sync::Arc;
 
@@ -90,18 +95,35 @@ impl Desktop {
                             egui::ScrollArea::vertical()
                                 .max_height(height)
                                 .min_scrolled_height(height)
-                                .vertical_scroll_offset((s::DISCONNECT_RECT[1] - 24) as f32)
                                 .show(ui, |ui| {
                                     let (origin, _) = ui.allocate_exact_size(
                                         egui::vec2(width, 1000.),
                                         Sense::hover(),
                                     );
-                                    let rect =
-                                        crate::launcher::rect_at(origin.min, s::DISCONNECT_RECT);
-                                    if ui.put(rect, egui::Button::new(s::DISCONNECT)).clicked() {
-                                        self.desktop_input.release(ctx, playback);
-                                        playback.stop();
-                                        self.badge.open = false;
+                                    ui.style_mut().override_font_id=Some(egui::FontId::proportional(16.));
+                                    let r=|rect|rect_at(origin.min,rect);
+                                    let fg=color(crate::app_style::TEXT);
+                                    label(ui,r([24,18,350,36]),"Session",25.,fg);
+                                    label(ui,r([24,66,370,82]),f::SESSION_METRICS,12.,fg);
+                                    ui.scope(|ui|{ui.disable();ui.put(r([24,164,280,28]),egui::Button::new("N/A"));ui.put(r([314,164,80,28]),egui::Button::new("Refresh"));});
+                                    label(ui,r([24,199,370,44]),"N/A",16.,fg);
+                                    for (i,text) in f::SESSION_LABELS.iter().enumerate() {
+                                        label(ui,r([24,254+i as i32*44,150,24]),text,16.,fg);
+                                        ui.scope(|ui|{ui.disable();ui.put(r([174,250+i as i32*44,218,28]),egui::Button::new("N/A"));});
+                                    }
+                                    ui.scope(|ui|{ui.disable();ui.put(r([24,516,350,30]),egui::Checkbox::new(&mut false,"Fullscreen"));ui.put(r([24,554,160,30]),egui::Checkbox::new(&mut false,"Mute audio"));});
+                                    label(ui,r([194,558,198,26]),"Volume: N/A",16.,fg);
+                                    ui.scope(|ui|{ui.disable();ui.put(r([24,590,368,32]),egui::Slider::new(&mut 0.,0. ..=100.).show_value(false));});
+                                    label(ui,r([24,634,370,146]),"Display: N/A | Request: N/A FPS\nHost setting: N/A | Decoded: N/A",16.,fg);
+                                    label(ui,r([24,790,370,40]),"N/A",16.,fg);
+                                    for (i,(text,rect)) in f::SESSION_ACTIONS.iter().enumerate() {
+                                        let response=ui.scope(|ui|{if ![0,2,3].contains(&i){ui.disable();}ui.put(r(*rect),egui::Button::new(*text))}).inner;
+                                        if response.clicked() {match i {
+                                            0=>{self.desktop_input.release(ctx,playback);self.show_video=true;self.badge.open=false;},
+                                            2=>{self.desktop_input.release(ctx,playback);playback.stop();self.badge.open=false;},
+                                            3=>self.badge.open=false,
+                                            _=>{}
+                                        }}
                                     }
                                 });
                         });

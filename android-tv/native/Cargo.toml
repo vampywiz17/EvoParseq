@@ -15,6 +15,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("bud"))'] 
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+evoparseq-bud = { path = "../../src-native/crates/bud" }
 anyhow = "1"
 serde_json = "1.0.154"
 serde = { version = "1", features = ["derive"] }
@@ -38,7 +39,6 @@ qrcode = { version = "0.14", default-features = false }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { version = "0.21.1", default-features = false }
-evoparseq-bud = { path = "../../src-native/crates/bud" }
 ndk-sys = { version = "0.6", features = ["media", "audio"] }
 
 [patch.crates-io]

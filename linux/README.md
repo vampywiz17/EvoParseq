@@ -112,3 +112,26 @@ Cursor visibility/grab changes are sent only at capture transitions and release,
 rather than overwriting decoration cursors every frame. A narrow Linux-only
 patch to pinned egui-winit invalidates its cursor cache on surface entry/exit;
 see `vendor/egui-winit/EVOPARSEQ.md`. Live Wayland cursor validation is required.
+
+
+Preview 0.1.10 fixes login/picker and Settings window sizing to the Windows
+client dimensions (744x551 and 984x721 logical content pixels), plus the local
+menu strip. Min/max constraints and non-resizable native decorations apply only
+to these pages. Streaming restores resizing and centered aspect fitting.
+The complete Windows Settings, session panel and Connection stats presentation
+is now included, with shared descriptors/copy in desktop_forms.rs. Navigation,
+Disconnect and the existing transport selection work; other unintegrated
+controls are disabled and measurements show N/A. No synthetic live values are
+shown. The top menu follows Windows (launcher Help; stream Settings, Connection
+stats, Help). About/update commands remain disabled until integrated.
+
+The Flatpak now supplies XCURSOR_PATH entries for Flatpak's documented host icon
+mounts. It also bundles GNOME Adwaita 46.2 cursor files (unmodified, upstream
+checksum verified) as a fallback for older Wayland compositors without the
+cursor-shape protocol. Before starting threads, a missing/incomplete cursor
+theme selects the bundled fallback. No host-filesystem permission is added.
+This addresses missing cursor assets, which a cursor-cache invalidation cannot
+repair. https://docs.flatpak.org/en/latest/desktop-integration.html#icons
+Adwaita artwork is by the GNOME Project (https://www.gnome.org), distributed
+under the upstream dual LGPLv3 / CC-BY-SA 3.0 license; copies ship in the bundle.
+Live Wayland validation remains required.

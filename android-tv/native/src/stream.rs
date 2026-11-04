@@ -410,6 +410,9 @@ fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result<()>
             );
             update = Instant::now();
         }
+        if connection.attempt.more_media_pending() {
+            continue;
+        }
         thread::park_timeout(Duration::from_millis(if desktop.ticking() {
             16
         } else {

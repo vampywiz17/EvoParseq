@@ -18,9 +18,11 @@ pub mod codec_initialization;
 mod connection;
 #[path = "../../src-native/src/control.rs"]
 pub mod control;
+mod cursor_theme;
 #[path = "../../src-native/src/desktop_input.rs"]
 pub mod desktop_input;
 mod desktop_linux;
+mod desktop_ui;
 #[path = "../../src-native/src/event_log.rs"]
 mod event_log;
 #[path = "../../src-native/src/frame_timing.rs"]
@@ -54,6 +56,7 @@ pub mod video_stream;
 mod video_vulkan;
 #[path = "../../src-native/src/viewport.rs"]
 pub mod viewport;
+mod window_mode;
 
 use eframe::{egui, egui_wgpu};
 use std::sync::{Arc, mpsc};
@@ -89,6 +92,7 @@ struct Desktop {
     status_text: &'static str,
     error: Option<String>,
     show_video: bool,
+    ui_state: desktop_ui::State,
     badge: session_overlay::Badge,
     fitted_stream: Option<(u32, u32)>,
     launcher_size: Option<egui::Vec2>,
@@ -184,12 +188,31 @@ impl Desktop {
 
 impl eframe::App for Desktop {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if raw.events.iter().any(|event| matches!(event, egui::Event::PointerButton {pos,pressed:true,..} if pos.y < 24.)) {
+            if let Some(playback) = &self.playback {
+                if self.desktop_input.enabled { self.desktop_input.release(ctx, playback); }
+            }
+            return;
+        }
+        if self.show_video || self.ui_state.stats {
+            if let Some(playback) = &self.playback {
+                if self.desktop_input.enabled {
+                    self.desktop_input.release(ctx, playback);
+                }
+            }
+            return;
+        }
         if let Some(playback) = &self.playback {
             self.desktop_input.events(ctx, raw, playback);
         }
     }
 
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        window_mode::apply(
+            ctx,
+            self.playback.is_some() && !self.show_video,
+            self.show_video,
+        );
         while let Ok(reply) = self.replies.try_recv() {
             let video_timing = self
                 .decoder
@@ -201,7 +224,7 @@ impl eframe::App for Desktop {
                 self.desktop_input.video = None;
                 self.fitted_stream = None;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(720., 540.)));
+
                 if let Some(size) = self.launcher_size.take() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
                 }
@@ -278,14 +301,20 @@ impl eframe::App for Desktop {
                 Ok(_) => {}
             }
         }
+        self.menu_bar(ctx);
+        self.statistics(ctx);
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(if self.playback.is_some() {
-                egui::Color32::BLACK
-            } else {
-                launcher::color(app_style::BACKGROUND)
-            }))
+            .frame(
+                egui::Frame::new().fill(if self.playback.is_some() && !self.show_video {
+                    egui::Color32::BLACK
+                } else {
+                    launcher::color(app_style::BACKGROUND)
+                }),
+            )
             .show(ctx, |ui| {
-                if let Some(playback) = self.playback.clone() {
+                if self.show_video {
+                    self.launcher(ui, ctx);
+                } else if let Some(playback) = self.playback.clone() {
                     let area = self.decoder.as_ref().and_then(|decoder| decoder.show(ui));
                     self.desktop_input.video = area.map(|(rect, _)| rect);
                     if let Some((_, source)) = area {
@@ -331,6 +360,7 @@ impl Drop for Desktop {
 }
 
 fn main() -> anyhow::Result<()> {
+    cursor_theme::prepare();
     if std::env::args_os()
         .nth(1)
         .is_some_and(|arg| arg == "--probe-video")
@@ -352,13 +382,15 @@ fn main() -> anyhow::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("EvoParseq")
             .with_decorations(true)
-            .with_resizable(true)
+            .with_resizable(false)
             .with_app_id("io.github.vampywiz17.EvoParseq")
             .with_icon(eframe::icon_data::from_png_bytes(include_bytes!(
                 "../../assets/evoparseq.png"
             ))?)
-            .with_min_inner_size([720.0, 540.0])
-            .with_inner_size([780.0, 600.0]),
+            .with_inner_size([
+                app_style::desktop::WINDOW[0] as f32,
+                app_style::desktop::WINDOW[1] as f32 + 24.,
+            ]),
         wgpu_options: egui_wgpu::WgpuConfiguration {
             wgpu_setup,
             ..Default::default()
@@ -420,6 +452,7 @@ fn main() -> anyhow::Result<()> {
                     status_text: app_style::LOGIN_NOTICE,
                     error: None,
                     show_video: false,
+                    ui_state: Default::default(),
                     badge: Default::default(),
                     fitted_stream: None,
                     launcher_size: None,

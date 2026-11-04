@@ -797,17 +797,7 @@ pub unsafe fn toggle(
         [24, 199, 370, 44],
     );
     update_displays(hwnd, p);
-    for (i, label) in [
-        "Resolution",
-        "Bandwidth (Mbps)",
-        "Frame rate (FPS)",
-        "Frame pacing",
-        "Orientation",
-        "Immersive mode",
-    ]
-    .iter()
-    .enumerate()
-    {
+    for (i, label) in crate::app_style::forms::SESSION_LABELS.iter().enumerate() {
         control(
             hwnd,
             p,

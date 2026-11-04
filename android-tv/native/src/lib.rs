@@ -10,6 +10,8 @@ pub mod attempt;
 pub mod audio_layout;
 #[path = "../../../src-native/src/audio_stream.rs"]
 pub mod audio_stream;
+#[path = "../../../src-native/src/bud_ingress.rs"]
+pub mod bud_ingress;
 #[path = "../../../src-native/src/codec_initialization.rs"]
 pub mod codec_initialization;
 #[path = "../../../src-native/src/control.rs"]

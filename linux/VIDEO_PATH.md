@@ -226,3 +226,15 @@ This remains GPU-resident NV12 conversion, not the project's Zero copy mode.
 The cursor patch is scoped to the Linux UI dependency graph and adds no media
 work. Windows UI substitutions retain their exact previous values; Windows and
 Android CI must pass independently of the Linux Flatpak checks.
+
+
+## Android shared BUD ingress
+
+The Android adapter now uses the same bud_ingress.rs session capabilities,
+borrowed media parsing, encoder-generation resets, parameter/IDR gate and
+bounded video-first/audio pump as Windows/Linux. MediaCodec/Surface and AAudio
+remain Android adapters. There is no new media queue or decoded-image copy.
+A full ingress batch is drained before the Android consumer parks; input/control
+processing still runs between bounded batches. Rotation remains explicitly
+unsupported on Android, matching the previous adapter. Raw audio and 4:4:4 are
+not advertised by this change. Normal Parsec input/controller paths are unchanged.

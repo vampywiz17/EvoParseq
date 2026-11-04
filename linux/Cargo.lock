@@ -1227,7 +1227,7 @@ dependencies = [
 
 [[package]]
 name = "evoparseq-linux"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "ash",
@@ -1249,6 +1249,7 @@ dependencies = [
  "webrtc",
  "wgpu",
  "winit",
+ "xcursor",
  "zeroize",
 ]
 

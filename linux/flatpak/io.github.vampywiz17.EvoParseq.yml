@@ -12,12 +12,26 @@ finish-args:
   - --filesystem=xdg-run/pipewire-0
   - --device=dri
   - --env=ANV_DEBUG=video-decode
+  - --env=XCURSOR_PATH=/run/host/user-share/icons:/run/host/share/icons:/app/share/icons:/usr/share/icons
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm21/bin
   prepend-ld-library-path: /usr/lib/sdk/llvm21/lib
   env:
     LIBCLANG_PATH: /usr/lib/sdk/llvm21/lib
 modules:
+  - name: adwaita-cursors
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/share/icons/Adwaita /app/share/icons/default
+      - cp -a Adwaita/cursors /app/share/icons/Adwaita/
+      - printf '[Icon Theme]\nName=Default\nInherits=Adwaita\n' > /app/share/icons/default/index.theme
+      - install -Dm644 COPYING /app/share/licenses/adwaita-cursors/COPYING
+      - install -Dm644 COPYING_CCBYSA3 /app/share/licenses/adwaita-cursors/COPYING_CCBYSA3
+      - install -Dm644 COPYING_LGPL /app/share/licenses/adwaita-cursors/COPYING_LGPL
+    sources:
+      - type: archive
+        url: https://download.gnome.org/sources/adwaita-icon-theme/46/adwaita-icon-theme-46.2.tar.xz
+        sha256: beb126b9429339ba762e0818d5e73b2c46f444975bf80076366eae2d0f96b5cb
   - name: evoparseq-linux
     buildsystem: simple
     build-commands:
