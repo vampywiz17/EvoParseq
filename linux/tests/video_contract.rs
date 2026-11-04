@@ -1,5 +1,59 @@
+#[path = "../src/video_vulkan/output.rs"]
+mod output;
 #[path = "../src/video_vulkan/parameters.rs"]
 mod parameters;
+
+#[test]
+fn presentation_releases_output_leases_beyond_the_dpb_capacity() {
+    use lowlat_decode::h264::{Read, Stream, dpb::MAX_FRAMES};
+    let mut healthy = Stream::new();
+    let mut unacknowledged = Stream::new();
+    let mut reproduced_exhaustion = false;
+    let mut count = 0;
+    let mut bytes = include_bytes!("data/h264-40-frames.bin").as_slice();
+    while !bytes.is_empty() {
+        let size = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+        let unit = &bytes[4..4 + size];
+        bytes = &bytes[4 + size..];
+        assert_eq!(healthy.read(unit).unwrap(), Read::Picture);
+        healthy.finish().unwrap();
+        assert!(output::latest(&mut healthy.dpb).is_some());
+        assert!(output::latest(&mut healthy.dpb).is_none());
+        count += 1;
+
+        // The old consumer popped outputs without acknowledging ownership.
+        // Verify this exact clip actually exposes the reported failure.
+        if !reproduced_exhaustion {
+            match unacknowledged.read(unit) {
+                Err(lowlat_decode::ParseError::TooMany) => reproduced_exhaustion = true,
+                Ok(Read::Picture) => {
+                    unacknowledged.finish().unwrap();
+                    while unacknowledged.next_output().is_some() {}
+                }
+                other => panic!("Unexpected parser result: {other:?}"),
+            }
+        }
+    }
+    assert!(count > MAX_FRAMES * 2);
+    assert!(reproduced_exhaustion);
+}
+
+#[test]
+fn annex_b_offsets_exclude_the_optional_zero_byte() {
+    let bytes = [0, 0, 0, 1, 0x65, 0xaa, 0, 0, 1, 0x41, 0xbb];
+    let units: Vec<_> = lowlat_decode::nal::Units::new(&bytes).collect();
+    assert_eq!(
+        parameters::slice_offset(&bytes, units[0].offset).unwrap(),
+        1
+    );
+    assert_eq!(
+        parameters::slice_offset(&bytes, units[1].offset).unwrap(),
+        6
+    );
+    assert!(parameters::slice_offset(&bytes, 0).is_err());
+    assert!(parameters::slice_offset(&bytes, 6).is_err());
+    assert!(parameters::slice_offset(&bytes, bytes.len()).is_err());
+}
 
 #[test]
 fn output_shader_is_valid_without_a_gpu() {

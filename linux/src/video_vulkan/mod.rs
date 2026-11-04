@@ -1,5 +1,6 @@
 mod commands;
 mod device;
+mod output;
 mod parameters;
 mod session;
 
@@ -164,10 +165,7 @@ impl Decoder {
         self.stream
             .finish()
             .map_err(|e| anyhow::anyhow!("H.264 reference state: {e:?}"))?;
-        let mut output = None;
-        while let Some(next) = self.stream.next_output() {
-            output = Some(next.slot);
-        }
+        let output = output::latest(&mut self.stream.dpb);
         let key = (visible, crop, full_range);
         if self.presentation != Some(key) {
             self.frames.clear();

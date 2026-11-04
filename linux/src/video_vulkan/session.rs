@@ -543,17 +543,8 @@ impl Session {
             .as_slice()
             .iter()
             .flatten()
-            .map(|slice| {
-                // Vulkan offsets address Annex-B start codes, the parser addresses NAL headers.
-                let header = slice.offset;
-                let start = if header >= 4 && bytes.get(header - 4..header) == Some(&[0, 0, 0, 1]) {
-                    header - 4
-                } else {
-                    header.saturating_sub(3)
-                };
-                start as u32
-            })
-            .collect();
+            .map(|slice| parameters::slice_offset(bytes, slice.offset))
+            .collect::<Result<_>>()?;
         let picture = |slot: usize| -> Result<vk::VideoPictureResourceInfoKHR<'static>> {
             let view = resources
                 .images

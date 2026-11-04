@@ -8,6 +8,17 @@ use lowlat_decode::h264::{
     sps::{ScalingLists, Sps},
 };
 
+/// Address the three-byte Annex-B start_code_prefix_one_3bytes, excluding the
+/// optional preceding zero_byte. The shared parser addresses the NAL header.
+pub fn slice_offset(bytes: &[u8], header: usize) -> Result<u32> {
+    let start = header
+        .checked_sub(3)
+        .filter(|start| header < bytes.len() && bytes.get(*start..header) == Some(&[0, 0, 1]));
+    Ok(u32::try_from(start.ok_or_else(|| {
+        anyhow::anyhow!("H.264 slice is missing its Annex-B prefix")
+    })?)?)
+}
+
 pub fn level(id: u8) -> Result<n::StdVideoH264LevelIdc> {
     [
         10u8, 11, 12, 13, 20, 21, 22, 30, 31, 32, 40, 41, 42, 50, 51, 52, 60, 61, 62,

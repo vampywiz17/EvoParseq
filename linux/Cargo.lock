@@ -1236,7 +1236,6 @@ dependencies = [
  "lowlat-decode",
  "naga",
  "pipewire",
- "pollster",
  "reqwest",
  "rtrb",
  "serde",

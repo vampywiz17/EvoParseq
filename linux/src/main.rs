@@ -207,7 +207,12 @@ impl eframe::App for Desktop {
             if let Some(bytes) = playback.next() {
                 if let Err(error) = decoder.submit(&bytes) {
                     playback.stop();
-                    self.error = Some(format!("Vulkan video stopped: {error:#}"));
+                    let message = format!(
+                        "Vulkan video stopped after {} pictures: {error:#}",
+                        decoder.decoded
+                    );
+                    eprintln!("{message}");
+                    self.error = Some(message);
                 }
                 ctx.request_repaint();
             }
