@@ -69,6 +69,7 @@ mod platform;
 mod platform_windows;
 mod rtc_configuration;
 mod secure_storage;
+mod session_controls;
 #[cfg(windows)]
 mod session_preferences;
 #[cfg(windows)]

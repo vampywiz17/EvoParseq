@@ -61,11 +61,15 @@ impl Desktop {
             let playback = crate::playback::Playback::new(ctx.clone());
             self.desktop_input.video = None;
             self.badge = Default::default();
+            self.badge
+                .set_hidden(self.settings.native_session_button_hidden());
             self.launcher_size =
                 ctx.input(|input| input.viewport().inner_rect.map(|rect| rect.size()));
             self.fitted_stream = None;
             self.playback = Some(playback.clone());
             let telemetry = crate::telemetry::Session::new(self.transport);
+            *telemetry.settings.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(self.settings.clone());
             self.telemetry = Some(telemetry.clone());
             self.metrics = Default::default();
             self.send(Command::Stream(peer, self.transport, playback, telemetry));

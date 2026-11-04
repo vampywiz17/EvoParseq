@@ -10,6 +10,10 @@ mod output;
 mod parameters;
 #[path = "../src/playback.rs"]
 mod playback;
+#[path = "../../src-native/src/session_controls.rs"]
+mod session_controls;
+#[path = "../../src-native/src/session_preferences.rs"]
+mod session_preferences;
 #[path = "../../src-native/src/viewport.rs"]
 mod viewport;
 

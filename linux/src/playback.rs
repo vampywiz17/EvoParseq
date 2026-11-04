@@ -82,6 +82,12 @@ impl Playback {
         }
     }
 
+    pub fn push_session(&self, command: crate::session_controls::Command) {
+        self.input.push(command);
+        if let Some(consumer) = self.consumer.get() {
+            consumer.unpark();
+        }
+    }
     pub fn push_input(&self, event: crate::desktop_input::Event) {
         self.input.push(event);
         if let Some(consumer) = self.consumer.get() {

@@ -9,12 +9,20 @@ use std::{io::Cursor, thread::JoinHandle};
 
 #[derive(Default, Clone)]
 pub struct State {
+    pub commands: Option<pw::channel::Sender<Command>>,
+    pub error: Option<String>,
     pub muted: Option<bool>,
     pub volume: Option<f32>,
     pub ready: bool,
 }
+#[derive(Clone, Copy)]
+pub enum Command {
+    Stop,
+    Mute(bool),
+    Volume(u8),
+}
 pub struct Output {
-    stop: pw::channel::Sender<()>,
+    stop: pw::channel::Sender<Command>,
     worker: Option<JoinHandle<Result<()>>>,
 }
 
@@ -25,6 +33,7 @@ impl Output {
     ) -> Result<Self> {
         let reader = source.callback_reader()?;
         let (stop, commands) = pw::channel::channel();
+        state.lock().unwrap_or_else(|e| e.into_inner()).commands = Some(stop.clone());
         let worker = std::thread::Builder::new()
             .name("evoparseq-pipewire".into())
             .spawn(move || playback(reader, commands, state))?;
@@ -38,7 +47,7 @@ impl Output {
         let Some(worker) = self.worker.take() else {
             return Ok(());
         };
-        let _ = self.stop.send(());
+        let _ = self.stop.send(Command::Stop);
         worker
             .join()
             .map_err(|_| anyhow::anyhow!("PipeWire worker stopped unexpectedly"))?
@@ -53,18 +62,16 @@ impl Drop for Output {
 
 fn playback(
     reader: CallbackReader,
-    stop: pw::channel::Receiver<()>,
+    stop: pw::channel::Receiver<Command>,
     state: std::sync::Arc<std::sync::Mutex<State>>,
 ) -> Result<()> {
     pw::init();
     let mainloop = pw::main_loop::MainLoop::new(None)?;
-    let quit = mainloop.clone();
-    let _stop = stop.attach(mainloop.loop_(), move |()| quit.quit());
     let context = pw::context::Context::new(&mainloop)?;
     let core = context
         .connect(None)
         .context("Could not connect to PipeWire")?;
-    let stream = pw::stream::Stream::new(
+    let stream = std::rc::Rc::new(pw::stream::Stream::new(
         &core,
         "EvoParseq",
         pw::properties::properties! {
@@ -72,7 +79,31 @@ fn playback(
             *pw::keys::MEDIA_CATEGORY => "Playback",
             *pw::keys::MEDIA_ROLE => "Game",
         },
-    )?;
+    )?);
+    let quit_commands = mainloop.clone();
+    let command_stream = stream.clone();
+    let command_state = state.clone();
+    let _stop = stop.attach(mainloop.loop_(), move |command| {
+        let result = match command {
+            Command::Stop => {
+                quit_commands.quit();
+                return;
+            }
+            Command::Mute(muted) => {
+                command_stream.set_control(spa::sys::SPA_PROP_mute, &[if muted { 1. } else { 0. }])
+            }
+            Command::Volume(percent) => {
+                let gain = f32::from(percent.min(100)) / 100.;
+                command_stream.set_control(spa::sys::SPA_PROP_channelVolumes, &[gain, gain])
+            }
+        };
+        if result.is_err() {
+            command_state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .error = Some("PipeWire did not accept the audio control".into());
+        }
+    });
     let quit = mainloop.clone();
     let output_state = state.clone();
     let _listener = stream

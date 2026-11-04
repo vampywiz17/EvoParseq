@@ -161,9 +161,16 @@ fn run_webrtc(
             diagnostics.update(attempt.control_ready(), telemetry, |bytes| {
                 attempt.send_binary(0, bytes)
             })?;
-            input.pump(playback, attempt.control_ready(), |bytes| {
-                attempt.send_binary(0, bytes::Bytes::copy_from_slice(bytes))
-            })?;
+            input.pump(
+                playback,
+                attempt.control_ready(),
+                |bytes| attempt.send_binary(0, bytes::Bytes::copy_from_slice(bytes)),
+                |command| {
+                    diagnostics.command(command, telemetry, playback.input_geometry(), |bytes| {
+                        attempt.send_binary(0, bytes)
+                    })
+                },
+            )?;
             Ok((attempt.control_ready(), attempt.video_snapshot(), false))
         },
     );
@@ -356,7 +363,17 @@ fn run_bud(
                 sample.bud = Some(bud);
                 telemetry.bus.publish(telemetry.generation, sample);
             }
-            input.pump(playback, established, |bytes| session.send_frame(bytes))?;
+            let session_ref = std::cell::RefCell::new(&mut session);
+            input.pump(
+                playback,
+                established,
+                |bytes| session_ref.borrow_mut().send_frame(bytes),
+                |command| {
+                    diagnostics.command(command, telemetry, playback.input_geometry(), |bytes| {
+                        session_ref.borrow_mut().send_frame(&bytes)
+                    })
+                },
+            )?;
             let pumped =
                 crate::bud_ingress::pump(&mut source, &mut ingress, playback.as_ref(), &sender)?;
             Ok((established, ingress.snapshot(), pumped.more_pending()))
@@ -452,6 +469,7 @@ impl Input {
         playback: &crate::playback::Playback,
         ready: bool,
         mut send: impl FnMut(&[u8]) -> Result<()>,
+        mut session_command: impl FnMut(crate::session_controls::Command) -> Result<()>,
     ) -> Result<()> {
         playback.set_input_ready(ready);
         if !ready {
@@ -467,8 +485,12 @@ impl Input {
             return Err(error);
         }
         while let Some(event) = self.events.pop_front() {
-            if let crate::input_handoff::Event::Desktop(event) = event {
-                self.engine.event(event, Instant::now(), &mut send)?;
+            match event {
+                crate::input_handoff::Event::Desktop(event) => {
+                    self.engine.event(event, Instant::now(), &mut send)?
+                }
+                crate::input_handoff::Event::Session(command) => session_command(command)?,
+                _ => {}
             }
         }
         Ok(())
@@ -517,20 +539,30 @@ mod input_tests {
         }));
         let mut frames = Vec::new();
         input
-            .pump(&playback, true, |bytes| {
-                frames.push(bytes.to_vec());
-                Ok(())
-            })
+            .pump(
+                &playback,
+                true,
+                |bytes| {
+                    frames.push(bytes.to_vec());
+                    Ok(())
+                },
+                |_| Ok(()),
+            )
             .unwrap();
         assert_eq!(frames[0], control::header(0, 4, 0, 1));
         assert_eq!(frames[1], control::header(3, 1, 3, -2));
         assert_eq!(frames[2], control::header(1, 1, 1, 0));
         playback.push_input(Event::Focus(false));
         input
-            .pump(&playback, true, |bytes| {
-                frames.push(bytes.to_vec());
-                Ok(())
-            })
+            .pump(
+                &playback,
+                true,
+                |bytes| {
+                    frames.push(bytes.to_vec());
+                    Ok(())
+                },
+                |_| Ok(()),
+            )
             .unwrap();
         assert_eq!(frames.last().unwrap(), &control::header(24, 0, 0, 0));
         let before = frames.len();
@@ -540,10 +572,15 @@ mod input_tests {
             down: true,
         });
         input
-            .pump(&playback, true, |bytes| {
-                frames.push(bytes.to_vec());
-                Ok(())
-            })
+            .pump(
+                &playback,
+                true,
+                |bytes| {
+                    frames.push(bytes.to_vec());
+                    Ok(())
+                },
+                |_| Ok(()),
+            )
             .unwrap();
         assert_eq!(
             frames.len(),
@@ -571,10 +608,15 @@ mod input_tests {
         let mut frames = Vec::new();
         assert!(
             input
-                .pump(&playback, true, |bytes| {
-                    frames.push(bytes.to_vec());
-                    Ok(())
-                })
+                .pump(
+                    &playback,
+                    true,
+                    |bytes| {
+                        frames.push(bytes.to_vec());
+                        Ok(())
+                    },
+                    |_| Ok(())
+                )
                 .is_err()
         );
         assert_eq!(frames, vec![control::header(24, 0, 0, 0).to_vec()]);

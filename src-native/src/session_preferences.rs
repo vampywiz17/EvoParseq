@@ -184,3 +184,36 @@ pub(crate) fn resolution(text: &str) -> Result<Resolution> {
         }
     }
 }
+
+/// Host preferences, not the actual decoded stream or capture confirmation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HostVideo {
+    pub bandwidth_mbps: Option<u32>,
+    pub fps: Option<u32>,
+    pub constant_fps: Option<bool>,
+    pub rotated: Option<bool>,
+}
+impl HostVideo {
+    pub fn from_report(report: &serde_json::Value) -> Self {
+        let number = |key: &str, max| {
+            report[key]
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .filter(|n| (1..=max).contains(n))
+        };
+        Self {
+            bandwidth_mbps: number("bandwidth_mbps", MAX_BANDWIDTH_MBPS),
+            fps: number("fps", MAX_FPS),
+            constant_fps: report["constant_fps"].as_bool(),
+            rotated: report["rotated"].as_bool(),
+        }
+    }
+
+    pub fn panel_video(self, mut saved: Video) -> Video {
+        saved.bandwidth_mbps = Some(saved.bandwidth_mbps.or(self.bandwidth_mbps).unwrap_or(10));
+        saved.fps = Some(saved.fps.or(self.fps).unwrap_or(60));
+        saved.constant_fps = Some(saved.constant_fps.or(self.constant_fps).unwrap_or(false));
+        saved.rotated = Some(saved.rotated.or(self.rotated).unwrap_or(false));
+        saved
+    }
+}

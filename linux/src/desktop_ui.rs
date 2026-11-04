@@ -218,7 +218,13 @@ impl Desktop {
                             if let Some(p) = &self.playback {
                                 self.desktop_input.release(ctx, p);
                             }
-                            self.show_video = true;
+                            self.badge.restore();
+                            if let Err(error) = self
+                                .settings
+                                .update_native(|p| p.hide_session_button = false)
+                            {
+                                self.error = Some(error.to_string());
+                            }
                         }
                         if ui.button(f::MENU_STATS).clicked() {
                             if let Some(p) = &self.playback {

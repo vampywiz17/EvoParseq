@@ -777,7 +777,7 @@ fn rows(
             "100 ms maximum (automatic)".into(),
         );
         row(
-            crate::app_style::forms::STAT_AUDIO_DROPS,
+            "Audio discarded packets",
             format!("{} packets", audio.packets_dropped),
         );
         row("Audio decode errors", audio.decode_errors.to_string());

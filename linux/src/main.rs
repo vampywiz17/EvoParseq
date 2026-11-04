@@ -28,6 +28,8 @@ mod host_video;
 pub(crate) mod profile;
 mod resources_linux;
 mod secure_storage;
+#[path = "../../src-native/src/session_controls.rs"]
+mod session_controls;
 #[path = "../../src-native/src/session_preferences.rs"]
 pub mod session_preferences;
 mod settings_linux;

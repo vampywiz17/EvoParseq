@@ -287,6 +287,10 @@ impl Decoder {
             report.width = Some(frame.size.0);
             report.height = Some(frame.size.1);
         }
+        if let Some(session) = &self.session {
+            report.native_graphics_wait = Some(session.graphics_wait.clone());
+            report.native_decode_wait = Some(session.decode_wait.clone());
+        }
         self.profile
     }
     pub fn show(&self, ui: &mut egui::Ui) -> Option<(egui::Rect, (u32, u32))> {

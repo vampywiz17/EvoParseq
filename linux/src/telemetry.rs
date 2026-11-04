@@ -11,6 +11,11 @@ use std::{
 pub struct Host {
     pub config: crate::host_video::Config,
     pub outputs: Vec<crate::host_displays::Output>,
+    pub pending: bool,
+    pub status: String,
+    pub revision: u64,
+    pub outputs_revision: u64,
+    pub windows: bool,
 }
 pub struct Session {
     pub bus: Arc<stats::Shared>,
@@ -20,6 +25,8 @@ pub struct Session {
     audio: Mutex<Option<crate::audio_stream::NativeReceiver>>,
     next: Mutex<Option<Instant>>,
     pub output: Arc<Mutex<crate::audio_pipewire::State>>,
+    pub client_size: Mutex<(u32, u32)>,
+    pub settings: Mutex<Option<Arc<crate::connection_settings::Manager>>>,
 }
 impl Session {
     pub fn new(mode: Mode) -> Arc<Self> {
@@ -33,6 +40,8 @@ impl Session {
             audio: Mutex::new(None),
             next: Mutex::new(None),
             output: Arc::new(Mutex::new(Default::default())),
+            settings: Mutex::new(None),
+            client_size: Mutex::new((1920, 1080)),
         })
     }
     pub fn set_audio(&self, audio: crate::audio_stream::NativeReceiver) {
@@ -55,6 +64,8 @@ impl Session {
 pub struct Control {
     timing: crate::frame_timing::Requests,
     queried: bool,
+    confirmation: Option<crate::host_video::Confirmation>,
+    selection: Option<(String, u64, u64, Instant)>,
 }
 impl Control {
     pub fn receive(&mut self, bytes: &[u8], session: &Session) {
@@ -72,12 +83,170 @@ impl Control {
             let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
             match event["id"].as_u64() {
                 Some(11) => {
-                    let _ = host.config.receive(&bytes[range]);
+                    if host.config.receive(&bytes[range]).is_ok() {
+                        host.revision = host.revision.wrapping_add(1);
+                        host.windows = host.config.windows_host();
+                    }
                 }
                 Some(12) => {
                     if let Ok(outputs) = crate::host_displays::parse(&bytes[range]) {
                         host.outputs = outputs;
+                        host.outputs_revision = host.outputs_revision.wrapping_add(1);
                     }
+                }
+                _ => {}
+            }
+        }
+    }
+    pub fn command(
+        &mut self,
+        command: crate::session_controls::Command,
+        session: &Session,
+        _size: (u32, u32),
+        mut send: impl FnMut(Bytes) -> Result<()>,
+    ) -> Result<()> {
+        use crate::session_controls::{Command, Status};
+        if matches!(&command, Command::Apply(_) | Command::SelectDisplay(_))
+            && (self.confirmation.is_some() || self.selection.is_some())
+        {
+            return Ok(());
+        }
+        let result = (|| -> Result<()> {
+            match command {
+                Command::RefreshDisplays => {
+                    send(crate::host_displays::query()?)?;
+                    send(crate::host_video::query()?)?;
+                }
+                Command::SecureAttention => {
+                    anyhow::ensure!(
+                        session
+                            .host
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .windows,
+                        "Host does not report Windows secure attention support"
+                    );
+                    send(crate::control::header(24, 0, 0, 0))?;
+                    send(crate::control::text(17, 14, "")?)?;
+                    session
+                        .host
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .status = Status::AttentionSent.text().into();
+                }
+                Command::Apply(video) => {
+                    video.validate()?;
+                    anyhow::ensure!(
+                        self.confirmation.is_none() && self.selection.is_none(),
+                        "Waiting for the previous host request"
+                    );
+                    let frame = session
+                        .host
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .config
+                        .request(
+                            &video,
+                            *session
+                                .client_size
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner()),
+                        )?;
+                    let confirmation =
+                        crate::host_video::Confirmation::new(&frame, Instant::now())?;
+                    send(frame)?;
+                    self.confirmation = Some(confirmation);
+                    if let Some(manager) = session
+                        .settings
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .as_ref()
+                    {
+                        manager.update_native(|profile| profile.video = video)?;
+                    }
+                    let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
+                    host.pending = true;
+                    host.status = Status::Waiting.text().into();
+                }
+                Command::SelectDisplay(id) => {
+                    anyhow::ensure!(
+                        self.confirmation.is_none() && self.selection.is_none(),
+                        "Waiting for the previous host request"
+                    );
+                    let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
+                    anyhow::ensure!(
+                        host.outputs.iter().any(|output| output.id == id),
+                        "Host display is unavailable; refresh the list"
+                    );
+                    self.selection = Some((
+                        id,
+                        host.revision,
+                        host.outputs_revision,
+                        Instant::now() + Duration::from_secs(5),
+                    ));
+                    host.pending = true;
+                    host.status = Status::Waiting.text().into();
+                    drop(host);
+                    send(crate::host_displays::query()?)?;
+                    send(crate::host_video::query()?)?;
+                }
+                _ => {}
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            self.selection = None;
+            self.confirmation = None;
+            let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
+            host.pending = false;
+            host.status = error.to_string();
+        }
+        Ok(()) // UI-command failure never tears down an otherwise working stream.
+    }
+    fn confirm(&mut self, session: &Session, mut send: impl FnMut(Bytes) -> Result<()>) {
+        use crate::session_controls::Status;
+        let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        if let Some((id, revision, outputs, deadline)) = &self.selection {
+            if now >= *deadline {
+                self.selection = None;
+                host.pending = false;
+                host.status = Status::Unconfirmed.text().into();
+            } else if host.revision != *revision && host.outputs_revision != *outputs {
+                let result = (|| -> Result<()> {
+                    anyhow::ensure!(
+                        host.outputs.iter().any(|output| output.id == *id),
+                        "Host display disappeared"
+                    );
+                    send(host.config.select_output(id)?)?;
+                    self.confirmation = Some(crate::host_video::Confirmation::output(id, now));
+                    Ok(())
+                })();
+                self.selection = None;
+                if let Err(error) = result {
+                    host.pending = false;
+                    host.status = error.to_string();
+                }
+            }
+        }
+        if let Some(confirmation) = &mut self.confirmation {
+            match confirmation.poll(&host.config, now) {
+                crate::host_video::Verification::Query => {
+                    if send(crate::host_video::query().unwrap()).is_err() {
+                        self.confirmation = None;
+                        host.pending = false;
+                        host.status = Status::Failed.text().into();
+                    }
+                }
+                crate::host_video::Verification::Confirmed => {
+                    self.confirmation = None;
+                    host.pending = false;
+                    host.status = Status::Confirmed.text().into();
+                }
+                crate::host_video::Verification::TimedOut => {
+                    self.confirmation = None;
+                    host.pending = false;
+                    host.status = Status::Unconfirmed.text().into();
                 }
                 _ => {}
             }
@@ -92,6 +261,7 @@ impl Control {
         if !ready {
             return Ok(());
         }
+        self.confirm(session, &mut send);
         let desired = session.bus.sample_requested();
         if desired && !self.queried {
             // Stock-host read-only queries, once per connection, on explicit diagnostics visibility.
@@ -140,6 +310,12 @@ pub struct View {
     pub display_hint: String,
     pub status: String,
     pub audio: crate::audio_pipewire::State,
+    pub draft: crate::session_preferences::Video,
+    pub pending: bool,
+    pub result: String,
+    pub displays: Vec<crate::host_displays::Output>,
+    pub current_output: Option<String>,
+    pub windows: bool,
 }
 impl View {
     pub fn refresh(
@@ -201,6 +377,20 @@ impl View {
         self.compact = stats_view::compact_metrics(Some(&sample), &self.values);
         let host = session.host.lock().unwrap_or_else(|e| e.into_inner());
         let observed = host.config.observed();
+        let saved = session
+            .settings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|settings| settings.view().0.native_core.video)
+            .unwrap_or_default();
+        self.draft =
+            crate::session_preferences::HostVideo::from_report(&observed).panel_video(saved);
+        self.pending = host.pending;
+        self.result = host.status.clone();
+        self.displays = host.outputs.clone();
+        self.current_output = host.config.output_id().map(str::to_owned);
+        self.windows = host.windows;
         let value = |key: &str| {
             observed[key].as_u64().map_or_else(
                 || "Not reported by host".into(),
@@ -332,6 +522,35 @@ impl View {
                 }
             }
         }
+        if tab == 4 {
+            if let Some(video) = sample.video.as_ref() {
+                for (label, timing) in [
+                    (
+                        "Graphics completion wait",
+                        video.native_graphics_wait.as_ref(),
+                    ),
+                    ("Decode completion wait", video.native_decode_wait.as_ref()),
+                ] {
+                    if let Some(timing) = timing.filter(|t| t.count > 0) {
+                        result.rows.push((
+                            label.into(),
+                            format!(
+                                "{:.2} / {:.2} / {:.2} ms (CPU wait: latest / mean / peak)",
+                                timing.latest_ms, timing.average_ms, timing.peak_ms
+                            ),
+                        ));
+                    }
+                }
+                result.rows.push((
+                    "Compressed decoder queue".into(),
+                    format!(
+                        "{} packets / {} bytes; peak {} packets",
+                        video.queue_depth, video.queue_bytes, video.queue_peak_depth
+                    ),
+                ));
+            }
+            result.footer="Local timings are CPU wall-clock durations and may include blocking driver/completion waits. Completion waits are not GPU execution measurements or monitor scanout. Host reports are not capture-to-display latency.".into();
+        }
         Details {
             status: result.status.into(),
             cards: result.cards,
@@ -388,5 +607,86 @@ mod tests {
             .unwrap();
         assert_eq!(sent.len(), 4);
         assert_eq!(sent[3][3], 0);
+    }
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+    #[test]
+    fn linux_overlay_apply_preserves_other_streams_and_invalid_requests_do_not_disconnect() {
+        let session = Session::new(Mode::Bud);
+        let mut controls = Control::default();
+        let initial = serde_json::json!({"video":[{"hostOS":1,"output":"one","resolutionX":1920,"resolutionY":1080,"encoderFPS":60,"encoderMaxBitrate":20,"fullFPS":true,"rotated":false},{"output":"two","encoderFPS":30}]});
+        session
+            .host
+            .lock()
+            .unwrap()
+            .config
+            .receive(initial.to_string().as_bytes())
+            .unwrap();
+        let mut sent = Vec::new();
+        let video = crate::session_preferences::Video {
+            fps: Some(30),
+            bandwidth_mbps: Some(10),
+            constant_fps: Some(false),
+            rotated: Some(false),
+            ..Default::default()
+        };
+        controls
+            .command(
+                crate::session_controls::Command::Apply(video),
+                &session,
+                (1920, 1080),
+                |b| {
+                    sent.push(b);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(sent.len(), 1);
+        let written: serde_json::Value =
+            serde_json::from_slice(&sent[0][13..sent[0].len() - 1]).unwrap();
+        assert_eq!(written["video"][1], initial["video"][1]);
+        assert_eq!(written["video"][0]["encoderFPS"], 30);
+        assert!(session.host.lock().unwrap().pending);
+        session
+            .host
+            .lock()
+            .unwrap()
+            .config
+            .receive(written.to_string().as_bytes())
+            .unwrap();
+        controls.confirm(&session, |_| Ok(()));
+        assert!(!session.host.lock().unwrap().pending);
+        let invalid = crate::session_preferences::Video {
+            fps: Some(1000),
+            ..Default::default()
+        };
+        controls
+            .command(
+                crate::session_controls::Command::Apply(invalid),
+                &session,
+                (1, 1),
+                |_| panic!("invalid request reached transport"),
+            )
+            .unwrap();
+        assert!(!session.host.lock().unwrap().status.is_empty());
+        assert!(!session.host.lock().unwrap().pending);
+    }
+    #[test]
+    fn linux_overview_retains_all_four_cards_for_bud_and_records_unknown_as_unknown() {
+        let mut view = View::default();
+        let mut sample = stats::Sample {
+            state: "connected".into(),
+            ..Default::default()
+        };
+        sample.bud = Some(Default::default());
+        view.sample = Some(sample);
+        let details = view.build(0);
+        assert_eq!(details.cards.len(), 4);
+        assert!(details.rows.iter().any(|(label, value)| label
+            == crate::app_style::forms::STAT_GPU_BUSIEST_ENGINE
+            && value.contains("Not collected")));
     }
 }
