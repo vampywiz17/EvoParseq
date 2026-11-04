@@ -90,16 +90,20 @@ impl Control {
             if event["type"] != 3 {
                 return;
             }
+            // Match the Windows session adapter: stock text replies include a
+            // single trailing NUL in the validated USER_DATA payload length.
+            let payload = &bytes[range];
+            let payload = payload.strip_suffix(&[0]).unwrap_or(payload);
             let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
             match event["id"].as_u64() {
                 Some(11) => {
-                    if host.config.receive(&bytes[range]).is_ok() {
+                    if host.config.receive(payload).is_ok() {
                         host.revision = host.revision.wrapping_add(1);
                         host.windows = host.config.windows_host();
                     }
                 }
                 Some(12) => {
-                    if let Ok(outputs) = crate::host_displays::parse(&bytes[range]) {
+                    if let Ok(outputs) = crate::host_displays::parse(payload) {
                         host.outputs = outputs;
                         host.outputs_revision = host.outputs_revision.wrapping_add(1);
                     }
@@ -600,6 +604,41 @@ impl View {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn linux_overlay_receives_framed_host_settings_and_displays() {
+        for mode in [Mode::Bud, Mode::WebRtc] {
+            for terminated in [true, false] {
+                let session = Session::new(mode);
+                let mut control = Control::default();
+                let config = r#"{"video":[{"hostOS":1,"output":"one","encoderFPS":60,"encoderMaxBitrate":10}]}"#;
+                let outputs = r#"[{"id":"one","name":"Display 1","adapterName":"GPU"}]"#;
+                for (id, json) in [(11, config), (12, outputs)] {
+                    let frame = if terminated {
+                        crate::control::text(17, id, json).unwrap()
+                    } else {
+                        let mut frame =
+                            crate::control::header(17, json.len() as i32, id, 0).to_vec();
+                        frame.extend_from_slice(json.as_bytes());
+                        Bytes::from(frame)
+                    };
+                    control.receive(&frame, &session);
+                }
+                let host = session.host.lock().unwrap();
+                assert!(host.config.ready());
+                assert!(host.windows);
+                assert_eq!(host.revision, 1);
+                assert_eq!(host.outputs_revision, 1);
+                assert_eq!(host.outputs[0].id, "one");
+                drop(host);
+                // Invalid JSON and truncated frames must preserve the last good state.
+                control.receive(&crate::control::text(17, 11, "{}").unwrap(), &session);
+                control.receive(&crate::control::header(17, 1000, 12, 0), &session);
+                let host = session.host.lock().unwrap();
+                assert_eq!(host.revision, 1);
+                assert_eq!(host.outputs_revision, 1);
+            }
+        }
+    }
     #[test]
     fn linux_diagnostics_queries_once_and_stops_host_reports_when_hidden() {
         let session = Session::new(Mode::Bud);

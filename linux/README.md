@@ -225,3 +225,10 @@ the C variadic control-list terminator; a narrow native helper supplies the
 required trailing control ID 0. No control operation enters the audio callback.
 https://docs.pipewire.org/group__pw__stream.html
 https://raw.githubusercontent.com/PipeWire/pipewire/1.2.7/src/pipewire/stream.c
+
+Preview 0.1.13 fixes host settings and display-list replies in the Linux
+overlay: the adapter removes the single optional terminal NUL from the
+validated USER_DATA payload, matching the Windows session adapter. Framed
+reply regression tests cover both BUD and WebRTC, terminated and unterminated
+JSON, and preservation of the last valid state after malformed replies.
+No transport, media, Windows or Android behavior changes.
