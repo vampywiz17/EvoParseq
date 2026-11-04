@@ -16,6 +16,10 @@ pub fn style(ctx: &egui::Context) {
     style.visuals.widgets.inactive.bg_fill = color(app_style::FIELD);
     style.visuals.widgets.hovered.bg_fill = color(app_style::BLUE).gamma_multiply(0.7);
     style.visuals.widgets.active.bg_fill = color(app_style::BLUE);
+    // egui Button uses weak_bg_fill, not bg_fill.
+    style.visuals.widgets.inactive.weak_bg_fill = color(app_style::FIELD);
+    style.visuals.widgets.hovered.weak_bg_fill = color(app_style::FIELD);
+    style.visuals.widgets.active.weak_bg_fill = color(app_style::FIELD);
     style.spacing.item_spacing = egui::vec2(12., 14.);
     style.spacing.button_padding = egui::vec2(8., 4.);
     style.spacing.interact_size.y = 24.;
@@ -56,6 +60,7 @@ impl Desktop {
             ));
             let playback = crate::playback::Playback::new(ctx.clone());
             self.desktop_input.video = None;
+            self.badge = Default::default();
             self.launcher_size =
                 ctx.input(|input| input.viewport().inner_rect.map(|rect| rect.size()));
             self.fitted_stream = None;
@@ -247,6 +252,12 @@ impl Desktop {
         ui.visuals_mut().override_text_color = Some(color(app_style::SETTINGS_TEXT));
         ui.visuals_mut().extreme_bg_color = color(app_style::SETTINGS_FIELD);
         ui.visuals_mut().selection.bg_fill = color(app_style::SETTINGS_ACCENT);
+        ui.visuals_mut().widgets.inactive.weak_bg_fill = color(app_style::SETTINGS_FIELD);
+        ui.visuals_mut().widgets.hovered.weak_bg_fill = color(app_style::SETTINGS_FIELD);
+        ui.visuals_mut().widgets.active.weak_bg_fill = color(app_style::SETTINGS_FIELD);
+        ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::NONE;
+        ui.visuals_mut().widgets.hovered.bg_stroke = egui::Stroke::NONE;
+        ui.visuals_mut().widgets.active.bg_stroke = egui::Stroke::NONE;
         ui.style_mut().override_font_id = Some(egui::FontId::proportional(s::BODY as f32));
         let origin = ui.cursor().min
             + egui::vec2(((ui.available_width() - s::WIDTH as f32) / 2.).max(24.), 0.);
@@ -271,7 +282,10 @@ impl Desktop {
         );
         ui.put(
             r(s::TABS[0]),
-            egui::Button::new(app_style::SETTINGS_TABS[0]).fill(color(app_style::SETTINGS_ACCENT)),
+            egui::Button::new(
+                RichText::new(app_style::SETTINGS_TABS[0]).color(color(app_style::SETTINGS_FIELD)),
+            )
+            .fill(color(app_style::SETTINGS_ACCENT)),
         );
         // Video/Audio/Input have no editable settings integrated yet. The raw
         // Vulkan capability report remains in --probe-video, outside product UI.
