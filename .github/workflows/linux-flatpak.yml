@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [codex/linux-flatpak]
-    paths: ['linux/**', '.github/workflows/linux-flatpak.yml', 'src-native/**', 'assets/evoparseq.svg']
+    paths: ['linux/**', '.github/workflows/linux-flatpak.yml', 'src-native/**', 'assets/evoparseq.svg', 'assets/evoparseq.png']
 
 permissions:
   contents: read
@@ -24,9 +24,9 @@ jobs:
         run: |
           stage="$RUNNER_TEMP/linux-flatpak-src"
           mkdir -p "$stage"
-          git archive HEAD linux .cargo assets/evoparseq.svg LICENSE src-native | tar -x -C "$stage"
+          git archive HEAD linux .cargo assets/evoparseq.svg assets/evoparseq.png LICENSE src-native | tar -x -C "$stage"
           cd "$stage"
-          rustfmt --edition 2024 --config skip_children=true --check linux/src/main.rs linux/src/video_probe.rs linux/src/connection.rs linux/src/video_profile.rs linux/src/audio_pipewire.rs linux/src/playback.rs linux/src/video_vulkan/*.rs linux/tests/video_contract.rs
+          rustfmt --edition 2024 --config skip_children=true --check linux/src/main.rs linux/src/launcher.rs linux/src/desktop_linux.rs linux/src/video_probe.rs linux/src/connection.rs linux/src/video_profile.rs linux/src/audio_pipewire.rs linux/src/playback.rs linux/src/video_vulkan/*.rs linux/tests/video_contract.rs
           cargo vendor --manifest-path linux/Cargo.toml --locked --versioned-dirs vendor > .cargo/config.toml
       - name: Install Flatpak SDK
         run: |

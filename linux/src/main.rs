@@ -2,6 +2,8 @@
 mod account;
 #[path = "../../src-native/src/native_core/signaling.rs"]
 mod account_signaling;
+#[path = "../../src-native/src/app_style.rs"]
+mod app_style;
 #[path = "../../src-native/src/attempt.rs"]
 pub mod attempt;
 #[path = "../../src-native/src/audio_layout.rs"]
@@ -16,14 +18,24 @@ pub mod codec_initialization;
 mod connection;
 #[path = "../../src-native/src/control.rs"]
 pub mod control;
+#[path = "../../src-native/src/desktop_input.rs"]
+pub mod desktop_input;
+mod desktop_linux;
 #[path = "../../src-native/src/event_log.rs"]
 mod event_log;
 #[path = "../../src-native/src/frame_timing.rs"]
 pub mod frame_timing;
+#[path = "../../src-native/src/gamepad.rs"]
+pub mod gamepad;
+#[path = "../../src-native/src/input_handoff.rs"]
+pub mod input_handoff;
+mod launcher;
 #[path = "../../src-native/src/media_ingress.rs"]
 pub mod media_ingress;
 #[path = "../../src-native/src/native_wire.rs"]
 pub mod native_wire;
+#[path = "../../src-native/src/native_core/picker.rs"]
+mod picker;
 mod playback;
 #[path = "../../src-native/src/rtc_configuration.rs"]
 pub mod rtc_configuration;
@@ -38,6 +50,8 @@ mod video_profile;
 #[path = "../../src-native/src/video_stream.rs"]
 pub mod video_stream;
 mod video_vulkan;
+#[path = "../../src-native/src/viewport.rs"]
+pub mod viewport;
 
 use eframe::{egui, egui_wgpu};
 use std::sync::{Arc, mpsc};
@@ -63,7 +77,11 @@ struct Desktop {
     email: String,
     password: Zeroizing<String>,
     tfa: Zeroizing<String>,
-    hosts: Vec<account::Host>,
+    picker: picker::Picker,
+    peer: String,
+    transport: connection::Mode,
+    logo: egui::TextureHandle,
+    desktop_input: desktop_linux::DesktopInput,
     signed_in: bool,
     busy: bool,
     error: Option<String>,
@@ -157,6 +175,12 @@ impl Desktop {
 }
 
 impl eframe::App for Desktop {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if let Some(playback) = &self.playback {
+            self.desktop_input.events(ctx, raw, playback);
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         while let Ok(reply) = self.replies.try_recv() {
             let video_timing = self
@@ -165,16 +189,37 @@ impl eframe::App for Desktop {
                 .map(|decoder| decoder.timing_summary());
             self.busy = false;
             if let Some(playback) = self.playback.take() {
+                self.desktop_input.release(ctx, &playback);
+                self.desktop_input.video = None;
                 playback.stop();
             }
             self.decoder = None;
             match reply {
                 Reply::Hosts(hosts) => {
-                    self.hosts = hosts;
+                    let selected = self
+                        .picker
+                        .hosts()
+                        .iter()
+                        .position(|host| host.peer == self.peer);
+                    let peer = self.peer.clone();
+                    if let Some(change) =
+                        self.picker
+                            .replace_hosts(hosts, picker::Refresh::Manual, || {
+                                picker::ListPosition {
+                                    selected,
+                                    last_peer: peer,
+                                    top: 0,
+                                }
+                            })
+                    {
+                        if let Some(peer) = change.peer {
+                            self.peer = peer;
+                        }
+                    }
                     self.signed_in = true;
                 }
                 Reply::SignedOut => {
-                    self.hosts.clear();
+                    self.picker = Default::default();
                     self.signed_in = false;
                     self.error = None;
                 }
@@ -186,7 +231,7 @@ impl eframe::App for Desktop {
                     eprintln!("{message}");
                     self.error = Some(message);
                     if !signed_in {
-                        self.hosts.clear();
+                        self.picker = Default::default();
                     }
                 }
             }
@@ -210,108 +255,31 @@ impl eframe::App for Desktop {
                 Ok(_) => {}
             }
         }
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(playback) = &self.playback {
-                ui.horizontal(|ui| {
-                    if ui.button("Disconnect").clicked() { playback.stop(); }
-                    if let Some(decoder) = &self.decoder { ui.label(format!("H.264 / Vulkan Video · {} decoded frames", decoder.decoded)); }
-                });
-                if let Some(error) = &self.error { ui.colored_label(egui::Color32::LIGHT_RED, error); }
-                if let Some(status) = playback.status() { ui.label(status); }
-                if let Some(decoder) = &self.decoder { decoder.show(ui); }
-                return;
-            }
-            ui.horizontal(|ui| {
-                ui.heading("EvoParseq");
-                ui.label(concat!("Linux preview ", env!("CARGO_PKG_VERSION")));
-                if ui
-                    .button(if self.show_video {
-                        "Back"
-                    } else {
-                        "Video capabilities"
-                    })
-                    .clicked()
-                {
-                    self.show_video = !self.show_video;
-                }
-            });
-            ui.separator();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                if self.show_video {
-                    ui.heading("Vulkan Video");
-                    ui.label(format!("UI adapter: {}", self.renderer));
-                    ui.label("Driver-reported capabilities · playback validation pending");
-                    for line in &self.video {
-                        ui.label(line);
-                    }
-                    return;
-                }
-                if let Some(error) = &self.error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
-                }
-                ui.add_enabled_ui(!self.busy, |ui| {
-                    if self.signed_in {
-                        ui.heading("Computers");
-                        ui.horizontal(|ui| {
-                            if ui.button("Refresh").clicked() {
-                                self.send(Command::Refresh);
-                            }
-                            if ui.button("Sign out").clicked() {
-                                self.send(Command::SignOut);
-                            }
-                        });
-                        let mut stream = None;
-                        for host in &self.hosts {
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(if self.playback.is_some() { egui::Color32::BLACK } else { launcher::color(app_style::BACKGROUND) })).show(ctx, |ui| {
+            if let Some(playback) = self.playback.clone() {
+                let area = self.decoder.as_ref().and_then(|decoder| decoder.show(ui));
+                self.desktop_input.video = area.map(|(rect,_)| rect);
+                if let Some((_,source)) = area { playback.set_input_geometry(source); }
+                self.desktop_input.cursor(ctx, &playback);
+                self.desktop_input.controls = None;
+                if !self.desktop_input.enabled || self.error.is_some() {
+                    let area = egui::Area::new(egui::Id::new("stream-controls")).fixed_pos(egui::pos2(16.,16.)).order(egui::Order::Foreground).show(ctx, |ui| {
+                        egui::Frame::new().fill(launcher::color(app_style::BACKGROUND)).inner_margin(16.).corner_radius(6).show(ui, |ui| {
+                            ui.set_max_width(480.);
                             ui.horizontal(|ui| {
-                                ui.label(&host.name);
-                                for mode in [connection::Mode::WebRtc, connection::Mode::Bud] {
-                                    if ui.add_enabled(self.video_context.is_some(), egui::Button::new(format!("Play {}", mode.label()))).clicked() {
-                                        stream = Some((host.peer.clone(), mode));
-                                    }
-                                }
+                                if ui.add_enabled(playback.input_ready() && self.desktop_input.video.is_some(),egui::Button::new("Enable input")).clicked() { self.desktop_input.enable(&playback); }
+                                if ui.button("Disconnect").clicked() { self.desktop_input.release(ctx,&playback); playback.stop(); }
+                                if ui.button("Full screen").clicked() { ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)))); }
                             });
-                        }
-                        if let Some((peer, mode)) = stream {
-                            if let Some(context) = self.video_context.clone() {
-                                self.decoder = Some(video_vulkan::Decoder::new(context, self.output_format));
-                                let playback = playback::Playback::new(ctx.clone());
-                                self.playback = Some(playback.clone());
-                                self.send(Command::Stream(peer, mode, playback));
-                            }
-                        }
-                        if let Some(result) = &self.session_result {
-                            ui.label(result);
-                        }
-                        if self.hosts.is_empty() {
-                            ui.label("No computers listed.");
-                        }
-                        ui.label("H.264 8-bit playback preview. Audio uses PipeWire. Input follows in a later step.");
-                        if let Some(error) = &self.video_error {
-                            ui.label(error);
-                            ui.label("On experimental Intel drivers, launch with ANV_DEBUG=video-decode.");
-                        }
-                    } else {
-                        ui.heading("Sign in to Parsec");
-                        ui.label("Email");
-                        ui.text_edit_singleline(&mut self.email);
-                        ui.label("Password");
-                        ui.add(egui::TextEdit::singleline(&mut *self.password).password(true));
-                        ui.label("Two-factor code (optional)");
-                        ui.add(egui::TextEdit::singleline(&mut *self.tfa).password(true));
-                        if ui.button("Sign in").clicked() {
-                            let login = account::Login {
-                                email: self.email.clone(),
-                                password: std::mem::take(&mut self.password),
-                                tfa: std::mem::take(&mut self.tfa),
-                            };
-                            self.send(Command::SignIn(login));
-                        }
-                    }
-                });
-                if self.busy {
-                    ui.spinner();
+                            ui.label(format!("{} / H.264 / Vulkan Video",self.transport.label()));
+                            ui.small("Click the video to control. Ctrl+Shift+M releases input and opens controls.");
+                            if let Some(status) = playback.status() { ui.label(status); }
+                            if let Some(error) = &self.error { ui.colored_label(egui::Color32::LIGHT_RED,error); }
+                        });
+                    });
+                    self.desktop_input.controls = Some(area.response.rect);
                 }
-            });
+            } else { self.launcher(ui,ctx); }
         });
     }
 }
@@ -347,7 +315,13 @@ fn main() -> anyhow::Result<()> {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_title("EvoParseq")
-            .with_inner_size([780.0, 500.0]),
+            .with_decorations(true)
+            .with_app_id("io.github.vampywiz17.EvoParseq")
+            .with_icon(eframe::icon_data::from_png_bytes(include_bytes!(
+                "../../assets/evoparseq.png"
+            ))?)
+            .with_min_inner_size([720.0, 540.0])
+            .with_inner_size([780.0, 600.0]),
         wgpu_options: egui_wgpu::WgpuConfiguration {
             wgpu_setup,
             ..Default::default()
@@ -359,10 +333,16 @@ fn main() -> anyhow::Result<()> {
         "io.github.vampywiz17.EvoParseq",
         options,
         Box::new(|cc| {
-            let mut visuals = egui::Visuals::dark();
-            visuals.panel_fill = egui::Color32::from_rgb(25, 29, 35);
-            visuals.selection.bg_fill = egui::Color32::from_rgb(25, 100, 170);
-            cc.egui_ctx.set_visuals(visuals);
+            launcher::style(&cc.egui_ctx);
+            let icon =
+                eframe::icon_data::from_png_bytes(include_bytes!("../../assets/evoparseq.png"))?;
+            let image = egui::ColorImage::from_rgba_unmultiplied(
+                [icon.width as usize, icon.height as usize],
+                &icon.rgba,
+            );
+            let logo =
+                cc.egui_ctx
+                    .load_texture("EvoParseq logo", image, egui::TextureOptions::LINEAR);
 
             let (commands, incoming) = mpsc::channel();
             let (outgoing, replies) = mpsc::channel();
@@ -395,7 +375,11 @@ fn main() -> anyhow::Result<()> {
                 email: String::new(),
                 password: Zeroizing::default(),
                 tfa: Zeroizing::default(),
-                hosts: Vec::new(),
+                picker: Default::default(),
+                peer: String::new(),
+                transport: connection::Mode::WebRtc,
+                logo,
+                desktop_input: Default::default(),
                 signed_in: false,
                 busy: false,
                 error: None,

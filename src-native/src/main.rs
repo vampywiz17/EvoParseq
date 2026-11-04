@@ -5,6 +5,7 @@
 use {rcgen as _, rustls as _, tokio_rustls as _};
 
 const APP_TITLE: &str = "EvoParseq";
+mod app_style;
 mod attempt;
 #[cfg(windows)]
 mod audio_endpoint_windows;

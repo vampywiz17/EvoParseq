@@ -528,8 +528,12 @@ pub fn choose(
         );
         f.common_controls.push(mark);
         for (label, id, rect) in [
-            ("EVO", 0, [84, 24, 68, 46]),
-            ("PARSEQ", WORDMARK_BLUE, [152, 24, 180, 46]),
+            (crate::app_style::WORDMARK[0], 0, [84, 24, 68, 46]),
+            (
+                crate::app_style::WORDMARK[1],
+                WORDMARK_BLUE,
+                [152, 24, 180, 46],
+            ),
         ] {
             let heading = add(hwnd, &f, "STATIC", label, id, SS_CENTERIMAGE, rect);
             SendMessageW(heading, WM_SETFONT, f.heading as usize, 0);
@@ -549,16 +553,13 @@ pub fn choose(
             hwnd,
             &f,
             "STATIC",
-            "NATIVE CORE  /  Your computers, your connection",
+            crate::app_style::SUBTITLE,
             0,
             0,
             [32, 80, 650, 26],
         );
         f.common_controls.push(subtitle);
-        for (i, label) in ["Email", "Password", "Two-factor code (optional)"]
-            .iter()
-            .enumerate()
-        {
+        for (i, label) in crate::app_style::LOGIN_FIELDS.iter().enumerate() {
             let y = 136 + i as i32 * 60;
             let l = add(hwnd, &f, "STATIC", label, 0, 0, [32, y, 215, 26]);
             let edit = add(
@@ -639,9 +640,7 @@ pub fn choose(
             hwnd,
             &f,
             "STATIC",
-            notice.unwrap_or(
-                "Use your Parsec account. Passwords and two-factor codes are never saved.",
-            ),
+            notice.unwrap_or(crate::app_style::LOGIN_NOTICE),
             0,
             0,
             [32, 484, 664, 66],

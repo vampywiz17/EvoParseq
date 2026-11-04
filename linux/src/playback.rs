@@ -6,8 +6,8 @@ use crate::{
 use anyhow::{Result, ensure};
 use std::{
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Instant,
 };
@@ -39,6 +39,11 @@ pub struct Playback {
     stopped: AtomicBool,
     packets: Mutex<Pending>,
     ui: eframe::egui::Context,
+    pub(crate) input: crate::input_handoff::Inbox,
+    consumer: OnceLock<std::thread::Thread>,
+    input_geometry: AtomicU64,
+    input_ready: AtomicBool,
+    capture: AtomicBool,
 }
 
 impl Playback {
@@ -47,6 +52,11 @@ impl Playback {
             stopped: AtomicBool::new(false),
             packets: Mutex::new(Pending::default()),
             ui,
+            input: Default::default(),
+            consumer: OnceLock::new(),
+            input_geometry: AtomicU64::new(0),
+            input_ready: AtomicBool::new(false),
+            capture: AtomicBool::new(false),
         })
     }
     pub fn stopped(&self) -> bool {
@@ -54,6 +64,43 @@ impl Playback {
     }
     pub fn stop(&self) {
         self.stopped.store(true, Ordering::Release);
+        if let Some(consumer) = self.consumer.get() {
+            consumer.unpark();
+        }
+    }
+
+    pub fn push_input(&self, event: crate::desktop_input::Event) {
+        self.input.push(event);
+        if let Some(consumer) = self.consumer.get() {
+            consumer.unpark();
+        }
+    }
+    pub fn bind_input_consumer(&self) {
+        let _ = self.consumer.set(std::thread::current());
+    }
+    pub fn set_input_geometry(&self, size: (u32, u32)) {
+        self.input_geometry.store(
+            (u64::from(size.0) << 32) | u64::from(size.1),
+            Ordering::Release,
+        );
+    }
+    pub fn input_geometry(&self) -> (u32, u32) {
+        let size = self.input_geometry.load(Ordering::Acquire);
+        ((size >> 32) as u32, size as u32)
+    }
+    pub fn set_input_ready(&self, ready: bool) {
+        self.input_ready.store(ready, Ordering::Release);
+    }
+    pub fn input_ready(&self) -> bool {
+        self.input_ready.load(Ordering::Acquire)
+    }
+    pub fn set_capture(&self, capture: bool) {
+        if self.capture.swap(capture, Ordering::AcqRel) != capture {
+            self.ui.request_repaint();
+        }
+    }
+    pub fn capture(&self) -> bool {
+        self.capture.load(Ordering::Acquire)
     }
 
     pub fn submit_packet(&self, bytes: &[u8], info: PacketInfo) -> Result<bool> {

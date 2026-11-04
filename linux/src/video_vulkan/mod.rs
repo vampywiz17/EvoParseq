@@ -261,7 +261,7 @@ impl Decoder {
         )
     }
 
-    pub fn show(&self, ui: &mut egui::Ui) {
+    pub fn show(&self, ui: &mut egui::Ui) -> Option<(egui::Rect, (u32, u32))> {
         if let Some(frame) = &self.frame {
             let available = ui.available_size();
             let ratio = frame.size.0 as f32 / frame.size.1 as f32;
@@ -272,8 +272,10 @@ impl Decoder {
                 rect,
                 Present(frame.clone()),
             ));
+            Some((rect, frame.size))
         } else {
             ui.label("Waiting for a decoded H.264 picture...");
+            None
         }
     }
 }

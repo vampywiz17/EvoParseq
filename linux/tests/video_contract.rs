@@ -1,9 +1,17 @@
+#[path = "../../src-native/src/desktop_input.rs"]
+mod desktop_input;
+#[path = "../../src-native/src/gamepad.rs"]
+mod gamepad;
+#[path = "../../src-native/src/input_handoff.rs"]
+mod input_handoff;
 #[path = "../src/video_vulkan/output.rs"]
 mod output;
 #[path = "../src/video_vulkan/parameters.rs"]
 mod parameters;
 #[path = "../src/playback.rs"]
 mod playback;
+#[path = "../../src-native/src/viewport.rs"]
+mod viewport;
 
 #[test]
 fn native_transport_sink_feeds_linux_playback_and_obeys_cancellation() {

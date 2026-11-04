@@ -174,3 +174,27 @@ intermediate RGBA video texture or cross-device transfer. NV12 plane sampling
 and conversion into the final render target remain necessary GPU work. Driver
 internal copies and compositor/scanout latency remain unverified. Windows and
 Android source files are unchanged by this Linux cleanup.
+
+## Launcher and normal input (0.1.7)
+
+The Windows launcher palette and labels are now in app_style.rs, consumed by
+both native widget adapters. Windows COLORREF conversion retains the exact
+previous values. Linux imports the existing computer-picker model for host
+selection/refresh and peer validation. Native Wayland decorations remain on.
+The logo is decoded/uploaded once as a UI asset, independently of decoded video.
+
+The Linux event adapter translates egui events to the existing desktop_input
+Engine and input_handoff Inbox (also used by Android). The connection worker
+owns the shared engine; normal control frames use BUD send_frame or WebRTC's
+control channel. UI input unparks that existing worker; no new input thread,
+transport queue, timer or GPU copy is added. The current presented image extent
+is atomically published for the shared coordinate mapping. The presentation
+callback now returns its existing rectangle/extent, with unchanged GPU resources.
+Focus loss, the local release shortcut, disconnect and overflow send the normal
+release command. Host cursor flags drive the supported Wayland lock request.
+The initial adapter's physical key/modifier/IME limits are documented in README.
+
+Flatpak includes ANV_DEBUG=video-decode by default, without modifying the host
+Mesa installation or the non-Intel path. No HID enablement or input-device
+sandbox permission is added. GPU synchronization/decode/presentation code is
+unchanged apart from returning existing presentation geometry to the UI.

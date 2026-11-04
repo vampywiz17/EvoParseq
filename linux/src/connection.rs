@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     WebRtc,
     Bud,
@@ -32,6 +32,7 @@ pub fn run_stream(
     mode: Mode,
     playback: &Arc<crate::playback::Playback>,
 ) -> Result<String> {
+    playback.bind_input_consumer();
     let socket = Socket::open(session)?;
     let mut nonce = [0u8; 16];
     getrandom::fill(&mut nonce).map_err(|_| anyhow::anyhow!("Could not generate connection ID"))?;
@@ -94,6 +95,7 @@ fn run_webrtc(
     let receiver = attempt
         .audio_receiver()
         .context("Audio pipeline unavailable")?;
+    let mut input = Input::default();
     let result = observe(Mode::WebRtc, receiver, playback, |signaling_closed| {
         if !*signaling_closed {
             for _ in 0..64 {
@@ -135,14 +137,20 @@ fn run_webrtc(
                 break;
             };
             if channel == 0 && !text {
-                if let Ok(control::Message::Status(code)) = control::decode(&payload) {
-                    ensure!(code == 0, "The host ended the connection (status {code})");
+                if let Ok(message) = control::decode(&payload) {
+                    if let control::Message::Status(code) = &message {
+                        ensure!(*code == 0, "The host ended the connection (status {code})");
+                    }
+                    input.host_control(&message, playback);
                 }
             }
         }
         if let Some(stage) = attempt.failure_stage() {
             bail!("WebRTC connection failed ({stage})");
         }
+        input.pump(playback, attempt.control_ready(), |bytes| {
+            attempt.send_binary(0, bytes::Bytes::copy_from_slice(bytes))
+        })?;
         Ok((attempt.control_ready(), attempt.video_snapshot(), false))
     });
     let result = result.map_err(|error| {
@@ -163,6 +171,9 @@ fn run_webrtc(
         );
         eprintln!("{message}");
         anyhow::anyhow!(message)
+    });
+    input.release(playback, |bytes| {
+        attempt.send_binary(0, bytes::Bytes::copy_from_slice(bytes))
     });
     attempt.disconnect();
     result
@@ -249,6 +260,7 @@ fn run_bud(
     let sender = audio.sender().context("Audio pipeline unavailable")?;
     let mut ingress = crate::bud_ingress::VideoState::new(false, false, false);
     let mut established = false;
+    let mut input = Input::default();
     let result = observe(
         Mode::Bud,
         audio.native_receiver(),
@@ -278,8 +290,14 @@ fn run_bud(
                 match event {
                     Event::Established { .. } => established = true,
                     Event::ExternalControl { bytes } => {
-                        if let Ok(control::Message::Status(code)) = control::decode(&bytes) {
-                            ensure!(code == 0, "The host ended the connection (status {code})");
+                        if let Ok(message) = control::decode(&bytes) {
+                            if let control::Message::Status(code) = &message {
+                                ensure!(
+                                    *code == 0,
+                                    "The host ended the connection (status {code})"
+                                );
+                            }
+                            input.host_control(&message, playback);
                         }
                     }
                     Event::Ended { outcome } => bail!("BUD connection ended: {outcome:?}"),
@@ -296,11 +314,13 @@ fn run_bud(
                     anyhow::bail!("BUD could not request a video resume keyframe");
                 }
             }
+            input.pump(playback, established, |bytes| session.send_frame(bytes))?;
             let pumped =
                 crate::bud_ingress::pump(&mut source, &mut ingress, playback.as_ref(), &sender)?;
             Ok((established, ingress.snapshot(), pumped.more_pending()))
         },
     );
+    input.release(playback, |bytes| session.send_frame(bytes));
     session.close();
     result
 }
@@ -352,5 +372,162 @@ impl crate::bud_ingress::VideoTarget for crate::playback::Playback {
             "Rotated video is not supported in the Linux playback preview"
         );
         self.submit_packet(bytes, info)
+    }
+}
+
+/// Transport binding only: state, framing, release policy and geometry are shared.
+#[derive(Default)]
+struct Input {
+    engine: crate::desktop_input::Engine,
+    events: std::collections::VecDeque<crate::input_handoff::Event>,
+}
+impl Input {
+    fn host_control(&mut self, message: &control::Message, playback: &crate::playback::Playback) {
+        if let control::Message::Buffer { event, .. } = message {
+            let cursor = &event["cursor"];
+            if cursor.is_object() {
+                let relative = cursor["relative"].as_bool().unwrap_or(false);
+                let hidden = cursor["hidden"].as_bool().unwrap_or(false);
+                self.engine.host_cursor(
+                    relative,
+                    hidden,
+                    cursor["positionX"].as_i64().unwrap_or(0) as i32,
+                    cursor["positionY"].as_i64().unwrap_or(0) as i32,
+                );
+                playback.set_capture(crate::desktop_input::relative_capture(relative, hidden));
+            }
+        }
+    }
+    fn pump(
+        &mut self,
+        playback: &crate::playback::Playback,
+        ready: bool,
+        mut send: impl FnMut(&[u8]) -> Result<()>,
+    ) -> Result<()> {
+        playback.set_input_ready(ready);
+        if !ready {
+            return Ok(());
+        }
+        self.engine.geometry(playback.input_geometry());
+        if let Err(error) = playback.input.take(&mut self.events) {
+            let _ = self.engine.event(
+                crate::desktop_input::Event::Release,
+                Instant::now(),
+                &mut send,
+            );
+            return Err(error);
+        }
+        while let Some(event) = self.events.pop_front() {
+            if let crate::input_handoff::Event::Desktop(event) = event {
+                self.engine.event(event, Instant::now(), &mut send)?;
+            }
+        }
+        Ok(())
+    }
+    fn release(
+        &mut self,
+        playback: &crate::playback::Playback,
+        send: impl FnMut(&[u8]) -> Result<()>,
+    ) {
+        playback.set_input_ready(false);
+        playback.set_capture(false);
+        let _ = self
+            .engine
+            .event(crate::desktop_input::Event::Release, Instant::now(), send);
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+    use crate::desktop_input::{Event, Pointer};
+    #[test]
+    fn linux_normal_input_uses_shared_key_pointer_and_release_frames() {
+        let playback = crate::playback::Playback::new(eframe::egui::Context::default());
+        playback.set_input_geometry((1920, 1080));
+        let mut input = Input::default();
+        let mut cursor = vec![0; 34];
+        cursor[12] = 9;
+        cursor[32..34].copy_from_slice(&256i16.to_be_bytes());
+        input.host_control(&control::decode(&cursor).unwrap(), &playback);
+        assert!(playback.capture());
+        playback.push_input(Event::Focus(true));
+        playback.push_input(Event::Key {
+            usage: 4,
+            mods: 0,
+            down: true,
+        });
+        playback.push_input(Event::Pointer(Pointer {
+            x: 3.,
+            y: -2.,
+            relative: true,
+            moved: true,
+            viewport: (1280, 720),
+            buttons: 1,
+            wheel: (0, 0),
+        }));
+        let mut frames = Vec::new();
+        input
+            .pump(&playback, true, |bytes| {
+                frames.push(bytes.to_vec());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(frames[0], control::header(0, 4, 0, 1));
+        assert_eq!(frames[1], control::header(3, 1, 3, -2));
+        assert_eq!(frames[2], control::header(1, 1, 1, 0));
+        playback.push_input(Event::Focus(false));
+        input
+            .pump(&playback, true, |bytes| {
+                frames.push(bytes.to_vec());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(frames.last().unwrap(), &control::header(24, 0, 0, 0));
+        let before = frames.len();
+        playback.push_input(Event::Key {
+            usage: 4,
+            mods: 0,
+            down: true,
+        });
+        input
+            .pump(&playback, true, |bytes| {
+                frames.push(bytes.to_vec());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            frames.len(),
+            before,
+            "focus loss must gate subsequent input"
+        );
+        input.release(&playback, |bytes| {
+            frames.push(bytes.to_vec());
+            Ok(())
+        });
+        assert!(!playback.capture() && !playback.input_ready());
+        assert_eq!(frames.last().unwrap(), &control::header(24, 0, 0, 0));
+    }
+    #[test]
+    fn linux_input_overload_releases_host_instead_of_losing_button_edges() {
+        let playback = crate::playback::Playback::new(eframe::egui::Context::default());
+        let mut input = Input::default();
+        for _ in 0..129 {
+            playback.push_input(Event::Key {
+                usage: 4,
+                mods: 0,
+                down: true,
+            });
+        }
+        let mut frames = Vec::new();
+        assert!(
+            input
+                .pump(&playback, true, |bytes| {
+                    frames.push(bytes.to_vec());
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert_eq!(frames, vec![control::header(24, 0, 0, 0).to_vec()]);
     }
 }

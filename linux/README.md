@@ -23,8 +23,7 @@ If the UI stops consuming video (for example when another window covers it),
 a full backlog suspends video without ending the connection or audio pipeline.
 Returning focus requests a fresh keyframe using the shared recovery gate and
 deadline, then resumes playback. Continuous background video decoding is not
-implemented in this preview. Input forwarding,
-HEVC playback and persistent sign-in are later steps.
+implemented in this preview. HEVC playback and persistent sign-in are later steps.
 
 WebRTC probes and playback use the same existing Parsec host certificate
 compatibility policy as Windows/Android. Native video is delivered directly
@@ -61,3 +60,28 @@ presents the latest completed output after decoding its bounded input batch.
 This is a low-latency policy, not a measured end-to-end latency guarantee.
 Conservative GPU completion waits, compositor presentation and PipeWire's
 negotiated quantum still affect latency. See VIDEO_PATH.md for the audit.
+
+The launcher uses the Windows client's shared Rust palette, labels and computer
+picker policy. Native window decorations belong to the Wayland desktop; Full
+screen uses the native fullscreen command. Windows and Linux colors/labels are
+defined once in src-native/src/app_style.rs. No Win32 widgets are ported to Linux.
+
+Normal Parsec mouse/keyboard control is available on BUD and WebRTC. Click the
+video or Enable input to activate it; Ctrl+Shift+M releases input and opens the
+stream controls. Focus loss, disconnect and queue overload release host keys
+and buttons. Geometry, key framing, button mapping, fractional relative motion
+and the bounded input inbox reuse the existing shared Rust implementations.
+Host cursor flags request relative Wayland pointer locking. No HID devices or
+host HID mode are enabled, and no additional Flatpak device permission is used.
+The initial egui adapter supports its exposed physical key vocabulary: letters,
+numbers, navigation, function keys and punctuation. Egui aggregates modifiers
+and merges numpad/main keys; exact left/right modifiers, ISO-only keys and IME
+text are not exposed by this adapter. System/compositor shortcuts remain local.
+Clipboard shortcuts target the host clipboard; local clipboard text is never
+synchronized. Pointer locking and physical input still require a live Wayland test.
+
+The Flatpak defaults ANV_DEBUG=video-decode for the Intel Mesa Vulkan Video path.
+Launch normally with flatpak run io.github.vampywiz17.EvoParseq. This documented
+vendor switch enables experimental Intel driver support; it is not a generic
+Vulkan requirement or a guarantee for every GPU/driver. It can be overridden
+using Flatpak's --env option.
