@@ -424,7 +424,9 @@ fn bud_encoder_rebuild_retires_old_references_and_resumes_with_parameters() {
     assert!(info.idr && info.parameters);
     assert!(playback.submit_packet(first, info).unwrap());
     playback.encoder_rebuilt();
-    assert!(playback.take_keyframe_request().unwrap().is_some());
+    // The shared Windows queue retires the codec as well as references.
+    // A codec-specific refresh cannot be sent before new parameters arrive.
+    assert!(playback.take_keyframe_request().unwrap().is_none());
     let mut count = 0;
     playback
         .decode_pending(|_| {
