@@ -9,6 +9,8 @@ publish = false
 [dependencies]
 anyhow = "1"
 ash = "0.38"
+pollster = "0.4"
+lowlat-decode = { git = "https://github.com/nomi-san/lowlat", rev = "5f8db5689e55de0d396b0520824caa9fc053dd86" }
 bytes = "1"
 futures-util = { version = "0.3", features = ["sink"] }
 getrandom = "0.3"
@@ -38,3 +40,5 @@ turn = { path = "../src-native/vendor/turn-0.11.0" }
 [patch."https://github.com/nomi-san/lowlat"]
 lowlat-core = { path = "../src-native/crates/bud/vendor/lowlat-core" }
 lowlat-crypto = { path = "../src-native/crates/bud/vendor/lowlat-crypto" }
+
+lowlat-drivers = { path = "../src-native/vendor/lowlat-drivers" }

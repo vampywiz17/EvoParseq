@@ -1,0 +1,714 @@
+use super::{device::Context, parameters};
+use anyhow::{Context as _, Result, ensure};
+use ash::vk::{self, native as n};
+use lowlat_decode::h264::{Job, dpb::MAX_FRAMES, pps::Pps, sps::Sps};
+use std::sync::{Arc, Mutex, OnceLock};
+
+const WAIT_NS: u64 = 100_000_000;
+const MAX_INPUT: u64 = 8 * 1024 * 1024;
+
+pub struct Session {
+    resources: Option<Box<Resources>>,
+    pub textures: Vec<wgpu::Texture>,
+    pub size: (u32, u32),
+    alignment: u64,
+    initialized: bool,
+    slot_ids: [Option<u32>; MAX_FRAMES],
+    slot_count: u32,
+    last_sets: Option<(Sps, Pps)>,
+}
+
+struct Resources {
+    context: Arc<Context>,
+    session: vk::VideoSessionKHR,
+    parameters: vk::VideoSessionParametersKHR,
+    session_memory: Vec<vk::DeviceMemory>,
+    images: Vec<(vk::Image, vk::DeviceMemory, vk::ImageView)>,
+    buffer: vk::Buffer,
+    buffer_memory: vk::DeviceMemory,
+    pool: vk::CommandPool,
+    command: vk::CommandBuffer,
+    fence: vk::Fence,
+    pending: bool,
+}
+
+impl Resources {
+    fn new(context: Arc<Context>) -> Self {
+        Self {
+            context,
+            session: vk::VideoSessionKHR::null(),
+            parameters: vk::VideoSessionParametersKHR::null(),
+            session_memory: Vec::new(),
+            images: Vec::new(),
+            buffer: vk::Buffer::null(),
+            buffer_memory: vk::DeviceMemory::null(),
+            pool: vk::CommandPool::null(),
+            command: vk::CommandBuffer::null(),
+            fence: vk::Fence::null(),
+            pending: false,
+        }
+    }
+
+    fn wait(&mut self) -> Result<()> {
+        if self.pending {
+            unsafe {
+                self.context
+                    .raw
+                    .wait_for_fences(&[self.fence], true, WAIT_NS)?
+            };
+            self.pending = false;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Resources {
+    fn drop(&mut self) {
+        // Only destroyed after all decode and graphics submissions completed.
+        unsafe {
+            let raw = &self.context.raw;
+            raw.destroy_fence(self.fence, None);
+            raw.destroy_command_pool(self.pool, None);
+            self.context
+                .video
+                .destroy_video_session_parameters(self.parameters, None);
+            self.context.video.destroy_video_session(self.session, None);
+            for memory in &self.session_memory {
+                raw.free_memory(*memory, None);
+            }
+            raw.destroy_buffer(self.buffer, None);
+            raw.free_memory(self.buffer_memory, None);
+            for (image, memory, view) in &self.images {
+                raw.destroy_image_view(*view, None);
+                raw.destroy_image(*image, None);
+                raw.free_memory(*memory, None);
+            }
+        }
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        if let Some(mut resources) = self.resources.take() {
+            if resources.wait().is_err() || resources.context.wait_graphics().is_err() {
+                // A timed-out driver may still own these objects. Retain their
+                // device as well, rather than freeing GPU-visible memory early.
+                static RETIRED: OnceLock<Mutex<Vec<Box<Resources>>>> = OnceLock::new();
+                RETIRED
+                    .get_or_init(Default::default)
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(resources);
+                return;
+            }
+            self.textures.clear();
+        }
+    }
+}
+
+impl Session {
+    pub fn new(context: Arc<Context>, sps: &Sps) -> Result<Self> {
+        parameters::sps(sps, &parameters::scaling(&sps.scaling))?;
+        let mut result = Self {
+            resources: Some(Box::new(Resources::new(context))),
+            textures: Vec::new(),
+            size: (sps.coded_width(), sps.coded_height()),
+            alignment: 1,
+            initialized: false,
+            slot_ids: [None; MAX_FRAMES],
+            slot_count: 0,
+            last_sets: None,
+        };
+        unsafe { result.initialize(sps)? };
+        Ok(result)
+    }
+
+    unsafe fn initialize(&mut self, sps: &Sps) -> Result<()> {
+        let resources = self.resources.as_mut().context("Video session closed")?;
+        let context = &resources.context;
+        let raw = &context.raw;
+        let mut codec = vk::VideoDecodeH264ProfileInfoKHR::default()
+            .std_profile_idc(sps.profile_idc.into())
+            .picture_layout(vk::VideoDecodeH264PictureLayoutFlagsKHR::PROGRESSIVE);
+        let profile = vk::VideoProfileInfoKHR::default()
+            .video_codec_operation(vk::VideoCodecOperationFlagsKHR::DECODE_H264)
+            .chroma_subsampling(vk::VideoChromaSubsamplingFlagsKHR::TYPE_420)
+            .luma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
+            .chroma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
+            .push_next(&mut codec);
+        // Entry is needed only to load instance-level Vulkan Video dispatch.
+        let entry = unsafe { ash::Entry::load()? };
+        let video = ash::khr::video_queue::Instance::new(&entry, &context.instance);
+        let mut codec_caps = vk::VideoDecodeH264CapabilitiesKHR::default();
+        let mut decode_caps = vk::VideoDecodeCapabilitiesKHR::default();
+        let mut caps = vk::VideoCapabilitiesKHR::default()
+            .push_next(&mut codec_caps)
+            .push_next(&mut decode_caps);
+        unsafe {
+            (video.fp().get_physical_device_video_capabilities_khr)(
+                context.physical,
+                &profile,
+                &mut caps,
+            )
+            .result()?
+        };
+        ensure!(
+            caps.max_coded_extent.width >= self.size.0
+                && caps.max_coded_extent.height >= self.size.1,
+            "Stream exceeds Vulkan decoder dimensions"
+        );
+        ensure!(
+            decode_caps
+                .flags
+                .contains(vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE),
+            "Decoder cannot share its original DPB surfaces with presentation"
+        );
+        ensure!(
+            caps.max_dpb_slots >= u32::from(sps.max_num_ref_frames) + 1
+                && caps.max_active_reference_pictures >= u32::from(sps.max_num_ref_frames),
+            "Insufficient Vulkan DPB capacity"
+        );
+        ensure!(
+            codec_caps.max_level_idc >= parameters::level(sps.level_idc)?,
+            "H.264 level exceeds the decoder limit"
+        );
+        self.slot_count = caps.max_dpb_slots.min(MAX_FRAMES as u32);
+        self.alignment = caps.min_bitstream_buffer_size_alignment.max(1);
+        let extent = vk::Extent2D {
+            width: self.size.0,
+            height: self.size.1,
+        };
+        let standard = vk::ExtensionProperties {
+            extension_name: caps.std_header_version.extension_name,
+            spec_version: caps.std_header_version.spec_version,
+        };
+        resources.session = unsafe {
+            context.video.create_video_session(
+                &vk::VideoSessionCreateInfoKHR::default()
+                    .queue_family_index(context.decode_family)
+                    .video_profile(&profile)
+                    .picture_format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+                    .reference_picture_format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+                    .max_coded_extent(extent)
+                    .max_dpb_slots(self.slot_count)
+                    .max_active_reference_pictures(u32::from(sps.max_num_ref_frames).max(1))
+                    .std_header_version(&standard),
+                None,
+            )?
+        };
+        let requirements = unsafe {
+            context
+                .video
+                .get_video_session_memory_requirements(resources.session)?
+        };
+        let mut bindings = Vec::new();
+        for requirement in requirements {
+            let memory = unsafe {
+                raw.allocate_memory(
+                    &vk::MemoryAllocateInfo::default()
+                        .allocation_size(requirement.memory_requirements.size)
+                        .memory_type_index(context.memory_type(
+                            requirement.memory_requirements.memory_type_bits,
+                            vk::MemoryPropertyFlags::empty(),
+                        )?),
+                    None,
+                )?
+            };
+            resources.session_memory.push(memory);
+            bindings.push(
+                vk::BindVideoSessionMemoryInfoKHR::default()
+                    .memory_bind_index(requirement.memory_bind_index)
+                    .memory(memory)
+                    .memory_size(requirement.memory_requirements.size),
+            );
+        }
+        unsafe {
+            context
+                .video
+                .bind_video_session_memory(resources.session, &bindings)?
+        };
+        let profiles = [profile];
+        let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
+        let usage = vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
+            | vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR
+            | vk::ImageUsageFlags::SAMPLED;
+        let query = vk::PhysicalDeviceVideoFormatInfoKHR::default()
+            .image_usage(usage)
+            .push_next(&mut list);
+        let mut count = 0;
+        unsafe {
+            (video.fp().get_physical_device_video_format_properties_khr)(
+                context.physical,
+                &query,
+                &mut count,
+                std::ptr::null_mut(),
+            )
+            .result()?
+        };
+        let mut formats = vec![vk::VideoFormatPropertiesKHR::default(); count as usize];
+        unsafe {
+            (video.fp().get_physical_device_video_format_properties_khr)(
+                context.physical,
+                &query,
+                &mut count,
+                formats.as_mut_ptr(),
+            )
+            .result()?
+        };
+        ensure!(
+            formats
+                .iter()
+                .any(|format| format.format == vk::Format::G8_B8R8_2PLANE_420_UNORM),
+            "The original NV12 decoder surfaces cannot be sampled on this driver"
+        );
+        let graphics_family = unsafe { context.device.as_hal::<wgpu::hal::api::Vulkan>() }
+            .context("Vulkan device unavailable")?
+            .queue_family_index();
+        let families = [context.decode_family, graphics_family];
+        for _ in 0..MAX_FRAMES {
+            let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
+            let mut info = vk::ImageCreateInfo::default()
+                .push_next(&mut list)
+                .flags(vk::ImageCreateFlags::MUTABLE_FORMAT)
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+                .extent(vk::Extent3D {
+                    width: extent.width,
+                    height: extent.height,
+                    depth: 1,
+                })
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .usage(usage);
+            if graphics_family != context.decode_family {
+                info = info
+                    .sharing_mode(vk::SharingMode::CONCURRENT)
+                    .queue_family_indices(&families);
+            }
+            let image = unsafe { raw.create_image(&info, None)? };
+            resources
+                .images
+                .push((image, vk::DeviceMemory::null(), vk::ImageView::null()));
+            let requirement = unsafe { raw.get_image_memory_requirements(image) };
+            let memory = unsafe {
+                raw.allocate_memory(
+                    &vk::MemoryAllocateInfo::default()
+                        .allocation_size(requirement.size)
+                        .memory_type_index(context.memory_type(
+                            requirement.memory_type_bits,
+                            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                        )?),
+                    None,
+                )?
+            };
+            resources.images.last_mut().unwrap().1 = memory;
+            unsafe { raw.bind_image_memory(image, memory, 0)? };
+            let view = unsafe {
+                raw.create_image_view(
+                    &vk::ImageViewCreateInfo::default()
+                        .image(image)
+                        .view_type(vk::ImageViewType::TYPE_2D)
+                        .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+                        .subresource_range(
+                            vk::ImageSubresourceRange::default()
+                                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                                .level_count(1)
+                                .layer_count(1),
+                        ),
+                    None,
+                )?
+            };
+            resources.images.last_mut().unwrap().2 = view;
+            let hal = unsafe { context.device.as_hal::<wgpu::hal::api::Vulkan>() }
+                .context("Vulkan texture interop unavailable")?;
+            let size = wgpu::Extent3d {
+                width: extent.width,
+                height: extent.height,
+                depth_or_array_layers: 1,
+            };
+            let texture = unsafe {
+                hal.texture_from_raw(
+                    image,
+                    &wgpu::hal::TextureDescriptor {
+                        label: Some("Original H.264 decode surface"),
+                        size,
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::NV12,
+                        usage: wgpu::TextureUses::RESOURCE,
+                        memory_flags: wgpu::hal::MemoryFlags::empty(),
+                        view_formats: Vec::new(),
+                    },
+                    Some(Box::new(|| {})),
+                )
+            };
+            let texture = unsafe {
+                context
+                    .device
+                    .create_texture_from_hal::<wgpu::hal::api::Vulkan>(
+                        texture,
+                        &wgpu::TextureDescriptor {
+                            label: Some("Original H.264 decode surface"),
+                            size,
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::NV12,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                            view_formats: &[],
+                        },
+                    )
+            };
+            self.textures.push(texture);
+        }
+        // Establish wgpu's RESOURCE state before the first native decode.
+        // Subsequent native operations restore SHADER_READ_ONLY_OPTIMAL.
+        let mut encoder = context.device.create_command_encoder(&Default::default());
+        encoder.transition_resources(
+            std::iter::empty(),
+            self.textures.iter().map(|texture| wgpu::TextureTransition {
+                texture,
+                selector: None,
+                state: wgpu::TextureUses::RESOURCE,
+            }),
+        );
+        context.queue.submit([encoder.finish()]);
+        context.wait_graphics()?;
+        let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
+        resources.buffer = unsafe {
+            raw.create_buffer(
+                &vk::BufferCreateInfo::default()
+                    .size(MAX_INPUT)
+                    .usage(vk::BufferUsageFlags::VIDEO_DECODE_SRC_KHR)
+                    .push_next(&mut list),
+                None,
+            )?
+        };
+        let requirement = unsafe { raw.get_buffer_memory_requirements(resources.buffer) };
+        resources.buffer_memory = unsafe {
+            raw.allocate_memory(
+                &vk::MemoryAllocateInfo::default()
+                    .allocation_size(requirement.size)
+                    .memory_type_index(context.memory_type(
+                        requirement.memory_type_bits,
+                        vk::MemoryPropertyFlags::HOST_VISIBLE
+                            | vk::MemoryPropertyFlags::HOST_COHERENT,
+                    )?),
+                None,
+            )?
+        };
+        unsafe { raw.bind_buffer_memory(resources.buffer, resources.buffer_memory, 0)? };
+        resources.pool = unsafe {
+            raw.create_command_pool(
+                &vk::CommandPoolCreateInfo::default()
+                    .queue_family_index(context.decode_family)
+                    .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
+                None,
+            )?
+        };
+        resources.command = unsafe {
+            raw.allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::default()
+                    .command_pool(resources.pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            )?
+        }[0];
+        resources.fence = unsafe { raw.create_fence(&Default::default(), None)? };
+        Ok(())
+    }
+
+    fn update_parameters(&mut self, job: &Job) -> Result<()> {
+        if self.last_sets.as_ref() == Some(&(job.sps, job.pps)) {
+            return Ok(());
+        }
+        let resources = self.resources.as_mut().context("Video session closed")?;
+        resources.wait()?;
+        let sps_lists = parameters::scaling(&job.sps.scaling);
+        let pps_lists = parameters::scaling(&job.pps.scaling);
+        let sps = [parameters::sps(&job.sps, &sps_lists)?];
+        let pps = [parameters::pps(&job.pps, &pps_lists)];
+        let mut add = vk::VideoDecodeH264SessionParametersAddInfoKHR::default()
+            .std_sp_ss(&sps)
+            .std_pp_ss(&pps);
+        let mut codec = vk::VideoDecodeH264SessionParametersCreateInfoKHR::default()
+            .max_std_sps_count(1)
+            .max_std_pps_count(1)
+            .parameters_add_info(&add);
+        let parameters = unsafe {
+            resources.context.video.create_video_session_parameters(
+                &vk::VideoSessionParametersCreateInfoKHR::default()
+                    .video_session(resources.session)
+                    .push_next(&mut codec),
+                None,
+            )?
+        };
+        unsafe {
+            resources
+                .context
+                .video
+                .destroy_video_session_parameters(resources.parameters, None)
+        };
+        resources.parameters = parameters;
+        self.last_sets = Some((job.sps, job.pps));
+        // The structures, arrays and offset tables remain valid through creation.
+        let _ = &mut add;
+        Ok(())
+    }
+
+    pub fn decode(&mut self, job: &Job, bytes: &[u8]) -> Result<()> {
+        self.update_parameters(job)?;
+        for (slot, id) in self.slot_ids.iter_mut().enumerate() {
+            if !job
+                .references
+                .as_slice()
+                .iter()
+                .flatten()
+                .any(|reference| reference.slot == slot)
+            {
+                *id = None;
+            }
+        }
+        ensure!(job.current.slot < MAX_FRAMES, "Invalid target surface slot");
+        let free = (0..self.slot_count)
+            .find(|id| !self.slot_ids.contains(&Some(*id)))
+            .context("No free Vulkan DPB slot")?;
+        self.slot_ids[job.current.slot] = Some(free);
+        let resources = self.resources.as_mut().context("Video session closed")?;
+        resources.wait()?;
+        let context = &resources.context;
+        context.wait_graphics()?;
+        let raw = &context.raw;
+        let size = (bytes.len() as u64).div_ceil(self.alignment) * self.alignment;
+        ensure!(
+            size > 0 && size <= MAX_INPUT,
+            "H.264 access unit exceeds the bounded input buffer"
+        );
+        let first = job
+            .slices
+            .as_slice()
+            .first()
+            .copied()
+            .flatten()
+            .context("Missing H.264 slice")?;
+        let offsets: Vec<u32> = job
+            .slices
+            .as_slice()
+            .iter()
+            .flatten()
+            .map(|slice| {
+                // Vulkan offsets address Annex-B start codes, the parser addresses NAL headers.
+                let header = slice.offset;
+                let start = if header >= 4 && bytes.get(header - 4..header) == Some(&[0, 0, 0, 1]) {
+                    header - 4
+                } else {
+                    header.saturating_sub(3)
+                };
+                start as u32
+            })
+            .collect();
+        let picture = |slot: usize| -> Result<vk::VideoPictureResourceInfoKHR<'static>> {
+            let view = resources
+                .images
+                .get(slot)
+                .context("Invalid H.264 surface slot")?
+                .2;
+            Ok(vk::VideoPictureResourceInfoKHR::default()
+                .image_view_binding(view)
+                .coded_extent(vk::Extent2D {
+                    width: self.size.0,
+                    height: self.size.1,
+                }))
+        };
+        let references: Vec<_> = job.references.as_slice().iter().flatten().collect();
+        let mut standard_refs = Vec::new();
+        for reference in &references {
+            ensure!(
+                reference.parity.is_none(),
+                "Interlaced references are unavailable"
+            );
+            let mut info = n::StdVideoDecodeH264ReferenceInfo {
+                FrameNum: u16::try_from(reference.frame_idx)?,
+                PicOrderCnt: [reference.top_poc, reference.bottom_poc],
+                ..Default::default()
+            };
+            info.flags
+                .set_used_for_long_term_reference(reference.long_term.into());
+            standard_refs.push(info);
+        }
+        let mut codec_refs: Vec<_> = standard_refs
+            .iter()
+            .map(|info| vk::VideoDecodeH264DpbSlotInfoKHR::default().std_reference_info(info))
+            .collect();
+        let pictures: Vec<_> = references
+            .iter()
+            .map(|reference| picture(reference.slot))
+            .collect::<Result<_>>()?;
+        let slots: Vec<_> = references
+            .iter()
+            .zip(&pictures)
+            .zip(&mut codec_refs)
+            .map(|((reference, picture), info)| {
+                vk::VideoReferenceSlotInfoKHR::default()
+                    .slot_index(self.slot_ids[reference.slot].unwrap() as i32)
+                    .picture_resource(picture)
+                    .push_next(info)
+            })
+            .collect();
+        let target = picture(job.current.slot)?;
+        let mut target_standard = n::StdVideoDecodeH264ReferenceInfo {
+            FrameNum: u16::try_from(job.current.frame_num)?,
+            PicOrderCnt: [job.current.top_poc, job.current.bottom_poc],
+            ..Default::default()
+        };
+        let mut target_codec =
+            vk::VideoDecodeH264DpbSlotInfoKHR::default().std_reference_info(&target_standard);
+        let target_slot = vk::VideoReferenceSlotInfoKHR::default()
+            .slot_index(free as i32)
+            .picture_resource(&target)
+            .push_next(&mut target_codec);
+        let mut picture_info = n::StdVideoDecodeH264PictureInfo {
+            seq_parameter_set_id: job.sps.id,
+            pic_parameter_set_id: job.pps.id,
+            frame_num: u16::try_from(job.current.frame_num)?,
+            idr_pic_id: u16::try_from(first.header.idr_pic_id)?,
+            PicOrderCnt: [job.current.top_poc, job.current.bottom_poc],
+            ..Default::default()
+        };
+        picture_info.flags.set_IdrPicFlag(job.current.idr.into());
+        picture_info
+            .flags
+            .set_is_intra(first.header.slice_type.is_intra().into());
+        picture_info
+            .flags
+            .set_is_reference(job.current.reference.into());
+        let mut codec_info = vk::VideoDecodeH264PictureInfoKHR::default()
+            .std_picture_info(&picture_info)
+            .slice_offsets(&offsets);
+        let decode = vk::VideoDecodeInfoKHR::default()
+            .src_buffer(resources.buffer)
+            .src_buffer_offset(0)
+            .src_buffer_range(size)
+            .dst_picture_resource(target)
+            .setup_reference_slot(&target_slot)
+            .reference_slots(&slots)
+            .push_next(&mut codec_info);
+        let mut begin_slots = slots.clone();
+        // Bind the destination as an inactive slot before its first decode.
+        begin_slots.push(
+            vk::VideoReferenceSlotInfoKHR::default()
+                .slot_index(-1)
+                .picture_resource(&target),
+        );
+        unsafe {
+            let mapped = raw.map_memory(
+                resources.buffer_memory,
+                0,
+                size,
+                vk::MemoryMapFlags::empty(),
+            )?;
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), mapped.cast(), bytes.len());
+            std::ptr::write_bytes(
+                mapped.cast::<u8>().add(bytes.len()),
+                0,
+                size as usize - bytes.len(),
+            );
+            raw.unmap_memory(resources.buffer_memory);
+            raw.reset_command_buffer(resources.command, vk::CommandBufferResetFlags::empty())?;
+            raw.begin_command_buffer(
+                resources.command,
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )?;
+            let range = vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .level_count(1)
+                .layer_count(1);
+            let used: Vec<_> = references
+                .iter()
+                .map(|r| r.slot)
+                .chain(std::iter::once(job.current.slot))
+                .collect();
+            let barriers: Vec<_> = used
+                .iter()
+                .map(|slot| {
+                    vk::ImageMemoryBarrier::default()
+                        .image(resources.images[*slot].0)
+                        .subresource_range(range)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .new_layout(vk::ImageLayout::VIDEO_DECODE_DPB_KHR)
+                        .src_access_mask(vk::AccessFlags::MEMORY_READ)
+                        .dst_access_mask(
+                            vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
+                        )
+                })
+                .collect();
+            raw.cmd_pipeline_barrier(
+                resources.command,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &barriers,
+            );
+            context.video.cmd_begin_video_coding(
+                resources.command,
+                &vk::VideoBeginCodingInfoKHR::default()
+                    .video_session(resources.session)
+                    .video_session_parameters(resources.parameters)
+                    .reference_slots(&begin_slots),
+            );
+            if !self.initialized {
+                context.video.cmd_control_video_coding(
+                    resources.command,
+                    &vk::VideoCodingControlInfoKHR::default()
+                        .flags(vk::VideoCodingControlFlagsKHR::RESET),
+                );
+            }
+            context.video.cmd_decode_video(resources.command, &decode);
+            context
+                .video
+                .cmd_end_video_coding(resources.command, &Default::default());
+            let barriers: Vec<_> = barriers
+                .iter()
+                .map(|barrier| vk::ImageMemoryBarrier {
+                    old_layout: vk::ImageLayout::VIDEO_DECODE_DPB_KHR,
+                    new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    src_access_mask: vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
+                    dst_access_mask: vk::AccessFlags::MEMORY_READ,
+                    ..*barrier
+                })
+                .collect();
+            raw.cmd_pipeline_barrier(
+                resources.command,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &barriers,
+            );
+            raw.end_command_buffer(resources.command)?;
+            raw.reset_fences(&[resources.fence])?;
+            let commands = [resources.command];
+            raw.queue_submit(
+                context.decode_queue,
+                &[vk::SubmitInfo::default().command_buffers(&commands)],
+                resources.fence,
+            )?;
+            resources.pending = true;
+        }
+        resources
+            .wait()
+            .context("Vulkan decode completion timeout")?;
+        self.initialized = true;
+        let _ = &mut target_standard;
+        Ok(())
+    }
+}

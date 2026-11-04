@@ -22,6 +22,7 @@ pub mod frame_timing;
 pub mod media_ingress;
 #[path = "../../src-native/src/native_wire.rs"]
 pub mod native_wire;
+mod playback;
 #[path = "../../src-native/src/rtc_configuration.rs"]
 pub mod rtc_configuration;
 #[path = "../../src-native/src/signaling.rs"]
@@ -33,9 +34,10 @@ pub mod video_output;
 mod video_probe;
 #[path = "../../src-native/src/video_stream.rs"]
 pub mod video_stream;
+mod video_vulkan;
 
 use eframe::{egui, egui_wgpu};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use zeroize::Zeroizing;
 
 enum Command {
@@ -43,6 +45,7 @@ enum Command {
     Refresh,
     SignOut,
     Probe(String, connection_probe::Mode),
+    Stream(String, connection_probe::Mode, Arc<playback::Playback>),
 }
 
 enum Reply {
@@ -66,6 +69,11 @@ struct Desktop {
     show_video: bool,
     video: Vec<String>,
     renderer: String,
+    video_context: Option<Arc<video_vulkan::Context>>,
+    video_error: Option<String>,
+    output_format: wgpu::TextureFormat,
+    decoder: Option<video_vulkan::Decoder>,
+    playback: Option<Arc<playback::Playback>>,
 }
 
 fn account_worker(
@@ -86,6 +94,26 @@ fn account_worker(
                     .ok_or_else(|| anyhow::anyhow!("Sign in first."))
                     .and_then(|session| connection_probe::run(session, &peer, mode))
                 {
+                    Ok(message) => Reply::ProbePassed(message),
+                    Err(error) => Reply::Error {
+                        signed_in: session.is_some(),
+                        message: error.to_string(),
+                    },
+                };
+                if replies.send(reply).is_err() {
+                    break;
+                }
+                ui.request_repaint();
+                continue;
+            }
+            Command::Stream(peer, mode, playback) => {
+                let result = session
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Sign in first."))
+                    .and_then(|session| {
+                        connection_probe::run_stream(session, &peer, mode, &playback)
+                    });
+                let reply = match result {
                     Ok(message) => Reply::ProbePassed(message),
                     Err(error) => Reply::Error {
                         signed_in: session.is_some(),
@@ -150,6 +178,10 @@ impl eframe::App for Desktop {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         while let Ok(reply) = self.replies.try_recv() {
             self.busy = false;
+            if let Some(playback) = self.playback.take() {
+                playback.stop();
+            }
+            self.decoder = None;
             match reply {
                 Reply::Hosts(hosts) => {
                     self.hosts = hosts;
@@ -171,7 +203,25 @@ impl eframe::App for Desktop {
             }
         }
 
+        if let (Some(playback), Some(decoder)) = (&self.playback, &mut self.decoder) {
+            if let Some(bytes) = playback.next() {
+                if let Err(error) = decoder.submit(&bytes) {
+                    playback.stop();
+                    self.error = Some(format!("Vulkan video stopped: {error:#}"));
+                }
+                ctx.request_repaint();
+            }
+        }
         egui::CentralPanel::default().show(ctx, |ui| {
+            if let Some(playback) = &self.playback {
+                ui.horizontal(|ui| {
+                    if ui.button("Disconnect").clicked() { playback.stop(); }
+                    if let Some(decoder) = &self.decoder { ui.label(format!("H.264 / Vulkan Video · {} decoded frames", decoder.decoded)); }
+                });
+                if let Some(error) = &self.error { ui.colored_label(egui::Color32::LIGHT_RED, error); }
+                if let Some(decoder) = &self.decoder { decoder.show(ui); }
+                return;
+            }
             ui.horizontal(|ui| {
                 ui.heading("EvoParseq");
                 ui.label("Linux preview");
@@ -212,15 +262,27 @@ impl eframe::App for Desktop {
                             }
                         });
                         let mut probe = None;
+                        let mut stream = None;
                         for host in &self.hosts {
                             ui.horizontal(|ui| {
                                 ui.label(&host.name);
                                 for mode in [connection_probe::Mode::WebRtc, connection_probe::Mode::Bud] {
+                                    if ui.add_enabled(self.video_context.is_some(), egui::Button::new(format!("Play {}", mode.label()))).clicked() {
+                                        stream = Some((host.peer.clone(), mode));
+                                    }
                                     if ui.button(format!("Test {}", mode.label())).clicked() {
                                         probe = Some((host.peer.clone(), mode));
                                     }
                                 }
                             });
+                        }
+                        if let Some((peer, mode)) = stream {
+                            if let Some(context) = self.video_context.clone() {
+                                self.decoder = Some(video_vulkan::Decoder::new(context, self.output_format));
+                                let playback = playback::Playback::new(ctx.clone());
+                                self.playback = Some(playback.clone());
+                                self.send(Command::Stream(peer, mode, playback));
+                            }
                         }
                         if let Some((peer, mode)) = probe {
                             self.send(Command::Probe(peer, mode));
@@ -231,7 +293,11 @@ impl eframe::App for Desktop {
                         if self.hosts.is_empty() {
                             ui.label("No computers listed.");
                         }
-                        ui.label("Play audio on the host during the test. Video playback is not available in this preview.");
+                        ui.label("H.264 8-bit playback preview. Audio uses PipeWire. Input follows in a later step.");
+                        if let Some(error) = &self.video_error {
+                            ui.label(error);
+                            ui.label("On experimental Intel drivers, launch with ANV_DEBUG=video-decode.");
+                        }
                     } else {
                         ui.heading("Sign in to Parsec");
                         ui.label("Email");
@@ -258,6 +324,14 @@ impl eframe::App for Desktop {
     }
 }
 
+impl Drop for Desktop {
+    fn drop(&mut self) {
+        if let Some(playback) = &self.playback {
+            playback.stop();
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     if std::env::args_os()
         .nth(1)
@@ -273,13 +347,17 @@ fn main() -> anyhow::Result<()> {
         video_probe::report().unwrap_or_else(|error| vec![format!("Probe failed: {error}")]);
     let mut setup = egui_wgpu::WgpuSetupCreateNew::default();
     setup.instance_descriptor.backends = wgpu::Backends::VULKAN;
+    let (wgpu_setup, video_context, video_error) = match video_vulkan::create() {
+        Ok((setup, context)) => (egui_wgpu::WgpuSetup::Existing(setup), Some(context), None),
+        Err(error) => (setup.into(), None, Some(error.to_string())),
+    };
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_title("EvoParseq")
             .with_inner_size([780.0, 500.0]),
         wgpu_options: egui_wgpu::WgpuConfiguration {
-            wgpu_setup: setup.into(),
+            wgpu_setup,
             ..Default::default()
         },
         ..Default::default()
@@ -307,7 +385,17 @@ fn main() -> anyhow::Result<()> {
                 .as_ref()
                 .map(|state| state.adapter.get_info().name)
                 .unwrap_or_else(|| "Unknown".into());
+            let output_format = cc
+                .wgpu_render_state
+                .as_ref()
+                .map(|state| state.target_format)
+                .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
             Ok(Box::new(Desktop {
+                video_context,
+                video_error,
+                output_format,
+                decoder: None,
+                playback: None,
                 commands,
                 replies,
                 renderer,

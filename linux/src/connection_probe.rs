@@ -27,13 +27,31 @@ impl Mode {
 }
 
 pub fn run(session: &account::Session, peer: &str, mode: Mode) -> Result<String> {
+    run_session(session, peer, mode, None)
+}
+
+pub fn run_stream(
+    session: &account::Session,
+    peer: &str,
+    mode: Mode,
+    playback: &crate::playback::Playback,
+) -> Result<String> {
+    run_session(session, peer, mode, Some(playback))
+}
+
+fn run_session(
+    session: &account::Session,
+    peer: &str,
+    mode: Mode,
+    playback: Option<&crate::playback::Playback>,
+) -> Result<String> {
     let socket = Socket::open(session)?;
     let mut nonce = [0u8; 16];
     getrandom::fill(&mut nonce).map_err(|_| anyhow::anyhow!("Could not generate connection ID"))?;
     let id: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
     let result = match mode {
-        Mode::WebRtc => run_webrtc(&socket, peer, &id),
-        Mode::Bud => run_bud(&socket, peer, &id),
+        Mode::WebRtc => run_webrtc(&socket, peer, &id, playback),
+        Mode::Bud => run_bud(&socket, peer, &id, playback),
     };
     (socket.writer)(
         native_wire::envelope("offer_cancel", peer, &id, serde_json::json!({})).to_string(),
@@ -41,7 +59,12 @@ pub fn run(session: &account::Session, peer: &str, mode: Mode) -> Result<String>
     result
 }
 
-fn run_webrtc(socket: &Socket, peer: &str, id: &str) -> Result<String> {
+fn run_webrtc(
+    socket: &Socket,
+    peer: &str,
+    id: &str,
+    playback: Option<&crate::playback::Playback>,
+) -> Result<String> {
     let writer = socket.writer.clone();
     let target = peer.to_owned();
     let offer_id = id.to_owned();
@@ -65,13 +88,26 @@ fn run_webrtc(socket: &Socket, peer: &str, id: &str) -> Result<String> {
         ten_bit: false,
         chroma_444: false,
     };
-    let mut attempt =
-        Attempt::spawn_configured(id, output, Some(config), StunProvider::Parsec, true, None)?;
+    let mut attempt = Attempt::spawn_configured(
+        id,
+        output,
+        Some(config),
+        StunProvider::Parsec,
+        playback.is_none(),
+        None,
+    )?;
     attempt.start_native_media();
     let receiver = attempt
         .audio_receiver()
         .context("Audio pipeline unavailable")?;
-    let result = observe(Mode::WebRtc, receiver, |signaling_closed| {
+    let mut inspector = crate::video_stream::Inspector::default();
+    inspector.configure(VideoProtocol {
+        version: 1,
+        message_size: 11,
+        version_offset: 0,
+        flag_offset: 4,
+    });
+    let result = observe(Mode::WebRtc, receiver, playback, |signaling_closed| {
         if !*signaling_closed {
             for _ in 0..64 {
                 match socket.next() {
@@ -105,6 +141,11 @@ fn run_webrtc(socket: &Socket, peer: &str, id: &str) -> Result<String> {
             let Some((channel, text, payload)) = attempt.pop_binary() else {
                 break;
             };
+            if channel == 1 && !text && inspector.receive(&payload).is_some() {
+                if let Some(playback) = playback {
+                    playback.submit(&payload)?;
+                }
+            }
             if channel == 0 && !text {
                 if let Ok(control::Message::Status(code)) = control::decode(&payload) {
                     ensure!(code == 0, "The host ended the connection (status {code})");
@@ -134,7 +175,12 @@ fn run_webrtc(socket: &Socket, peer: &str, id: &str) -> Result<String> {
     result
 }
 
-fn run_bud(socket: &Socket, peer: &str, id: &str) -> Result<String> {
+fn run_bud(
+    socket: &Socket,
+    peer: &str,
+    id: &str,
+    playback: Option<&crate::playback::Playback>,
+) -> Result<String> {
     use evoparseq_bud::{
         bud::{Event, Route, Session},
         media,
@@ -172,68 +218,76 @@ fn run_bud(socket: &Socket, peer: &str, id: &str) -> Result<String> {
     let sender = audio.sender().context("Audio pipeline unavailable")?;
     let mut inspector = crate::video_stream::Inspector::default();
     let mut established = false;
-    let result = observe(Mode::Bud, audio.native_receiver(), |signaling_closed| {
-        if !*signaling_closed {
+    let result = observe(
+        Mode::Bud,
+        audio.native_receiver(),
+        playback,
+        |signaling_closed| {
+            if !*signaling_closed {
+                for _ in 0..64 {
+                    match socket.next() {
+                        Ok(Some(text)) => signaling.receive(&text, &mut session)?,
+                        Ok(None) => break,
+                        Err(_) if established => {
+                            *signaling_closed = true;
+                            break;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
             for _ in 0..64 {
-                match socket.next() {
-                    Ok(Some(text)) => signaling.receive(&text, &mut session)?,
-                    Ok(None) => break,
-                    Err(_) if established => {
-                        *signaling_closed = true;
-                        break;
+                let Some(event) = session.poll()? else { break };
+                if let Some(candidate) = signaling.candidate(&event) {
+                    ensure!(
+                        (socket.writer)(candidate.to_string()),
+                        "Could not send BUD candidate"
+                    );
+                }
+                match event {
+                    Event::Established { .. } => established = true,
+                    Event::ExternalControl { bytes } => {
+                        if let Ok(control::Message::Status(code)) = control::decode(&bytes) {
+                            ensure!(code == 0, "The host ended the connection (status {code})");
+                        }
                     }
-                    Err(error) => return Err(error),
+                    Event::Ended { outcome } => bail!("BUD connection ended: {outcome:?}"),
+                    Event::IoFailure { stage, kind, .. } => {
+                        bail!("BUD IO failed: {} ({kind:?})", stage.name());
+                    }
+                    _ => {}
                 }
             }
-        }
-        for _ in 0..64 {
-            let Some(event) = session.poll()? else { break };
-            if let Some(candidate) = signaling.candidate(&event) {
-                ensure!(
-                    (socket.writer)(candidate.to_string()),
-                    "Could not send BUD candidate"
-                );
-            }
-            match event {
-                Event::Established { .. } => established = true,
-                Event::ExternalControl { bytes } => {
-                    if let Ok(control::Message::Status(code)) = control::decode(&bytes) {
-                        ensure!(code == 0, "The host ended the connection (status {code})");
-                    }
+            for _ in 0..32 {
+                if source
+                    .with_audio(|bytes| {
+                        sender.submit(media::opus(bytes)?);
+                        Ok(())
+                    })?
+                    .is_none()
+                {
+                    break;
                 }
-                Event::Ended { outcome } => bail!("BUD connection ended: {outcome:?}"),
-                Event::IoFailure { stage, kind, .. } => {
-                    bail!("BUD IO failed: {} ({kind:?})", stage.name());
+            }
+            for _ in 0..32 {
+                if source
+                    .with_video(|bytes| {
+                        if let media::Video::AccessUnit { annex_b, .. } = media::video(bytes)? {
+                            inspector.receive(annex_b);
+                            if let Some(playback) = playback {
+                                playback.submit(annex_b)?;
+                            }
+                        }
+                        Ok(())
+                    })?
+                    .is_none()
+                {
+                    break;
                 }
-                _ => {}
             }
-        }
-        for _ in 0..32 {
-            if source
-                .with_audio(|bytes| {
-                    sender.submit(media::opus(bytes)?);
-                    Ok(())
-                })?
-                .is_none()
-            {
-                break;
-            }
-        }
-        for _ in 0..32 {
-            if source
-                .with_video(|bytes| {
-                    if let media::Video::AccessUnit { annex_b, .. } = media::video(bytes)? {
-                        inspector.receive(annex_b);
-                    }
-                    Ok(())
-                })?
-                .is_none()
-            {
-                break;
-            }
-        }
-        Ok((established, inspector.snapshot()))
-    });
+            Ok((established, inspector.snapshot()))
+        },
+    );
     session.close();
     result
 }
@@ -241,26 +295,30 @@ fn run_bud(socket: &Socket, peer: &str, id: &str) -> Result<String> {
 fn observe(
     mode: Mode,
     receiver: audio_stream::NativeReceiver,
+    playback: Option<&crate::playback::Playback>,
     mut poll: impl FnMut(&mut bool) -> Result<(bool, crate::video_stream::Snapshot)>,
 ) -> Result<String> {
     let output = audio_pipewire::Output::start(&receiver);
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut signaling_closed = false;
-    let mut playback = None;
+    let mut keyframe = None;
     let mut connected = false;
     let mode = mode.label();
     loop {
+        if playback.is_some_and(|playback| playback.stopped()) {
+            return Ok(format!("{mode} stream disconnected"));
+        }
         let (ready, video) = poll(&mut signaling_closed)?;
         connected |= ready;
         let now = Instant::now();
-        if playback.is_none() && ready && video.parameter_sets_and_idr_observed {
+        if keyframe.is_none() && ready && video.parameter_sets_and_idr_observed {
             let codec = video
                 .codec
                 .context("The host video format is unavailable")?;
-            playback = Some((codec, now + Duration::from_secs(8)));
+            keyframe = Some((codec, now + Duration::from_secs(8)));
         }
-        if let Some((codec, until)) = playback {
-            if now >= until {
+        if let Some((codec, until)) = keyframe {
+            if playback.is_none() && now >= until {
                 let frames = receiver.snapshot().pcm_frames_consumed;
                 let sound = match output.and_then(audio_pipewire::Output::finish) {
                     Ok(()) if frames > 0 => format!("PipeWire played {frames} PCM frames."),
