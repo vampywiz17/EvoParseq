@@ -31,13 +31,16 @@ jobs:
       - name: Install Flatpak SDK
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder librsvg2-common
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 org.freedesktop.Sdk.Extension.rust-stable//25.08 org.freedesktop.Sdk.Extension.llvm21//25.08
       - name: Build and bundle
         working-directory: ${{ runner.temp }}/linux-flatpak-src
         run: |
           flatpak-builder --user --force-clean --repo="$RUNNER_TEMP/flatpak-repo" "$RUNNER_TEMP/flatpak-build" linux/flatpak/io.github.vampywiz17.EvoParseq.yml
+          test -s "$RUNNER_TEMP/flatpak-build/files/share/icons/Adwaita/cursors/default"
+          test -s "$RUNNER_TEMP/flatpak-build/files/share/icons/Adwaita/cursors/text"
+          test -s "$RUNNER_TEMP/flatpak-build/files/share/icons/Adwaita/cursors/ew-resize"
           flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo "$RUNNER_TEMP/flatpak-repo" "$RUNNER_TEMP/EvoParseq-Linux.flatpak" io.github.vampywiz17.EvoParseq
       - uses: actions/upload-artifact@v4
         with:

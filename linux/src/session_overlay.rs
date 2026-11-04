@@ -22,7 +22,10 @@ impl Default for Badge {
 }
 impl Desktop {
     pub(super) fn session_overlay(&mut self, ctx: &egui::Context, playback: &Arc<Playback>) {
-        let size = ctx.content_rect().size();
+        // Windows' native menu is outside its client area. The Linux menu is
+        // drawn in the client, so keep the badge/panel below that strip too.
+        let origin = ctx.content_rect().min + egui::vec2(0., 24.);
+        let size = ctx.content_rect().size() - egui::vec2(0., 24.);
         let bounded = s::bounded(
             [
                 self.badge.position.x.round() as i32,
@@ -33,7 +36,7 @@ impl Desktop {
         self.badge.position = egui::pos2(bounded[0] as f32, bounded[1] as f32);
         let area = egui::Area::new(egui::Id::new("session-badge"))
             .order(egui::Order::Foreground)
-            .fixed_pos(self.badge.position)
+            .fixed_pos(origin + self.badge.position.to_vec2())
             .movable(false)
             .show(ctx, |ui| {
                 let (rect, response) = ui.allocate_exact_size(
@@ -81,7 +84,8 @@ impl Desktop {
             // Keep the canonical Windows panel geometry and control positions.
             // Unavailable controls are hidden; opening scrolls to Disconnect.
             let width = s::PANEL_WIDTH as f32;
-            let panel_pos = egui::pos2(16., s::BADGE_START[1] as f32 + s::BADGE_SIZE as f32 + 10.);
+            let panel_pos =
+                origin + egui::vec2(16., s::BADGE_START[1] as f32 + s::BADGE_SIZE as f32 + 10.);
             let panel = egui::Area::new(egui::Id::new("session-panel"))
                 .order(egui::Order::Foreground)
                 .fixed_pos(panel_pos)

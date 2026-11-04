@@ -353,5 +353,21 @@ mod tests {
                 assert!(rendered.iter().any(|(text, _)| text == app_style::SUBTITLE));
             }
         }
+        let playback = crate::playback::Playback::new(ctx.clone());
+        for _ in 0..2 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(780., 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| app.session_overlay(ctx, &playback),
+            );
+            let badge = app.desktop_input.badge.unwrap();
+            assert!(badge.top() >= 24., "session badge must not cover the menu");
+            assert!(badge.bottom() <= 600.);
+        }
     }
 }
