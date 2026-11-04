@@ -1,6 +1,7 @@
 use std::{env, fs, path::PathBuf, process::Command};
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(nvidia_vsr_sdk)");
+    println!("cargo:rustc-check-cfg=cfg(feature, values(\"desktop-telemetry\"))");
     println!("cargo:rerun-if-env-changed=EVOPARSEQ_RTX_VIDEO_SDK");
     if env::var("TARGET").unwrap_or_default() == "x86_64-pc-windows-msvc" {
         if let Some(root) = env::var_os("EVOPARSEQ_RTX_VIDEO_SDK") {

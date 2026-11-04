@@ -7,8 +7,9 @@ license = "MIT"
 publish = false
 
 [features]
-default = ["bud"]
+default = ["bud", "desktop-telemetry"]
 bud = []
+desktop-telemetry = []
 
 [dependencies]
 libc = "0.2"

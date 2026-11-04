@@ -24,6 +24,7 @@ pub struct Decoder {
     pub decoded: u64,
     presented: std::cell::Cell<u64>,
     profile: Option<u8>,
+    output_depth: Option<u8>,
 }
 
 struct Frame {
@@ -132,6 +133,14 @@ impl Decoder {
             decoded: 0,
             presented: std::cell::Cell::new(0),
             profile: None,
+            output_depth: match format {
+                wgpu::TextureFormat::Rgba8Unorm
+                | wgpu::TextureFormat::Rgba8UnormSrgb
+                | wgpu::TextureFormat::Bgra8Unorm
+                | wgpu::TextureFormat::Bgra8UnormSrgb => Some(8),
+                wgpu::TextureFormat::Rgb10a2Unorm => Some(10),
+                _ => None,
+            },
         }
     }
 
@@ -278,7 +287,7 @@ impl Decoder {
         report.gpu_surface_output = self.session.is_some();
         report.decoded_bit_depth = self.session.as_ref().map(|_| 8);
         report.decoded_chroma = self.session.as_ref().map(|_| "4:2:0");
-        report.display_rgb_bit_depth = Some(8);
+        report.display_rgb_bit_depth = self.output_depth;
         report.codec = Some(crate::video_stream::Codec::H264);
         report.adapter = Some(self.context.adapter_name.clone());
         report.presentation_mode = Some("Vulkan / compositor-managed (vsync requested)");

@@ -255,8 +255,11 @@ pub struct Snapshot {
     /// Observed on the latest decoded output, not a capability/configuration flag.
     pub d3d11_decoder_surface: Option<bool>,
     /// Platform decoder surface reported by its native backend.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub native_decoder_surface: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub native_graphics_wait: Option<Timing>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub native_decode_wait: Option<Timing>,
     pub frames_queued: u64,
     pub frames_dropped: u64,

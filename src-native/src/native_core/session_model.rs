@@ -1,11 +1,9 @@
 //! Shared session commands and presentation state, independent of window APIs.
 //! Native views own their controls and notifications; media workers stay separate.
-use super::{
-    host_displays::Displays,
-    profile::{Video, MAX_BANDWIDTH_MBPS, MAX_FPS},
-};
+use super::{host_displays::Displays, profile::Video};
 #[cfg(test)]
-use crate::session_preferences::{number, resolution};
+use crate::session_preferences::{number, resolution, MAX_BANDWIDTH_MBPS, MAX_FPS};
+#[cfg(test)]
 use serde_json::Value;
 use std::sync::{
     atomic::{AtomicBool, Ordering},

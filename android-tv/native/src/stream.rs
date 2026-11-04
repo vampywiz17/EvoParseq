@@ -348,8 +348,6 @@ fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result<()>
                         .send_binary(0, bytes::Bytes::copy_from_slice(f))
                 };
                 match event {
-                    #[cfg(target_os = "linux")]
-                    crate::input_handoff::Event::Session(_) => {}
                     crate::input_handoff::Event::Controller(e) => {
                         pads.event(e, &mut motors, &mut send)?
                     }

@@ -89,12 +89,18 @@ fn playback(
                 quit_commands.quit();
                 return;
             }
-            Command::Mute(muted) => {
-                command_stream.set_control(spa::sys::SPA_PROP_mute, &[if muted { 1. } else { 0. }])
-            }
+            Command::Mute(muted) => set_control(
+                &command_stream,
+                spa::sys::SPA_PROP_mute,
+                &mut [if muted { 1. } else { 0. }],
+            ),
             Command::Volume(percent) => {
                 let gain = f32::from(percent.min(100)) / 100.;
-                command_stream.set_control(spa::sys::SPA_PROP_channelVolumes, &[gain, gain])
+                set_control(
+                    &command_stream,
+                    spa::sys::SPA_PROP_channelVolumes,
+                    &mut [gain, gain],
+                )
             }
         };
         if result.is_err() {
@@ -201,4 +207,25 @@ fn playback(
         pw::stream::StreamState::Unconnected => anyhow::bail!("PipeWire playback disconnected"),
         _ => Ok(()),
     }
+}
+
+// The pinned pipewire-rs 0.8 wrapper omits the C API's required trailing control
+// ID 0. Call the public C API with an explicit sentinel on the PipeWire loop.
+// The stack slice stays valid for the synchronous call; this never runs in process().
+fn set_control(stream: &pw::stream::StreamRef, id: u32, values: &mut [f32]) -> Result<()> {
+    anyhow::ensure!(
+        !values.is_empty() && values.len() <= 8 && values.iter().all(|v| v.is_finite()),
+        "Invalid PipeWire control"
+    );
+    let result = unsafe {
+        pw::sys::pw_stream_set_control(
+            stream.as_raw_ptr(),
+            id,
+            values.len() as u32,
+            values.as_mut_ptr(),
+            0u32,
+        )
+    };
+    anyhow::ensure!(result >= 0, "PipeWire rejected the audio control");
+    Ok(())
 }

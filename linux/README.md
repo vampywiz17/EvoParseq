@@ -173,3 +173,55 @@ to their own platform/user and are not portable credentials.
 
 Secret portal contract:
 https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Secret.html
+
+
+Preview 0.1.12 binds the session overlay and native Connection stats to the
+same Rust Sample/Rates/Presentation and host-configuration models as Windows.
+The four Overview cards always use two columns and two rows. Measurement text
+is cached at 1 Hz while either diagnostic surface is requested; media callbacks
+are not used to format GUI text. No new media consumer, GPU query, image copy,
+readback, render pass, probe process or background sampler thread is added.
+The existing WebRTC runtime task reads native transport statistics only while
+Linux diagnostics is visible. BUD counters are read on its existing consumer
+loop at the same demand-driven cadence. Host opcode-34 reports bypass the
+WebRTC receipt queue; opcode-35 collection stops when diagnostics is hidden.
+
+Only an open Connection stats enables the user-authorized process CPU and RSS
+reads (getrusage and /proc/self/status), at most once a second. CPU is normalized
+to the available logical CPUs; Linux VmRSS is an approximate resident-size
+counter. Anonymous RSS, virtual size or data size are not presented as Windows
+private working-set/commit measurements. No GPU performance meter is started.
+Unsupported resource measurements remain explicitly unavailable, never zero.
+https://man7.org/linux/man-pages/man5/proc_pid_status.5.html
+
+The Vulkan page reports the actual adapter, SPS profile, NV12 surfaces,
+decoded precision/chroma, application RGB format precision, queued compressed
+packets, decoded picture count, scheduled presentation callbacks and existing
+CPU decoder/graphics-completion/decode-completion waits. Scheduled draws are
+not verified monitor scanout; CPU completion waits are not GPU execution time.
+No independent proof of hardware execution or scanout is claimed. Current
+refresh is read from winit's cached compositor monitor information when a
+single connected output makes attribution unambiguous; multiple-output refresh
+remains unknown rather than guessed. Audio shows existing Opus/PCM queue and
+error/drop counters plus event-driven PipeWire mute/volume state. Reported
+application queue latency excludes unknown device/graph delay and capacity.
+
+Overlay Apply validates with shared preferences, preserves untouched host
+streams with host_video::Config and confirms replies with the shared
+Confirmation state machine. Session commands use the existing bounded input
+handoff; failures are shown without disconnecting the stream. Display switching
+refreshes both host configuration and output IDs before selection. Ctrl+Alt+Del
+is enabled only for a host that reports Windows; its stock-host request still
+requires host authorization/service support. Fullscreen, Settings, Close,
+Disconnect, Hide button, display Refresh and PipeWire mute/volume are connected.
+The stream's Settings menu restores the session icon after Hide button.
+Orientation switching and explicit immersive-mode selection remain disabled:
+rotated video and independent immersive policy are not integrated on Linux.
+Normal Parsec input and host-requested relative capture remain unchanged.
+
+PipeWire controls run on its existing main loop and use public stream control
+APIs, not application PCM gain processing. The pinned 0.8 Rust wrapper omits
+the C variadic control-list terminator; a narrow native helper supplies the
+required trailing control ID 0. No control operation enters the audio callback.
+https://docs.pipewire.org/group__pw__stream.html
+https://raw.githubusercontent.com/PipeWire/pipewire/1.2.7/src/pipewire/stream.c

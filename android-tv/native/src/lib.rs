@@ -34,9 +34,6 @@ pub mod native_wire;
 pub mod preferences;
 #[path = "../../../src-native/src/rtc_configuration.rs"]
 pub mod rtc_configuration;
-#[cfg(target_os = "linux")]
-#[path = "../../../src-native/src/session_controls.rs"]
-pub mod session_controls;
 #[path = "../../../src-native/src/session_preferences.rs"]
 pub mod session_preferences;
 #[path = "../../../src-native/src/signaling.rs"]

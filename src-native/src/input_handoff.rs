@@ -2,14 +2,17 @@
 use crate::{desktop_input, gamepad};
 use std::{collections::VecDeque, sync::Mutex};
 #[derive(Clone, Debug)]
-#[cfg_attr(not(target_os = "linux"), derive(Copy))]
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "desktop-telemetry")),
+    derive(Copy)
+)]
 pub enum Event {
     Controller(gamepad::Event),
     Desktop(desktop_input::Event),
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
     Session(crate::session_controls::Command),
 }
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
 impl From<crate::session_controls::Command> for Event {
     fn from(command: crate::session_controls::Command) -> Self {
         Self::Session(command)

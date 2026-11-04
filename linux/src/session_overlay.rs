@@ -164,10 +164,10 @@ impl Desktop {
                                         label(ui,r([24,254+i as i32*44,150,24]),text,16.,fg);
                                         let draft=self.badge.draft.as_mut().unwrap();
                                         let mut value=match i {0=>crate::session_preferences::resolution_text(draft.resolution),1=>draft.bandwidth_mbps.unwrap_or(10).to_string(),2=>draft.fps.unwrap_or(60).to_string(),3=>if draft.constant_fps.unwrap_or(false){"Fixed"}else{"Dynamic"}.into(),4=>if draft.rotated.unwrap_or(false){"Rotated"}else{"Normal"}.into(),_=>"Off".into()};
-                                        let options:Vec<&str>=match i {0=>crate::session_preferences::RESOLUTION_CHOICES.to_vec(),1=>crate::session_preferences::BANDWIDTH_CHOICES.to_vec(),2=>crate::session_preferences::FPS_CHOICES.to_vec(),3=>vec!["Dynamic","Fixed"],4=>vec!["Normal","Rotated"],_=>vec!["Off"]};
+                                        let options:&[&str]=match i {0=>crate::session_preferences::RESOLUTION_CHOICES,1=>crate::session_preferences::BANDWIDTH_CHOICES,2=>crate::session_preferences::FPS_CHOICES,3=>&["Dynamic","Fixed"],4=>&["Normal","Rotated"],_=>&["Off"]};
                                         ui.add_enabled_ui(!self.metrics.pending&&i!=5&&i!=4,|ui|{
                                             ui.scope_builder(egui::UiBuilder::new().max_rect(r([174,250+i as i32*44,218,28])),|ui|{
-                                                egui::ComboBox::from_id_salt(("session-field",i)).width(208.).selected_text(&value).show_ui(ui,|ui|{for option in options{ui.selectable_value(&mut value,option.to_owned(),option);}});
+                                                egui::ComboBox::from_id_salt(("session-field",i)).width(208.).selected_text(&value).show_ui(ui,|ui|{for &option in options{ui.selectable_value(&mut value,option.to_owned(),option);}});
                                             });
                                         });
                                         match i {0=>if let Ok(parsed)=crate::session_preferences::resolution(&value){draft.resolution=parsed;},1=>draft.bandwidth_mbps=value.parse().ok(),2=>draft.fps=value.parse().ok(),3=>draft.constant_fps=Some(value=="Fixed"),4=>draft.rotated=Some(value=="Rotated"),_=>{}}

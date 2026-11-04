@@ -139,7 +139,7 @@ struct Progress {
 }
 
 struct Completion {
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
     telemetry: Option<(Arc<crate::stats::Shared>, u64)>,
     #[cfg(windows)]
     timing_active: bool,
@@ -167,7 +167,7 @@ struct Completion {
 enum Delivery {
     Queued,
     EmptyMessage,
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
     Timing(Option<(Arc<crate::stats::Shared>, u64)>),
     Audio(Option<crate::audio_stream::Sender>),
     Video {
@@ -183,7 +183,7 @@ impl Delivery {
         match self {
             Self::Queued => None,
             Self::EmptyMessage => Some(false),
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
             Self::Timing(link) => {
                 if let Some((bus, generation)) = link {
                     bus.host_timing.receive(generation, bytes);
@@ -220,7 +220,7 @@ impl Delivery {
 
 impl Drop for Completion {
     fn drop(&mut self) {
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
         if let Some((bus, generation)) = &self.telemetry {
             bus.finish(*generation);
         }
@@ -321,7 +321,7 @@ impl Completion {
                 return Some(Delivery::EmptyMessage);
             }
         }
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
         if channel == 0 && self.discard_unavailable_media && crate::frame_timing::is_report(bytes) {
             return Some(Delivery::Timing(self.telemetry.clone()));
         }
@@ -409,10 +409,10 @@ async fn read_channel(
                 None
             }
             Ok(Some((len, text))) => {
-                #[cfg(any(windows, target_os = "linux"))]
+                #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
                 let timing =
                     native_mode && id == 0 && crate::frame_timing::is_report(&buffer[..len]);
-                #[cfg(not(any(windows, target_os = "linux")))]
+                #[cfg(not(any(windows, all(target_os = "linux", feature = "desktop-telemetry"))))]
                 let timing = false;
                 let payload = (queue_receipts && !timing && !text && len <= MAX_CHANNEL_MESSAGE)
                     .then(|| Bytes::copy_from_slice(&buffer[..len]));
@@ -552,7 +552,7 @@ impl Attempt {
             video_stream.configure(config.video_protocol.clone());
         }
         let completion = Arc::new(Mutex::new(Completion {
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
             telemetry: None,
             #[cfg(windows)]
             timing_active: false,
@@ -787,7 +787,7 @@ impl Attempt {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
     pub fn set_linux_telemetry(&self, bus: Arc<crate::stats::Shared>, generation: u64) {
         self.completion
             .lock()
@@ -1073,7 +1073,7 @@ fn worker(
         });
     }
     let callback_state = shared.clone();
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
     {
         let state = shared.clone();
         let weak = Arc::downgrade(&peer);
@@ -1912,7 +1912,7 @@ mod tests {
 
     fn empty_completion() -> Completion {
         Completion {
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
             telemetry: None,
             #[cfg(windows)]
             timing_active: false,

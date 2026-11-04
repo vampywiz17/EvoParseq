@@ -9,7 +9,7 @@ rust-version = "1.90"
 # Shared sources contain Windows-only feature-gated BUD/HID helpers. Accept
 # the cfg name without enabling those helpers; Android uses its own BUD adapter.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("bud"))'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("bud", "desktop-telemetry"))'] }
 
 [lib]
 crate-type = ["cdylib", "rlib"]
