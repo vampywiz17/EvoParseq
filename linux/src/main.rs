@@ -211,7 +211,10 @@ impl eframe::App for Desktop {
         }
 
         if let (Some(playback), Some(decoder)) = (&self.playback, &mut self.decoder) {
-            match playback.decode_pending(|bytes| decoder.submit(bytes)) {
+            match playback
+                .resume_if_ready(ctx.input(|input| input.focused))
+                .and_then(|_| playback.decode_pending(|bytes| decoder.submit(bytes)))
+            {
                 Err(error) => {
                     playback.stop();
                     let message = format!(
@@ -232,6 +235,7 @@ impl eframe::App for Desktop {
                     if let Some(decoder) = &self.decoder { ui.label(format!("H.264 / Vulkan Video · {} decoded frames", decoder.decoded)); }
                 });
                 if let Some(error) = &self.error { ui.colored_label(egui::Color32::LIGHT_RED, error); }
+                if let Some(status) = playback.status() { ui.label(status); }
                 if let Some(decoder) = &self.decoder { decoder.show(ui); }
                 return;
             }

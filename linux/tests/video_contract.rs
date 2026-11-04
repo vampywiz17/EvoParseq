@@ -6,41 +6,105 @@ mod parameters;
 mod playback;
 
 #[test]
-fn overflow_diagnostics_distinguish_active_decode_from_waiting_for_ui() {
+fn background_backlog_defers_recovery_until_focus_and_restarts_from_cached_parameters() {
     let playback = playback::Playback::new(eframe::egui::Context::default());
-    playback.submit(&[0]).unwrap();
-    playback
-        .decode_pending(|_| {
-            for _ in 0..MAX_FRAMES {
-                playback.submit(&[0]).unwrap();
-            }
-            let error = playback.submit(&[0]).unwrap_err().to_string();
-            assert!(error.contains("packet limit"));
-            assert!(error.contains(&format!("received {}, decoded 0", MAX_FRAMES + 1)));
-            assert!(!error.contains("active none"));
-            Ok(())
-        })
-        .unwrap();
-    let error = playback.submit(&[0]).unwrap_err().to_string();
-    assert!(error.contains(&format!("received {}, decoded 1", MAX_FRAMES + 1)));
-    assert!(error.contains("active none"));
+    let fixture = include_bytes!("data/h264-40-frames.bin");
+    let size = u32::from_le_bytes(fixture[..4].try_into().unwrap()) as usize;
+    let first = &fixture[4..4 + size];
+    let mut inspector = video_stream::Inspector::default();
+    let info = inspector.receive(first).unwrap();
+    assert!(info.idr && info.parameters);
+    playback.submit_packet(first, info).unwrap();
+    let mut parser = lowlat_decode::h264::Stream::new();
+    let mut decode = |bytes: &[u8]| -> anyhow::Result<()> {
+        assert_eq!(
+            parser.read(bytes).unwrap(),
+            lowlat_decode::h264::Read::Picture
+        );
+        parser.finish().unwrap();
+        assert!(output::latest(&mut parser.dpb).is_some());
+        Ok(())
+    };
+    assert_eq!(playback.decode_pending(&mut decode).unwrap(), 1);
+    for _ in 0..MAX_FRAMES + 1 {
+        playback.submit(&[0]).unwrap();
+    }
+    assert!(playback.status().unwrap().contains("paused"));
+    // Time while hidden must not consume the shared recovery deadline.
+    assert!(
+        playback
+            .take_keyframe_request_at(
+                std::time::Instant::now() + std::time::Duration::from_secs(3600)
+            )
+            .unwrap()
+            .is_none()
+    );
+    playback.resume_if_ready(false).unwrap();
+    assert_eq!(
+        playback
+            .decode_pending(|_| panic!("Hidden backlog must be retired"))
+            .unwrap(),
+        0
+    );
+    playback.resume_if_ready(true).unwrap();
+    assert!(playback.take_keyframe_request().unwrap().is_some());
+    assert!(playback.take_keyframe_request().unwrap().is_none());
+
+    let mut key = Vec::new();
+    for nal in lowlat_decode::nal::Units::new(first) {
+        if nal.bytes[0] & 31 == 5 {
+            key.extend_from_slice(&[0, 0, 1]);
+            key.extend_from_slice(nal.bytes);
+        }
+    }
+    let key_info = inspector.receive(&key).unwrap();
+    assert!(key_info.idr && !key_info.parameters);
+    let delta = video_stream::PacketInfo {
+        idr: false,
+        parameters: false,
+        ..key_info
+    };
+    assert!(!playback.submit_packet(&[0], delta).unwrap());
+    assert!(playback.submit_packet(&key, key_info).unwrap());
+    assert_eq!(playback.decode_pending(&mut decode).unwrap(), 1);
+    assert!(playback.status().is_none());
+    // Repeated focus switches must not exhaust decoder-failure attempts.
+    for _ in 0..5 {
+        for _ in 0..MAX_FRAMES + 1 {
+            playback.submit(&[0]).unwrap();
+        }
+        playback.resume_if_ready(true).unwrap();
+        assert!(playback.submit_packet(&key, key_info).unwrap());
+        assert_eq!(playback.decode_pending(&mut decode).unwrap(), 1);
+        assert!(playback.status().is_none());
+    }
 }
 
 #[test]
-fn failed_decode_clears_active_diagnostics_and_does_not_count_as_decoded() {
+fn resumed_stream_uses_shared_keyframe_deadline_and_send_failure_policy() {
     let playback = playback::Playback::new(eframe::egui::Context::default());
-    for _ in 0..MAX_FRAMES {
+    for _ in 0..MAX_FRAMES + 1 {
         playback.submit(&[0]).unwrap();
     }
+    playback.resume_if_ready(true).unwrap();
+    let error = playback
+        .take_keyframe_request_at(std::time::Instant::now() + std::time::Duration::from_secs(6))
+        .unwrap_err();
+    assert!(error.to_string().contains("video-recovery-timeout"));
+    let playback = playback::Playback::new(eframe::egui::Context::default());
+    for _ in 0..MAX_FRAMES + 1 {
+        playback.submit(&[0]).unwrap();
+    }
+    playback.resume_if_ready(true).unwrap();
+    let generation = playback.take_keyframe_request().unwrap().unwrap();
+    playback.keyframe_request_failed(generation);
     assert!(
         playback
-            .decode_pending(|_| anyhow::bail!("codec failure"))
-            .is_err()
+            .take_keyframe_request()
+            .unwrap_err()
+            .to_string()
+            .contains("video-recovery-request-failed")
     );
-    playback.submit(&[0]).unwrap();
-    let error = playback.submit(&[0]).unwrap_err().to_string();
-    assert!(error.contains("active none"));
-    assert!(error.contains("decoded 0"));
 }
 
 #[test]
@@ -90,7 +154,6 @@ fn decode_batch_preserves_bursts_and_is_bounded_despite_new_arrivals() {
     for id in 0..limit {
         playback.submit(&[id]).unwrap();
     }
-    assert!(playback.submit(&[99]).is_err());
     let mut ids = Vec::new();
     assert_eq!(
         playback
@@ -262,10 +325,18 @@ fn observed_nine_packet_burst_is_preserved_without_waiting_for_a_repaint() {
 #[test]
 fn shared_byte_limit_still_bounds_memory_and_consumption_releases_it() {
     let playback = playback::Playback::new(eframe::egui::Context::default());
-    playback.submit(&vec![0; video_output::MAX_BYTES]).unwrap();
-    let error = playback.submit(&[1]).unwrap_err().to_string();
-    assert!(error.contains("byte limit"));
-    assert_eq!(playback.decode_pending(|_| Ok(())).unwrap(), 1);
-    playback.submit(&vec![0; video_output::MAX_BYTES]).unwrap();
-    assert_eq!(playback.decode_pending(|_| Ok(())).unwrap(), 1);
+    let count = video_output::MAX_BYTES / control::MAX_CHANNEL_MESSAGE;
+    for _ in 0..2 {
+        for _ in 0..count {
+            playback
+                .submit(&vec![0; control::MAX_CHANNEL_MESSAGE])
+                .unwrap();
+        }
+        assert_eq!(playback.decode_pending(|_| Ok(())).unwrap(), count);
+    }
+    assert!(
+        playback
+            .submit(&vec![0; control::MAX_CHANNEL_MESSAGE + 1])
+            .is_err()
+    );
 }

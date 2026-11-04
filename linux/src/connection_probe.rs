@@ -91,7 +91,7 @@ fn run_webrtc(
     let mut attempt = Attempt::spawn_configured(
         id,
         output,
-        Some(config),
+        Some(config.clone()),
         StunProvider::Parsec,
         playback.is_none(),
         None,
@@ -137,13 +137,23 @@ fn run_webrtc(
         if let Some(code) = attempt.host_status() {
             bail!("The host refused or ended the connection (status {code})");
         }
+        if let Some(playback) = playback {
+            if let Some(generation) = playback.take_keyframe_request()? {
+                if let Err(error) = attempt.send_binary(0, config.keyframe_request()) {
+                    playback.keyframe_request_failed(generation);
+                    return Err(error);
+                }
+            }
+        }
         for _ in 0..16 {
             let Some((channel, text, payload)) = attempt.pop_binary() else {
                 break;
             };
-            if channel == 1 && !text && inspector.receive(&payload).is_some() {
-                if let Some(playback) = playback {
-                    playback.submit(&payload)?;
+            if channel == 1 && !text {
+                if let Some(info) = inspector.receive(&payload) {
+                    if let Some(playback) = playback {
+                        playback.submit_packet(&payload, info)?;
+                    }
                 }
             }
             if channel == 0 && !text {
@@ -258,6 +268,14 @@ fn run_bud(
                     _ => {}
                 }
             }
+            if let Some(playback) = playback {
+                if let Some(generation) = playback.take_keyframe_request()? {
+                    if !session.request_keyframe_format(false) {
+                        playback.keyframe_request_failed(generation);
+                        anyhow::bail!("BUD could not request a video resume keyframe");
+                    }
+                }
+            }
             for _ in 0..32 {
                 if source
                     .with_audio(|bytes| {
@@ -273,9 +291,10 @@ fn run_bud(
                 if source
                     .with_video(|bytes| {
                         if let media::Video::AccessUnit { annex_b, .. } = media::video(bytes)? {
-                            inspector.receive(annex_b);
-                            if let Some(playback) = playback {
-                                playback.submit(annex_b)?;
+                            if let Some(info) = inspector.receive(annex_b) {
+                                if let Some(playback) = playback {
+                                    playback.submit_packet(annex_b, info)?;
+                                }
                             }
                         }
                         Ok(())

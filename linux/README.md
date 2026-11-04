@@ -17,8 +17,12 @@ behavior require separate implementation or verification.
 
 The initial backend uses bounded completion waits to synchronize Vulkan Video
 with wgpu. Latency, sustained playback and driver compatibility require live
-hardware validation. Encoded input is bounded, and a full input queue ends the
-preview rather than silently corrupting reference pictures. Input forwarding,
+hardware validation. Encoded input uses the shared bounded Rust video queue.
+If the UI stops consuming video (for example when another window covers it),
+a full backlog suspends video without ending the connection or audio pipeline.
+Returning focus requests a fresh keyframe using the shared recovery gate and
+deadline, then resumes playback. Continuous background video decoding is not
+implemented in this preview. Input forwarding,
 HEVC playback and persistent sign-in are later steps.
 
 The Flatpak uses Freedesktop 25.08 and matching driver extensions. Its build uses

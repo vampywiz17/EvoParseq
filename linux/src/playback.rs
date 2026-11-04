@@ -1,95 +1,36 @@
-//! Bounded compressed-input handoff for the Linux video adapter.
-use crate::video_output::{MAX_BYTES, MAX_FRAMES};
+//! Linux wakeup/focus adapter around the existing shared compressed video queue.
+use crate::{
+    video_output::{MAX_BYTES, MAX_FRAMES, Queue},
+    video_stream::{PacketInfo, ParameterCache},
+};
 use anyhow::{Result, ensure};
 use std::{
-    collections::VecDeque,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
 
-struct Packet {
-    bytes: Vec<u8>,
-    queued: Instant,
-}
-
+#[derive(Default)]
 struct Pending {
-    packets: VecDeque<Packet>,
-    bytes: usize,
-    received: u64,
-    received_bytes: u64,
-    decoded: u64,
-    began: Instant,
-    active: Option<Instant>,
-    last_decode: Duration,
-    peak_decode: Duration,
-    peak_wait: Duration,
-}
-
-impl Default for Pending {
-    fn default() -> Self {
-        Self {
-            packets: VecDeque::new(),
-            bytes: 0,
-            received: 0,
-            received_bytes: 0,
-            decoded: 0,
-            began: Instant::now(),
-            active: None,
-            last_decode: Duration::ZERO,
-            peak_decode: Duration::ZERO,
-            peak_wait: Duration::ZERO,
-        }
-    }
+    queue: Queue,
+    parameters: ParameterCache,
+    suspended: bool,
+    decoder_generation: u64,
 }
 
 impl Pending {
-    fn failure(&self, incoming: usize, now: Instant) -> String {
-        let reason = if incoming > 8 * 1024 * 1024 {
-            "input size"
-        } else if self.bytes + incoming > MAX_BYTES {
-            "byte limit"
-        } else {
-            "packet limit"
-        };
-        let oldest = self
-            .packets
-            .front()
-            .map_or(Duration::ZERO, |p| now.saturating_duration_since(p.queued));
-        let active = self
-            .active
-            .map(|start| now.saturating_duration_since(start).as_secs_f64() * 1000.0);
-        let elapsed = now.saturating_duration_since(self.began).as_secs_f64();
-        let bitrate = if elapsed > 0.0 {
-            self.received_bytes as f64 * 8.0 / elapsed / 1_000_000.0
-        } else {
-            0.0
-        };
-        let arrival_span = self
-            .packets
-            .front()
-            .zip(self.packets.back())
-            .map_or(Duration::ZERO, |(first, last)| {
-                last.queued.saturating_duration_since(first.queued)
-            });
-        format!(
-            "Video queue full ({reason}): {} packets, {} KiB + {} KiB incoming; oldest {:.1} ms, peak wait {:.1} ms, arrival span {:.1} ms; received {}, decoded {}; decode last/peak {:.1}/{:.1} ms, active {} ms; elapsed {:.1} s, average video input {:.1} Mbit/s",
-            self.packets.len(),
-            self.bytes / 1024,
-            incoming / 1024,
-            oldest.as_secs_f64() * 1000.0,
-            self.peak_wait.as_secs_f64() * 1000.0,
-            arrival_span.as_secs_f64() * 1000.0,
-            self.received,
-            self.decoded,
-            self.last_decode.as_secs_f64() * 1000.0,
-            self.peak_decode.as_secs_f64() * 1000.0,
-            active.map_or_else(|| "none".into(), |ms| format!("{ms:.1}")),
-            elapsed,
-            bitrate
-        )
+    fn check(&self) -> Result<()> {
+        ensure!(
+            self.queue.report.failure_stage.is_none(),
+            "Linux video stopped: {} (queue peak {}, decode peak {:.1} ms, queue wait peak {:.1} ms)",
+            self.queue.report.failure_stage.unwrap_or("unknown"),
+            self.queue.report.queue_peak_depth,
+            self.queue.report.local_timing.decoder_service.peak_ms,
+            self.queue.report.local_timing.compressed_wait.peak_ms
+        );
+        Ok(())
     }
 }
 
@@ -113,69 +54,179 @@ impl Playback {
     pub fn stop(&self) {
         self.stopped.store(true, Ordering::Release);
     }
-    pub fn submit(&self, bytes: &[u8]) -> Result<()> {
-        let mut packets = self.packets.lock().unwrap_or_else(|e| e.into_inner());
+
+    pub fn submit_packet(&self, bytes: &[u8], info: PacketInfo) -> Result<bool> {
+        let mut state = self.packets.lock().unwrap_or_else(|e| e.into_inner());
+        state.check()?;
         ensure!(
-            packets.packets.len() < MAX_FRAMES
-                && bytes.len() <= 8 * 1024 * 1024
-                && packets.bytes + bytes.len() <= MAX_BYTES,
-            "{}",
-            packets.failure(bytes.len(), Instant::now())
+            bytes.len() <= crate::control::MAX_CHANNEL_MESSAGE,
+            "Linux video input exceeds the shared message limit"
         );
-        packets.bytes += bytes.len();
-        packets.received += 1;
-        packets.received_bytes = packets.received_bytes.saturating_add(bytes.len() as u64);
-        packets.packets.push_back(Packet {
-            bytes: bytes.to_vec(),
-            queued: Instant::now(),
-        });
-        drop(packets);
-        self.ui.request_repaint();
-        Ok(())
-    }
-    fn next(&self) -> Option<Vec<u8>> {
-        let mut packets = self.packets.lock().unwrap_or_else(|e| e.into_inner());
-        let packet = packets.packets.pop_front()?;
-        let now = Instant::now();
-        packets.bytes -= packet.bytes.len();
-        packets.peak_wait = packets
-            .peak_wait
-            .max(now.saturating_duration_since(packet.queued));
-        packets.active = Some(now);
-        Some(packet.bytes)
+        if info.parameters {
+            state.parameters.observe(bytes, info.codec);
+        }
+        if self.stopped() {
+            return Ok(false);
+        }
+        if state.suspended {
+            state.queue.report.frames_dropped = state.queue.report.frames_dropped.saturating_add(1);
+            return Ok(false);
+        }
+        if state.queue.report.queue_depth >= MAX_FRAMES
+            || state.queue.report.queue_bytes + bytes.len() > MAX_BYTES
+        {
+            // The UI may be throttled while another window covers it. Retire
+            // the entire obsolete reference chain, not arbitrary delta frames.
+            // Do not start a recovery deadline until the UI can consume again.
+            state.queue.clear();
+            state.queue.report.frames_dropped = state.queue.report.frames_dropped.saturating_add(1);
+            state.suspended = true;
+            drop(state);
+            self.ui.request_repaint();
+            return Ok(false);
+        }
+        let mut buffer = state.queue.take_buffer();
+        buffer.extend_from_slice(bytes);
+        let accepted = state
+            .queue
+            .submit_codec(buffer, info.idr, info.parameters, 0, info.codec);
+        if accepted {
+            state.queue.set_last_packet(0, info.picture);
+        }
+        state.check()?;
+        drop(state);
+        if accepted {
+            self.ui.request_repaint();
+        }
+        Ok(accepted)
     }
 
-    /// Decode the bounded backlog present at the start of this UI update.
-    /// Presentation happens afterwards, so it cannot throttle decoding to one
-    /// packet per display refresh. New arrivals wait for the next update;
-    /// compressed references are never discarded to catch up.
+    /// A reference-chain restart is deferred while the compositor throttles
+    /// the background UI. Audio and network/control polling remain independent.
+    pub fn resume_if_ready(&self, focused: bool) -> Result<()> {
+        let mut state = self.packets.lock().unwrap_or_else(|e| e.into_inner());
+        state.check()?;
+        if focused && state.suspended && !self.stopped() {
+            state.suspended = false;
+            state.queue.reset_generation = state.queue.reset_generation.wrapping_add(1);
+            state.queue.report.recovery_reason = Some("presentation_suspended");
+            // Existing shared IDR gate, request rate limit and five-second
+            // deadline; a hidden window is not a decoder-failure attempt.
+            state.queue.begin_format_change(Instant::now(), true);
+        }
+        Ok(())
+    }
+
+    pub fn take_keyframe_request(&self) -> Result<Option<u64>> {
+        self.take_keyframe_request_at(Instant::now())
+    }
+    pub(crate) fn take_keyframe_request_at(&self, now: Instant) -> Result<Option<u64>> {
+        let mut state = self.packets.lock().unwrap_or_else(|e| e.into_inner());
+        if state.suspended || self.stopped() {
+            return Ok(None);
+        }
+        let request = state
+            .queue
+            .take_keyframe_request(now)
+            .map(|_| state.queue.reset_generation);
+        state.check()?;
+        Ok(request)
+    }
+    pub fn keyframe_request_failed(&self, generation: u64) {
+        self.packets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .queue
+            .request_failed(generation);
+    }
+    pub fn status(&self) -> Option<&'static str> {
+        let state = self.packets.lock().unwrap_or_else(|e| e.into_inner());
+        if state.suspended {
+            Some("Video paused: return to this window to resume. Audio remains active.")
+        } else if state.queue.report.recovering {
+            Some("Resuming video: waiting for a new keyframe...")
+        } else {
+            None
+        }
+    }
+
+    /// Consume only the initial bounded backlog. Every accepted reference is
+    /// decoded; normal presentation afterwards uses the newest output.
     pub fn decode_pending(&self, mut decode: impl FnMut(&[u8]) -> Result<()>) -> Result<usize> {
         let pending = self
             .packets
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .packets
-            .len();
+            .queue
+            .report
+            .queue_depth;
         let mut consumed = 0;
         for _ in 0..pending {
             if self.stopped() {
                 break;
             }
-            let Some(packet) = self.next() else { break };
-            // No queue lock is held while executing native codec operations.
-            let result = decode(&packet);
+            let (mut frame, generation) = {
+                let mut state = self.packets.lock().unwrap_or_else(|e| e.into_inner());
+                state.check()?;
+                if state.suspended {
+                    break;
+                }
+                let Some(mut frame) = state.queue.pop() else {
+                    break;
+                };
+                let generation = state.queue.reset_generation;
+                if state.decoder_generation != generation {
+                    let mut initialization = state.parameters.bytes().ok_or_else(|| {
+                        anyhow::anyhow!("Video resume requires cached codec parameters")
+                    })?;
+                    initialization.extend_from_slice(&frame.bytes);
+                    state
+                        .queue
+                        .recycle(std::mem::replace(&mut frame.bytes, initialization));
+                    state.decoder_generation = generation;
+                }
+                (frame, generation)
+            };
+            let started = Instant::now();
+            let result = decode(&frame.bytes);
             {
                 let mut state = self.packets.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(start) = state.active.take() {
-                    state.last_decode = start.elapsed();
-                    state.peak_decode = state.peak_decode.max(state.last_decode);
+                state
+                    .queue
+                    .report
+                    .local_timing
+                    .decoder_service
+                    .record(started.elapsed());
+                if result.is_ok() {
+                    state.queue.report.frames_decoded = state
+                        .queue
+                        .report
+                        .frames_decoded
+                        .saturating_add(u64::from(frame.picture));
+                    if frame.idr && generation == state.queue.reset_generation && !state.suspended {
+                        state.queue.recovered();
+                    }
                 }
-                state.decoded += u64::from(result.is_ok());
+                state.queue.recycle(std::mem::take(&mut frame.bytes));
             }
             result?;
             consumed += 1;
         }
         Ok(consumed)
+    }
+
+    #[cfg(test)]
+    pub fn submit(&self, bytes: &[u8]) -> Result<()> {
+        self.submit_packet(
+            bytes,
+            PacketInfo {
+                picture: true,
+                codec: crate::video_stream::Codec::H264,
+                idr: true,
+                parameters: false,
+            },
+        )
+        .map(|_| ())
     }
 }
 

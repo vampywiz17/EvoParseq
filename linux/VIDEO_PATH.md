@@ -46,13 +46,14 @@ composition and direct scanout have not been measured or established.
 
 ## Queue scheduling
 
-`src/playback.rs` uses the existing shared Rust `video_output::MAX_FRAMES` (32)
-and `MAX_BYTES` (8 MiB) limits. These constants and the Windows/Android paths
+`src/playback.rs` uses the existing shared Rust `video_output::Queue`, including
+its 32-packet / 8 MiB bounds, encoded-buffer recycling, timing counters and
+keyframe recovery policy. These modules and the Windows/Android paths
 are unchanged; Linux previously used its own eight-packet / 16 MiB limits. Each UI
 update now decodes its initial bounded backlog, in order, then presents the
 latest output. Incoming packets during that batch belong to the next update.
 This removes the previous one-packet-per-refresh throughput limit without
-dropping compressed references, growing the buffer, adding threads or copying
+discarding individual references in a continuous chain, adding threads or copying
 decoded surfaces. Offline tests cover 60 FPS input versus 59.94 Hz rendering,
 burst ordering, new arrivals during decoding, and stopping.
 
@@ -78,3 +79,25 @@ it does not reserve a full queue or intentionally wait to fill it. Each update
 drains its initial backlog and renders its latest output, preserving references.
 A repeated nine-packet burst regression and byte-budget/release test cover the
 observed failure pattern. Native throughput still requires live verification.
+
+Preview 0.1.2 still filled the queue after switching to another window: 32
+packets spanned 518.7 ms, oldest age 535.4 ms, with no active decode. Decode
+completion wait still averaged 3.7 ms. This supports UI-side suspension rather
+than sustained native decode starvation at this failure. The compositor's
+internal reason for throttling remains unmeasured.
+
+Preview 0.1.3 handles this explicitly. A full backlog retires the complete old
+reference chain and suspends video input consumption until the application
+receives focus. The network/audio loop remains active. Returning focus starts
+the existing shared keyframe gate, one-second request rate limit and five-second
+deadline, using each transport's existing encoder-refresh message. Cached codec
+parameters are restored ahead of the resumed input; deltas are discarded until
+an IDR arrives. This reference-chain boundary does not consume decoder-failure
+attempts. The existing parser/native session handles the IDR and format changes;
+no GPU code, surface copies, threads or Windows/Android behavior were changed.
+
+This is a background-video suspension policy, not continuous background video
+decoding. Tests cover a long hidden interval, focus return, cached-parameter
+replay with an IDR lacking parameters, delta gating, repeated window switches,
+the shared recovery timeout and failed refresh requests. Live validation of
+BUD and WebRTC recovery remains necessary.
