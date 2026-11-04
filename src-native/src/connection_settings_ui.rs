@@ -624,12 +624,12 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
             "COMBOBOX",
             "",
             CBS_DROPDOWNLIST as u32 | WS_VSCROLL | WS_TABSTOP,
-            [420, 844, 400, 160],
+            crate::app_style::settings::field(crate::app_style::settings::TRANSPORT_Y, 160),
             BUD,
             0,
             page.font,
         );
-        for label in ["WebRTC", "BUD"] {
+        for label in crate::app_style::settings::TRANSPORT_CHOICES {
             SendMessageW(transport, CB_ADDSTRING, 0, wide(label).as_ptr() as isize);
         }
         controls::combo(transport);

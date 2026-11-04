@@ -69,7 +69,7 @@ impl SignIn {
             self.message = "Email and password are required.".into();
             anyhow::bail!(self.message.clone());
         }
-        let tx = self.begin("Signing in securely...").unwrap();
+        let tx = self.begin(crate::app_style::desktop::SIGNING_IN).unwrap();
         self.email = login.email.trim().into();
         self.remember_login = remember;
         // Password and optional 2FA code are owned only by this request and
@@ -118,7 +118,7 @@ impl SignIn {
         if self.busy() || self.session.is_none() {
             return false;
         }
-        let tx = self.begin("Signing out...").unwrap();
+        let tx = self.begin(crate::app_style::desktop::SIGNING_OUT).unwrap();
         let session = self.session.take().unwrap();
         self.remember_login = false;
         std::thread::spawn(move || {
@@ -137,7 +137,7 @@ impl SignIn {
         self.message = match &completion {
             Completion::Login(Ok(_)) => String::new(),
             Completion::Login(Err(error)) => error.to_string(),
-            Completion::Logout => "Signed out. Enter your account details to sign in.".into(),
+            Completion::Logout => crate::app_style::desktop::SIGNED_OUT.into(),
             Completion::Disconnected => {
                 "The account request ended unexpectedly. Please retry.".into()
             }

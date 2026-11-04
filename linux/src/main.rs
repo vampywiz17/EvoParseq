@@ -86,6 +86,7 @@ struct Desktop {
     desktop_input: desktop_linux::DesktopInput,
     signed_in: bool,
     busy: bool,
+    status_text: &'static str,
     error: Option<String>,
     show_video: bool,
     badge: session_overlay::Badge,
@@ -165,6 +166,12 @@ fn account_worker(
 
 impl Desktop {
     fn send(&mut self, command: Command) {
+        self.status_text = match &command {
+            Command::SignIn(_) => app_style::desktop::SIGNING_IN,
+            Command::Refresh => app_style::desktop::REFRESHING,
+            Command::SignOut => app_style::desktop::SIGNING_OUT,
+            Command::Stream(..) => app_style::desktop::CHOOSE,
+        };
         match self.commands.send(command) {
             Ok(()) => {
                 self.busy = true;
@@ -224,10 +231,16 @@ impl eframe::App for Desktop {
                         }
                     }
                     self.signed_in = true;
+                    self.status_text = if self.picker.hosts().is_empty() {
+                        app_style::desktop::EMPTY
+                    } else {
+                        app_style::desktop::CHOOSE
+                    };
                 }
                 Reply::SignedOut => {
                     self.picker = Default::default();
                     self.signed_in = false;
+                    self.status_text = app_style::desktop::SIGNED_OUT;
                     self.error = None;
                 }
                 Reply::StreamEnded(message) => {
@@ -404,6 +417,7 @@ fn main() -> anyhow::Result<()> {
                     desktop_input: desktop_linux::DesktopInput::new(keyboard.clone()),
                     signed_in: false,
                     busy: false,
+                    status_text: app_style::LOGIN_NOTICE,
                     error: None,
                     show_video: false,
                     badge: Default::default(),

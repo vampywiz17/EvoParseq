@@ -225,15 +225,7 @@ impl Desktop {
                     .error
                     .as_deref()
                     .or(self.video_error.as_deref())
-                    .unwrap_or(if self.busy {
-                        "Please wait..."
-                    } else if !self.signed_in {
-                        app_style::LOGIN_NOTICE
-                    } else if self.picker.hosts().is_empty() {
-                        d::EMPTY
-                    } else {
-                        d::CHOOSE
-                    });
+                    .unwrap_or(self.status_text);
                 label(
                     ui,
                     r(d::STATUS),
@@ -329,9 +321,13 @@ impl Desktop {
                         ui.selectable_value(
                             &mut self.transport,
                             connection::Mode::WebRtc,
-                            "WebRTC",
+                            s::TRANSPORT_CHOICES[0],
                         );
-                        ui.selectable_value(&mut self.transport, connection::Mode::Bud, "BUD");
+                        ui.selectable_value(
+                            &mut self.transport,
+                            connection::Mode::Bud,
+                            s::TRANSPORT_CHOICES[1],
+                        );
                     });
             },
         );
@@ -377,6 +373,7 @@ mod tests {
             desktop_input: Default::default(),
             signed_in: false,
             busy: false,
+            status_text: app_style::LOGIN_NOTICE,
             error: None,
             show_video: false,
             badge: Default::default(),

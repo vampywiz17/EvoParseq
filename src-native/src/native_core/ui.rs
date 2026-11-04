@@ -131,7 +131,7 @@ unsafe fn start_hosts(hwnd: HWND, f: &mut Form, mode: Refresh) {
         return;
     }
     if !mode.quiet() {
-        status(f, "Refreshing computers...");
+        status(f, layout::REFRESHING);
         view(f);
     }
     SetTimer(hwnd, DONE, mode.poll_ms(), None);
@@ -544,7 +544,7 @@ pub fn choose(
             hwnd,
             &f,
             "BUTTON",
-            "Settings",
+            layout::SETTINGS_TEXT,
             SETTINGS,
             WS_TABSTOP,
             layout::SETTINGS,
@@ -599,7 +599,7 @@ pub fn choose(
             hwnd,
             &f,
             "BUTTON",
-            "Sign in",
+            layout::SIGN_IN,
             LOGIN,
             WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
             layout::LOGIN,

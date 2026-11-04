@@ -34,6 +34,10 @@ pub mod desktop {
     pub const ACTION_LABELS: [&str; 3] = ["Refresh", "Sign out", "Connect"];
     pub const PEER_TEXT: &str = "Host peer ID";
     pub const SIGN_IN: &str = "Sign in";
+    pub const SIGNING_IN: &str = "Signing in securely...";
+    pub const SIGNING_OUT: &str = "Signing out...";
+    pub const SIGNED_OUT: &str = "Signed out. Enter your account details to sign in.";
+    pub const REFRESHING: &str = "Refreshing computers...";
     pub const SETTINGS_TEXT: &str = "Settings";
     pub const STATUS: [i32; 4] = [32, 484, 664, 66];
     pub const EMPTY: &str = "No computers listed. Refresh, or enter the host peer ID.";
@@ -73,6 +77,7 @@ pub mod settings {
     pub const NETWORK_RECT: [i32; 4] = [0, 204, 820, 25];
     pub const TRANSPORT_Y: i32 = 844;
     pub const TRANSPORT: &str = "Transport";
+    pub const TRANSPORT_CHOICES: [&str; 2] = ["WebRTC", "BUD"];
     pub const TRANSPORT_HELP: &str = "WebRTC or BUD: direct UDP or TURN over UDP/TLS/TCP.\nUses the TURN URLs above. Reconnect after changing.";
     pub const fn label(y: i32) -> [i32; 4] {
         [0, y + 2, 392, 24]
