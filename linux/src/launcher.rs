@@ -17,8 +17,8 @@ pub fn style(ctx: &egui::Context) {
     style.visuals.widgets.hovered.bg_fill = color(app_style::BLUE).gamma_multiply(0.7);
     style.visuals.widgets.active.bg_fill = color(app_style::BLUE);
     style.spacing.item_spacing = egui::vec2(12., 14.);
-    style.spacing.button_padding = egui::vec2(16., 9.);
-    style.spacing.interact_size.y = 34.;
+    style.spacing.button_padding = egui::vec2(8., 4.);
+    style.spacing.interact_size.y = 24.;
     style.text_styles.insert(
         egui::TextStyle::Body,
         egui::FontId::proportional(app_style::desktop::BODY as f32),
@@ -251,7 +251,10 @@ impl Desktop {
         let origin = ui.cursor().min
             + egui::vec2(((ui.available_width() - s::WIDTH as f32) / 2.).max(24.), 0.);
         let r = |rect| rect_at(origin, s::positioned(rect));
-        ui.allocate_space(egui::vec2(s::WIDTH as f32 + 48., 360.));
+        ui.allocate_space(egui::vec2(
+            s::WIDTH as f32 + 48.,
+            (s::TRANSPORT_Y + 64) as f32,
+        ));
         label(
             ui,
             r(s::TITLE_RECT),
@@ -301,7 +304,6 @@ impl Desktop {
             s::BODY as f32,
             color(app_style::SETTINGS_TEXT),
         );
-        ui.allocate_space(egui::vec2(1., 640.));
         ui.scope_builder(
             egui::UiBuilder::new().max_rect(r(s::field(s::TRANSPORT_Y, 32))),
             |ui| {
