@@ -65,7 +65,10 @@ impl Desktop {
                 ctx.input(|input| input.viewport().inner_rect.map(|rect| rect.size()));
             self.fitted_stream = None;
             self.playback = Some(playback.clone());
-            self.send(Command::Stream(peer, self.transport, playback));
+            let telemetry = crate::telemetry::Session::new(self.transport);
+            self.telemetry = Some(telemetry.clone());
+            self.metrics = Default::default();
+            self.send(Command::Stream(peer, self.transport, playback, telemetry));
         }
     }
 
@@ -300,6 +303,8 @@ mod tests {
             output_format: wgpu::TextureFormat::Bgra8Unorm,
             decoder: None,
             playback: None,
+            telemetry: None,
+            metrics: Default::default(),
         };
         for (signed_in, settings) in [
             (false, false),

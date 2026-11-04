@@ -27,6 +27,13 @@ impl DesktopInput {
             ..Default::default()
         }
     }
+    pub fn refresh_hz(&self) -> Option<f64> {
+        let mhz = self
+            .keyboard
+            .refresh_millihertz
+            .load(std::sync::atomic::Ordering::Relaxed);
+        (mhz > 0).then_some(f64::from(mhz) / 1000.)
+    }
     pub fn release(&mut self, ctx: &egui::Context, playback: &Playback) {
         playback.push_input(Input::Focus(false));
         self.enabled = false;

@@ -22,6 +22,8 @@ pub struct Decoder {
     presentation: Option<((u32, u32), [u32; 4], bool)>,
     srgb: bool,
     pub decoded: u64,
+    presented: std::cell::Cell<u64>,
+    profile: Option<u8>,
 }
 
 struct Frame {
@@ -128,6 +130,8 @@ impl Decoder {
             presentation: None,
             srgb: format.is_srgb(),
             decoded: 0,
+            presented: std::cell::Cell::new(0),
+            profile: None,
         }
     }
 
@@ -157,6 +161,7 @@ impl Decoder {
         if self.session.is_none() {
             self.session = Some(session::Session::new(self.context.clone(), &job.sps)?);
         }
+        self.profile = Some(job.sps.profile_idc);
         let session = self.session.as_mut().unwrap();
         session.decode(job, bytes)?;
         let visible = job.sps.visible();
@@ -261,6 +266,29 @@ impl Decoder {
         )
     }
 
+    pub fn snapshot(&self, report: &mut crate::video_output::Snapshot) -> Option<u8> {
+        report.enabled = true;
+        report.decoder_initialized = self.session.is_some();
+        report.frames_decoded = self.decoded;
+        report.frames_presented = self.presented.get();
+        report.decoder = Some("Vulkan Video H.264");
+        report.renderer = Some("Vulkan / NV12 conversion");
+        report.native_decoder_surface = Some("Original Vulkan NV12 decoder image");
+        report.hardware_decode = None;
+        report.gpu_surface_output = self.session.is_some();
+        report.decoded_bit_depth = self.session.as_ref().map(|_| 8);
+        report.decoded_chroma = self.session.as_ref().map(|_| "4:2:0");
+        report.display_rgb_bit_depth = Some(8);
+        report.codec = Some(crate::video_stream::Codec::H264);
+        report.adapter = Some(self.context.adapter_name.clone());
+        report.presentation_mode = Some("Vulkan / compositor-managed (vsync requested)");
+        report.vsr_status = Some("Not enabled on Linux");
+        if let Some(frame) = &self.frame {
+            report.width = Some(frame.size.0);
+            report.height = Some(frame.size.1);
+        }
+        self.profile
+    }
     pub fn show(&self, ui: &mut egui::Ui) -> Option<(egui::Rect, (u32, u32))> {
         if let Some(frame) = &self.frame {
             let available = ui.available_size();
@@ -277,6 +305,7 @@ impl Decoder {
                 canvas.min + egui::vec2(l as f32, t as f32),
                 canvas.min + egui::vec2(r as f32, b as f32),
             );
+            self.presented.set(self.presented.get().saturating_add(1));
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                 rect,
                 Present(frame.clone()),

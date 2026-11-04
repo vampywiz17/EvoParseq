@@ -3,7 +3,7 @@
 use crate::{desktop_input::Event as Input, playback::Playback};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU32, Ordering},
 };
 use winit::{
     application::ApplicationHandler,
@@ -17,6 +17,7 @@ use winit::{
 pub struct KeyboardBridge {
     target: Mutex<Option<Arc<Playback>>>,
     released: AtomicBool,
+    pub refresh_millihertz: AtomicU32,
 }
 impl KeyboardBridge {
     pub fn bind(&self, playback: Option<Arc<Playback>>) {
@@ -55,6 +56,20 @@ impl<'a> Application<'a> {
             root: None,
         }
     }
+    fn display(&self, event_loop: &ActiveEventLoop) {
+        // Winit exposes cached compositor monitor data. Without a public
+        // eframe root-window accessor, only one connected output is unambiguous.
+        let mut monitors = event_loop.available_monitors();
+        let first = monitors.next();
+        let hz = if monitors.next().is_none() {
+            first.and_then(|m| m.refresh_rate_millihertz())
+        } else {
+            None
+        };
+        self.keyboard
+            .refresh_millihertz
+            .store(hz.unwrap_or(0), Ordering::Relaxed);
+    }
     fn key(&self, key: PhysicalKey, down: bool) -> bool {
         let Some(playback) = self.keyboard.target() else {
             return false;
@@ -87,10 +102,17 @@ impl<'a> Application<'a> {
 impl ApplicationHandler<eframe::UserEvent> for Application<'_> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         self.inner.resumed(event_loop);
+        self.display(event_loop);
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, window: WindowId, event: WindowEvent) {
         let root = *self.root.get_or_insert(window);
         if window == root {
+            if matches!(
+                &event,
+                WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }
+            ) {
+                self.display(event_loop);
+            }
             match &event {
                 WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
                 WindowEvent::Focused(false) | WindowEvent::CloseRequested => {

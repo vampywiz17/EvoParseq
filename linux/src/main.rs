@@ -18,14 +18,28 @@ pub mod codec_initialization;
 mod connection;
 #[path = "../../src-native/src/connection_settings.rs"]
 mod connection_settings;
+#[path = "../../src-native/src/native_core/display_timing.rs"]
+mod display_timing;
+#[path = "../../src-native/src/native_core/host_displays.rs"]
+mod host_displays;
+#[path = "../../src-native/src/native_core/host_video.rs"]
+mod host_video;
 #[path = "../../src-native/src/native_core/profile.rs"]
 pub(crate) mod profile;
+mod resources_linux;
 mod secure_storage;
 #[path = "../../src-native/src/session_preferences.rs"]
 pub mod session_preferences;
 mod settings_linux;
 #[path = "../../src-native/src/native_core/sign_in.rs"]
 pub(crate) mod sign_in;
+#[path = "../../src-native/src/stats.rs"]
+mod stats;
+#[path = "../../src-native/src/stats_recent.rs"]
+mod stats_recent;
+#[path = "../../src-native/src/stats_view.rs"]
+mod stats_view;
+mod telemetry;
 #[path = "../../src-native/src/turn_configuration.rs"]
 mod turn_configuration;
 mod native_core {
@@ -82,7 +96,12 @@ enum Command {
     SignIn(account::Login, bool),
     Refresh,
     SignOut,
-    Stream(String, connection::Mode, Arc<playback::Playback>),
+    Stream(
+        String,
+        connection::Mode,
+        Arc<playback::Playback>,
+        Arc<telemetry::Session>,
+    ),
 }
 
 enum Reply {
@@ -125,6 +144,8 @@ struct Desktop {
     output_format: wgpu::TextureFormat,
     decoder: Option<video_vulkan::Decoder>,
     playback: Option<Arc<playback::Playback>>,
+    telemetry: Option<Arc<telemetry::Session>>,
+    metrics: telemetry::View,
 }
 
 fn account_worker(
@@ -151,12 +172,12 @@ fn account_worker(
                 });
             }),
             Command::Refresh => Ok(()),
-            Command::Stream(peer, mode, playback) => {
+            Command::Stream(peer, mode, playback, telemetry) => {
                 let _ = settings.update_native(|profile| profile.last_peer = peer.clone());
                 let result = form.session
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("Sign in first."))
-                    .and_then(|session| connection::run_stream(session, &peer, mode, &playback));
+                    .and_then(|session| connection::run_stream(session, &peer, mode, &playback, &telemetry));
                 let reply = match result {
                     Ok(message) => Reply::StreamEnded(message),
                     Err(error) => Reply::Error {
@@ -277,6 +298,8 @@ impl eframe::App for Desktop {
                 playback.stop();
             }
             self.decoder = None;
+            self.telemetry = None;
+            self.metrics = Default::default();
             match reply {
                 Reply::Hosts { hosts, notice } => {
                     self.error = notice;
@@ -349,6 +372,23 @@ impl eframe::App for Desktop {
                 Ok(consumed) if consumed > 0 => ctx.request_repaint(),
                 Ok(_) => {}
             }
+        }
+        if let (Some(telemetry), Some(playback)) = (&self.telemetry, &self.playback) {
+            telemetry
+                .bus
+                .visible
+                .store(self.ui_state.stats, std::sync::atomic::Ordering::Relaxed);
+            telemetry
+                .bus
+                .overlay_visible
+                .store(self.badge.open, std::sync::atomic::Ordering::Relaxed);
+            self.metrics.refresh(
+                telemetry,
+                playback,
+                self.decoder.as_ref(),
+                self.ui_state.stats,
+                self.desktop_input.refresh_hz(),
+            );
         }
         self.menu_bar(ctx);
         self.statistics(ctx);
@@ -494,6 +534,8 @@ fn main() -> anyhow::Result<()> {
                         output_format,
                         decoder: None,
                         playback: None,
+                        telemetry: None,
+                        metrics: Default::default(),
                         commands,
                         replies,
                         settings: settings.clone(),

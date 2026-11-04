@@ -61,6 +61,14 @@ impl Playback {
             cursor_restore: Mutex::new(None),
         })
     }
+    pub fn video_snapshot(&self) -> crate::video_output::Snapshot {
+        self.packets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .queue
+            .report
+            .clone()
+    }
     pub fn repaint(&self) {
         self.ui.request_repaint();
     }

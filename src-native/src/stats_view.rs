@@ -110,7 +110,7 @@ impl<'a> Presentation<'a> {
             ("Incoming traffic", number(values.incoming, "Mbps")),
             ("Outgoing traffic", number(values.outgoing, "Mbps")),
         ];
-        #[cfg(feature = "bud")]
+        #[cfg(all(feature = "bud", not(target_os = "linux")))]
         let mut cards: Vec<_> = if sample.bud.is_some() {
             cards
                 .into_iter()
@@ -119,7 +119,7 @@ impl<'a> Presentation<'a> {
         } else {
             cards.into()
         };
-        #[cfg(not(feature = "bud"))]
+        #[cfg(any(not(feature = "bud"), target_os = "linux"))]
         let mut cards: Vec<_> = cards.into();
         // Keep the existing policy: BUD hides unavailable cards, then stale
         // telemetry replaces values in the remaining cards with an em dash.
@@ -572,15 +572,18 @@ fn rows(
     row(
         crate::app_style::forms::STAT_DECODER_OUTPUT,
         video
-            .and_then(|x| x.d3d11_decoder_surface)
-            .map(|x| {
-                if x {
-                    "D3D11 decoder surface"
-                } else {
-                    "DXGI surface"
-                }
+            .and_then(|x| {
+                x.native_decoder_surface.map(str::to_owned).or_else(|| {
+                    x.d3d11_decoder_surface.map(|surface| {
+                        if surface {
+                            "D3D11 decoder surface".into()
+                        } else {
+                            "DXGI surface".into()
+                        }
+                    })
+                })
             })
-            .unwrap_or("Not reported")
+            .unwrap_or_else(|| "Not reported".into())
             .into(),
     );
     row(
@@ -694,6 +697,7 @@ fn rows(
         crate::app_style::forms::STAT_MEASURED_AUDIO_TRAFFIC,
         number(v.audio, "kbps"),
     );
+    #[cfg(windows)]
     if let Some(audio) = &s.audio_playback {
         if let Some(layout) = audio
             .layout
@@ -750,6 +754,36 @@ fn rows(
             number(Some(audio.device_capacity_frames as f64 / 48.0), "ms"),
         );
     }
+    #[cfg(target_os = "linux")]
+    if let Some(audio) = &s.audio_native {
+        row(
+            crate::app_style::forms::STAT_AUDIO_OUTPUT,
+            if audio.worker_finished {
+                "Stopped"
+            } else {
+                "PipeWire"
+            }
+            .into(),
+        );
+        row(
+            crate::app_style::forms::STAT_PLAYBACK_BUFFER,
+            format!(
+                "{:.1} ms (application queue; excludes device latency)",
+                audio.queued_samples as f64 / 96.
+            ),
+        );
+        row(
+            crate::app_style::forms::STAT_BUFFER_LIMITS,
+            "100 ms maximum (automatic)".into(),
+        );
+        row(
+            crate::app_style::forms::STAT_AUDIO_DROPS,
+            format!("{} packets", audio.packets_dropped),
+        );
+        row("Audio decode errors", audio.decode_errors.to_string());
+        row("Audio decoded packets", audio.packets_decoded.to_string());
+        row("PCM frames consumed", audio.pcm_frames_consumed.to_string());
+    }
     if let Some(ms) = s.audio_decoded_queue_ms {
         row(
             crate::app_style::forms::STAT_DECODED_AUDIO_WAITING,
@@ -801,7 +835,8 @@ pub fn compact_metrics(
         .map(|v| v.latest_ms);
     let encode = sample
         .and_then(|s| s.bud.as_ref())
-        .and_then(|b| b.encode_ms);
+        .and_then(|b| b.encode_ms)
+        .or_else(|| sample.and_then(|s| s.host_encode_ms));
     format!(
         "Decode CPU {} | Encode {}\nRTT {} | RX {} | D/P {}/{} fps",
         metric(decode, "ms"),

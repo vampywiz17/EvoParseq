@@ -139,7 +139,7 @@ struct Progress {
 }
 
 struct Completion {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     telemetry: Option<(Arc<crate::stats::Shared>, u64)>,
     #[cfg(windows)]
     timing_active: bool,
@@ -167,7 +167,7 @@ struct Completion {
 enum Delivery {
     Queued,
     EmptyMessage,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     Timing(Option<(Arc<crate::stats::Shared>, u64)>),
     Audio(Option<crate::audio_stream::Sender>),
     Video {
@@ -183,7 +183,7 @@ impl Delivery {
         match self {
             Self::Queued => None,
             Self::EmptyMessage => Some(false),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Self::Timing(link) => {
                 if let Some((bus, generation)) = link {
                     bus.host_timing.receive(generation, bytes);
@@ -220,7 +220,7 @@ impl Delivery {
 
 impl Drop for Completion {
     fn drop(&mut self) {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if let Some((bus, generation)) = &self.telemetry {
             bus.finish(*generation);
         }
@@ -321,7 +321,7 @@ impl Completion {
                 return Some(Delivery::EmptyMessage);
             }
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if channel == 0 && self.discard_unavailable_media && crate::frame_timing::is_report(bytes) {
             return Some(Delivery::Timing(self.telemetry.clone()));
         }
@@ -409,10 +409,10 @@ async fn read_channel(
                 None
             }
             Ok(Some((len, text))) => {
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 let timing =
                     native_mode && id == 0 && crate::frame_timing::is_report(&buffer[..len]);
-                #[cfg(not(windows))]
+                #[cfg(not(any(windows, target_os = "linux")))]
                 let timing = false;
                 let payload = (queue_receipts && !timing && !text && len <= MAX_CHANNEL_MESSAGE)
                     .then(|| Bytes::copy_from_slice(&buffer[..len]));
@@ -552,7 +552,7 @@ impl Attempt {
             video_stream.configure(config.video_protocol.clone());
         }
         let completion = Arc::new(Mutex::new(Completion {
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             telemetry: None,
             #[cfg(windows)]
             timing_active: false,
@@ -787,6 +787,13 @@ impl Attempt {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn set_linux_telemetry(&self, bus: Arc<crate::stats::Shared>, generation: u64) {
+        self.completion
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .telemetry = Some((bus, generation));
+    }
     pub fn audio_receiver(&self) -> Option<crate::audio_stream::NativeReceiver> {
         self.completion
             .lock()
@@ -1066,7 +1073,7 @@ fn worker(
         });
     }
     let callback_state = shared.clone();
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     {
         let state = shared.clone();
         let weak = Arc::downgrade(&peer);
@@ -1083,6 +1090,10 @@ fn worker(
                 let Some((bus, generation)) = link else {
                     continue;
                 };
+                #[cfg(target_os = "linux")]
+                if !bus.sample_requested() {
+                    continue;
+                }
                 let Some(peer) = weak.upgrade() else {
                     break;
                 };
@@ -1099,7 +1110,12 @@ fn worker(
                     }
                 }
                 // Reuse the existing 1 Hz statistics task.
+                #[cfg(windows)]
                 if !bus.requested() {
+                    continue;
+                }
+                #[cfg(target_os = "linux")]
+                if !bus.sample_requested() {
                     continue;
                 }
                 let (video, inspector) = {
@@ -1115,7 +1131,11 @@ fn worker(
                         sample.audio_layout = report.layout;
                         sample.audio_decoded_queue_ms = Some(report.queued_frames as f64 / 48.0);
                     }
-                    (s.video_output.clone(), s.video_stream.clone())
+                    #[cfg(windows)]
+                    let video = s.video_output.clone();
+                    #[cfg(target_os = "linux")]
+                    let video: Option<crate::video_output::Snapshot> = None;
+                    (video, s.video_stream.clone())
                 };
                 let framing = inspector
                     .lock()
@@ -1124,7 +1144,14 @@ fn worker(
                 sample.profile = framing.sps_profile_idc;
                 sample.codec = framing.codec;
                 sample.hevc_advertised = framing.hevc_advertised;
-                sample.video = video.map(|v| v.snapshot());
+                #[cfg(windows)]
+                {
+                    sample.video = video.map(|v| v.snapshot());
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    sample.video = video;
+                }
                 bus.publish(generation, sample);
             }
         });
@@ -1885,7 +1912,7 @@ mod tests {
 
     fn empty_completion() -> Completion {
         Completion {
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             telemetry: None,
             #[cfg(windows)]
             timing_active: false,

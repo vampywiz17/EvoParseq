@@ -1311,7 +1311,7 @@ dependencies = [
 
 [[package]]
 name = "evoparseq-linux"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "ash",
@@ -1322,6 +1322,7 @@ dependencies = [
  "evoparseq-bud",
  "futures-util",
  "getrandom 0.3.4",
+ "libc",
  "libopus_sys",
  "lowlat-decode",
  "naga",

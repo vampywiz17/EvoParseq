@@ -31,6 +31,7 @@ pub fn run_stream(
     peer: &str,
     mode: Mode,
     playback: &Arc<crate::playback::Playback>,
+    telemetry: &Arc<crate::telemetry::Session>,
 ) -> Result<String> {
     playback.bind_input_consumer();
     let socket = Socket::open(session)?;
@@ -38,8 +39,8 @@ pub fn run_stream(
     getrandom::fill(&mut nonce).map_err(|_| anyhow::anyhow!("Could not generate connection ID"))?;
     let id: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
     let result = match mode {
-        Mode::WebRtc => run_webrtc(&socket, peer, &id, playback),
-        Mode::Bud => run_bud(&socket, peer, &id, playback),
+        Mode::WebRtc => run_webrtc(&socket, peer, &id, playback, telemetry),
+        Mode::Bud => run_bud(&socket, peer, &id, playback, telemetry),
     };
     (socket.writer)(
         native_wire::envelope("offer_cancel", peer, &id, serde_json::json!({})).to_string(),
@@ -67,6 +68,7 @@ fn run_webrtc(
     peer: &str,
     id: &str,
     playback: &Arc<crate::playback::Playback>,
+    telemetry: &Arc<crate::telemetry::Session>,
 ) -> Result<String> {
     let writer = socket.writer.clone();
     let target = peer.to_owned();
@@ -92,67 +94,79 @@ fn run_webrtc(
         chroma_444: false,
     };
     let mut attempt = create_webrtc_attempt(id, output, config.clone(), playback)?;
+    attempt.set_linux_telemetry(telemetry.bus.clone(), telemetry.generation);
     let receiver = attempt
         .audio_receiver()
         .context("Audio pipeline unavailable")?;
     let mut input = Input::default();
-    let result = observe(Mode::WebRtc, receiver, playback, |signaling_closed| {
-        if !*signaling_closed {
-            for _ in 0..64 {
-                match socket.next() {
-                    Ok(Some(text)) => {
-                        ensure!(
-                            !native_wire::incoming(&text, id, &attempt)?,
-                            "The host closed the connection"
-                        );
+    let mut diagnostics = crate::telemetry::Control::default();
+    let result = observe(
+        Mode::WebRtc,
+        receiver,
+        playback,
+        telemetry,
+        |signaling_closed| {
+            if !*signaling_closed {
+                for _ in 0..64 {
+                    match socket.next() {
+                        Ok(Some(text)) => {
+                            ensure!(
+                                !native_wire::incoming(&text, id, &attempt)?,
+                                "The host closed the connection"
+                            );
+                        }
+                        Ok(None) => break,
+                        Err(_) if attempt.control_ready() => {
+                            *signaling_closed = true;
+                            break;
+                        }
+                        Err(error) => return Err(error),
                     }
-                    Ok(None) => break,
-                    Err(_) if attempt.control_ready() => {
-                        *signaling_closed = true;
-                        break;
-                    }
-                    Err(error) => return Err(error),
                 }
             }
-        }
-        while let Some(event) = attempt.pop_event() {
-            if event["type"] == 8 {
-                ensure!(
-                    (socket.writer)(native_wire::candidate(&event, peer, id)),
-                    "Could not send a local candidate"
-                );
-            }
-        }
-        if let Some(code) = attempt.host_status() {
-            bail!("The host refused or ended the connection (status {code})");
-        }
-        if let Some(generation) = playback.take_keyframe_request()? {
-            if let Err(error) = attempt.send_binary(0, config.keyframe_request()) {
-                playback.keyframe_request_failed(generation);
-                return Err(error);
-            }
-        }
-        for _ in 0..16 {
-            let Some((channel, text, payload)) = attempt.pop_binary() else {
-                break;
-            };
-            if channel == 0 && !text {
-                if let Ok(message) = control::decode(&payload) {
-                    if let control::Message::Status(code) = &message {
-                        ensure!(*code == 0, "The host ended the connection (status {code})");
-                    }
-                    input.host_control(&message, playback);
+            while let Some(event) = attempt.pop_event() {
+                if event["type"] == 8 {
+                    ensure!(
+                        (socket.writer)(native_wire::candidate(&event, peer, id)),
+                        "Could not send a local candidate"
+                    );
                 }
             }
-        }
-        if let Some(stage) = attempt.failure_stage() {
-            bail!("WebRTC connection failed ({stage})");
-        }
-        input.pump(playback, attempt.control_ready(), |bytes| {
-            attempt.send_binary(0, bytes::Bytes::copy_from_slice(bytes))
-        })?;
-        Ok((attempt.control_ready(), attempt.video_snapshot(), false))
-    });
+            if let Some(code) = attempt.host_status() {
+                bail!("The host refused or ended the connection (status {code})");
+            }
+            if let Some(generation) = playback.take_keyframe_request()? {
+                if let Err(error) = attempt.send_binary(0, config.keyframe_request()) {
+                    playback.keyframe_request_failed(generation);
+                    return Err(error);
+                }
+            }
+            for _ in 0..16 {
+                let Some((channel, text, payload)) = attempt.pop_binary() else {
+                    break;
+                };
+                if channel == 0 && !text {
+                    diagnostics.receive(&payload, telemetry);
+                    if let Ok(message) = control::decode(&payload) {
+                        if let control::Message::Status(code) = &message {
+                            ensure!(*code == 0, "The host ended the connection (status {code})");
+                        }
+                        input.host_control(&message, playback);
+                    }
+                }
+            }
+            if let Some(stage) = attempt.failure_stage() {
+                bail!("WebRTC connection failed ({stage})");
+            }
+            diagnostics.update(attempt.control_ready(), telemetry, |bytes| {
+                attempt.send_binary(0, bytes)
+            })?;
+            input.pump(playback, attempt.control_ready(), |bytes| {
+                attempt.send_binary(0, bytes::Bytes::copy_from_slice(bytes))
+            })?;
+            Ok((attempt.control_ready(), attempt.video_snapshot(), false))
+        },
+    );
     let result = result.map_err(|error| {
         let state = attempt.snapshot();
         let message = format!(
@@ -175,6 +189,7 @@ fn run_webrtc(
     input.release(playback, |bytes| {
         attempt.send_binary(0, bytes::Bytes::copy_from_slice(bytes))
     });
+    diagnostics.stop(telemetry, |bytes| attempt.send_binary(0, bytes));
     attempt.disconnect();
     result
 }
@@ -217,6 +232,7 @@ fn run_bud(
     peer: &str,
     id: &str,
     playback: &Arc<crate::playback::Playback>,
+    telemetry: &Arc<crate::telemetry::Session>,
 ) -> Result<String> {
     use evoparseq_bud::{
         bud::{Event, Route},
@@ -261,10 +277,12 @@ fn run_bud(
     let mut ingress = crate::bud_ingress::VideoState::new(false, false, false);
     let mut established = false;
     let mut input = Input::default();
+    let mut diagnostics = crate::telemetry::Control::default();
     let result = observe(
         Mode::Bud,
         audio.native_receiver(),
         playback,
+        telemetry,
         |signaling_closed| {
             if !*signaling_closed {
                 for _ in 0..64 {
@@ -290,6 +308,7 @@ fn run_bud(
                 match event {
                     Event::Established { .. } => established = true,
                     Event::ExternalControl { bytes } => {
+                        diagnostics.receive(&bytes, telemetry);
                         if let Ok(message) = control::decode(&bytes) {
                             if let control::Message::Status(code) = &message {
                                 ensure!(
@@ -314,6 +333,29 @@ fn run_bud(
                     anyhow::bail!("BUD could not request a video resume keyframe");
                 }
             }
+            diagnostics.update(established, telemetry, |bytes| session.send_frame(&bytes))?;
+            if telemetry.sample_due() {
+                let bud = session.snapshot();
+                let framing = ingress.snapshot();
+                let mut sample = crate::stats::Sample {
+                    state: if bud.connected {
+                        "connected"
+                    } else {
+                        "connecting"
+                    }
+                    .into(),
+                    rtt_ms: bud.rtt_ms,
+                    received: Some(bud.udp_received),
+                    sent: Some(bud.udp_sent),
+                    audio_bytes: bud.channels[2].bytes,
+                    codec: framing.codec,
+                    profile: framing.sps_profile_idc,
+                    hevc_advertised: false,
+                    ..Default::default()
+                };
+                sample.bud = Some(bud);
+                telemetry.bus.publish(telemetry.generation, sample);
+            }
             input.pump(playback, established, |bytes| session.send_frame(bytes))?;
             let pumped =
                 crate::bud_ingress::pump(&mut source, &mut ingress, playback.as_ref(), &sender)?;
@@ -321,6 +363,7 @@ fn run_bud(
         },
     );
     input.release(playback, |bytes| session.send_frame(bytes));
+    diagnostics.stop(telemetry, |bytes| session.send_frame(&bytes));
     session.close();
     result
 }
@@ -329,9 +372,11 @@ fn observe(
     mode: Mode,
     receiver: audio_stream::NativeReceiver,
     playback: &Arc<crate::playback::Playback>,
+    telemetry: &Arc<crate::telemetry::Session>,
     mut poll: impl FnMut(&mut bool) -> Result<(bool, crate::video_stream::Snapshot, bool)>,
 ) -> Result<String> {
-    let _output = audio_pipewire::Output::start(&receiver)?;
+    let _output = audio_pipewire::Output::start(&receiver, telemetry.output.clone())?;
+    telemetry.set_audio(receiver);
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut signaling_closed = false;
     let mut keyframe_received = false;

@@ -270,7 +270,14 @@ impl Desktop {
     fn statistics_contents(&mut self, ui: &mut egui::Ui) {
         ui.style_mut().override_font_id = Some(egui::FontId::proportional(16.));
         ui.label(RichText::new(f::MENU_STATS).size(32.));
-        ui.label(RichText::new("N/A").color(color(app_style::SETTINGS_ACCENT)));
+        ui.label(
+            RichText::new(
+                self.metrics
+                    .presentation(self.ui_state.stats_tab)
+                    .map_or("Waiting for telemetry", |p| p.status.as_str()),
+            )
+            .color(color(app_style::SETTINGS_ACCENT)),
+        );
         ui.horizontal(|ui| {
             for (i, tab) in f::STATS_TABS.iter().enumerate() {
                 if ui
@@ -284,67 +291,48 @@ impl Desktop {
                 }
             }
         });
+        let Some(presentation) = self.metrics.presentation(self.ui_state.stats_tab) else {
+            return;
+        };
         egui::ScrollArea::vertical().show(ui, |ui| {
-            if self.ui_state.stats_tab == 0 {
-                ui.horizontal_wrapped(|ui| {
-                    for text in [
-                        "Connection RTT",
-                        "Decoded video",
-                        "Incoming traffic",
-                        "Outgoing traffic",
-                    ] {
+            // Canonical desktop Overview: exactly two cards per row at every width.
+            for pair in presentation.cards.chunks(2) {
+                ui.columns(2, |columns| {
+                    for (column, (label, value)) in columns.iter_mut().zip(pair) {
                         egui::Frame::new()
                             .fill(color(app_style::SETTINGS_FIELD))
                             .inner_margin(16.)
-                            .show(ui, |ui| {
-                                ui.set_min_width(290.);
-                                ui.label(text);
-                                ui.label(RichText::new("N/A").size(32.));
+                            .show(column, |ui| {
+                                ui.set_min_width((ui.available_width() - 1.).max(0.));
+                                ui.label(*label);
+                                ui.label(RichText::new(value).size(32.));
                             });
                     }
                 });
             }
-            for row in f::STATS
-                .iter()
-                .filter(|row| row.tab == self.ui_state.stats_tab)
-            {
-                let (rect, _) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), if row.section { 48. } else { 44. }),
-                    egui::Sense::hover(),
-                );
-                label(
-                    ui,
-                    egui::Rect::from_min_size(
-                        rect.min + egui::vec2(0., 8.),
-                        egui::vec2(if row.section { rect.width() } else { 210. }, 36.),
-                    ),
-                    row.label,
-                    16.,
-                    color(if row.section {
-                        app_style::SETTINGS_ACCENT
-                    } else {
-                        app_style::SETTINGS_MUTED
-                    }),
-                );
-                if !row.section {
-                    label(
-                        ui,
-                        egui::Rect::from_min_size(
-                            rect.min + egui::vec2(220., 8.),
-                            egui::vec2(rect.width() - 220., 36.),
-                        ),
-                        "N/A",
-                        16.,
-                        Color32::WHITE,
-                    );
+            for (text, value) in &presentation.rows {
+                if value.is_empty() {
+                    ui.add_space(16.);
+                    ui.label(RichText::new(text).color(color(app_style::SETTINGS_ACCENT)));
+                } else {
+                    ui.horizontal_top(|ui| {
+                        ui.add_sized(
+                            [210., 36.],
+                            egui::Label::new(
+                                RichText::new(text).color(color(app_style::SETTINGS_MUTED)),
+                            )
+                            .wrap(),
+                        );
+                        ui.add(egui::Label::new(value).wrap());
+                    });
                 }
             }
-            for text in f::additional_stats(self.ui_state.stats_tab) {
-                ui.horizontal(|ui| {
-                    ui.add_sized([210., 44.], egui::Label::new(text));
-                    ui.label("N/A");
-                });
-            }
+            ui.add_space(20.);
+            ui.label(
+                RichText::new(&presentation.footer)
+                    .size(13.)
+                    .color(color(app_style::SETTINGS_MUTED)),
+            );
         });
     }
 }

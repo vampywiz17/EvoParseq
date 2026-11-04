@@ -1,12 +1,17 @@
 [package]
 name = "evoparseq-linux"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 publish = false
 
+[features]
+default = ["bud"]
+bud = []
+
 [dependencies]
+libc = "0.2"
 anyhow = "1"
 xcursor = "=0.3.11"
 ashpd = { version = "=0.13.13", default-features = false, features = ["tokio", "secret"] }

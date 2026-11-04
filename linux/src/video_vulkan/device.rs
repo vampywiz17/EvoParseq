@@ -5,6 +5,7 @@ use eframe::egui_wgpu::WgpuSetupExisting;
 use std::{ffi::CStr, sync::Arc};
 
 pub struct Context {
+    pub adapter_name: String,
     pub instance: ash::Instance,
     pub raw: ash::Device,
     pub physical: vk::PhysicalDevice,
@@ -160,6 +161,7 @@ unsafe fn create_on(instance: &wgpu::Instance, adapter: &wgpu::Adapter) -> Resul
         )
     }?;
     Ok(Context {
+        adapter_name: adapter.get_info().name,
         instance: raw_instance.clone(),
         physical,
         decode_family,

@@ -254,6 +254,8 @@ pub struct Snapshot {
     pub hardware_decode: Option<bool>,
     /// Observed on the latest decoded output, not a capability/configuration flag.
     pub d3d11_decoder_surface: Option<bool>,
+    /// Platform decoder surface reported by its native backend.
+    pub native_decoder_surface: Option<&'static str>,
     pub frames_queued: u64,
     pub frames_dropped: u64,
     pub frames_submitted: u64,

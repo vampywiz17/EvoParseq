@@ -7,18 +7,27 @@ use pw::spa::{
 };
 use std::{io::Cursor, thread::JoinHandle};
 
+#[derive(Default, Clone)]
+pub struct State {
+    pub muted: Option<bool>,
+    pub volume: Option<f32>,
+    pub ready: bool,
+}
 pub struct Output {
     stop: pw::channel::Sender<()>,
     worker: Option<JoinHandle<Result<()>>>,
 }
 
 impl Output {
-    pub fn start(source: &NativeReceiver) -> Result<Self> {
+    pub fn start(
+        source: &NativeReceiver,
+        state: std::sync::Arc<std::sync::Mutex<State>>,
+    ) -> Result<Self> {
         let reader = source.callback_reader()?;
         let (stop, commands) = pw::channel::channel();
         let worker = std::thread::Builder::new()
             .name("evoparseq-pipewire".into())
-            .spawn(move || playback(reader, commands))?;
+            .spawn(move || playback(reader, commands, state))?;
         Ok(Self {
             stop,
             worker: Some(worker),
@@ -42,7 +51,11 @@ impl Drop for Output {
     }
 }
 
-fn playback(reader: CallbackReader, stop: pw::channel::Receiver<()>) -> Result<()> {
+fn playback(
+    reader: CallbackReader,
+    stop: pw::channel::Receiver<()>,
+    state: std::sync::Arc<std::sync::Mutex<State>>,
+) -> Result<()> {
     pw::init();
     let mainloop = pw::main_loop::MainLoop::new(None)?;
     let quit = mainloop.clone();
@@ -61,9 +74,33 @@ fn playback(reader: CallbackReader, stop: pw::channel::Receiver<()>) -> Result<(
         },
     )?;
     let quit = mainloop.clone();
+    let output_state = state.clone();
     let _listener = stream
         .add_local_listener_with_user_data(reader)
-        .state_changed(move |_, _, _, state| {
+        .control_info(move |_, _, id, control| {
+            let Some(control) = (unsafe { control.as_ref() }) else {
+                return;
+            };
+            if control.n_values == 0 || control.n_values > 8 || control.values.is_null() {
+                return;
+            }
+            let values =
+                unsafe { std::slice::from_raw_parts(control.values, control.n_values as usize) };
+            if values.iter().any(|v| !v.is_finite()) {
+                return;
+            }
+            let mut state = output_state.lock().unwrap_or_else(|e| e.into_inner());
+            if id == spa::sys::SPA_PROP_mute {
+                state.muted = Some(values[0] != 0.);
+            }
+            if id == spa::sys::SPA_PROP_channelVolumes {
+                state.volume = Some(values.iter().sum::<f32>() / values.len() as f32);
+            }
+        })
+        .state_changed(move |_, _, _, stream_state| {
+            state.lock().unwrap_or_else(|e| e.into_inner()).ready =
+                matches!(stream_state, pw::stream::StreamState::Streaming);
+            let state = stream_state;
             if matches!(
                 state,
                 pw::stream::StreamState::Error(_) | pw::stream::StreamState::Unconnected
