@@ -204,6 +204,9 @@ impl Control {
         Ok(()) // UI-command failure never tears down an otherwise working stream.
     }
     fn confirm(&mut self, session: &Session, mut send: impl FnMut(Bytes) -> Result<()>) {
+        if self.confirmation.is_none() && self.selection.is_none() {
+            return;
+        }
         use crate::session_controls::Status;
         let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
@@ -382,7 +385,7 @@ impl View {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
-            .map(|settings| settings.view().0.native_core.video)
+            .map(|settings| settings.native_video())
             .unwrap_or_default();
         self.draft =
             crate::session_preferences::HostVideo::from_report(&observed).panel_video(saved);
@@ -472,21 +475,38 @@ impl View {
             .clone();
         drop(host);
         self.sample = Some(sample);
-        self.details = (0..5).map(|tab| self.build(tab)).collect();
-    }
-    pub fn presentation(&self, tab: usize) -> Option<&Details> {
-        self.details.get(tab)
-    }
-    fn build(&self, tab: usize) -> Details {
         let sample = self.sample.as_ref().unwrap();
-        let mut result = stats_view::Presentation::new(
+        let base = stats_view::Presentation::new(
             sample,
             &self.values,
             (self.resources.cpu, None, None),
             None,
             &self.timing,
+        );
+        self.details = (0..5)
+            .map(|tab| self.build_from(tab, base.clone()))
+            .collect();
+    }
+    pub fn presentation(&self, tab: usize) -> Option<&Details> {
+        self.details.get(tab)
+    }
+    #[cfg(test)]
+    fn build(&self, tab: usize) -> Details {
+        let sample = self.sample.as_ref().unwrap();
+        self.build_from(
+            tab,
+            stats_view::Presentation::new(
+                sample,
+                &self.values,
+                (self.resources.cpu, None, None),
+                None,
+                &self.timing,
+            ),
         )
-        .select(stats_view::Tab::ALL[tab]);
+    }
+    fn build_from(&self, tab: usize, base: stats_view::Presentation<'_>) -> Details {
+        let sample = self.sample.as_ref().unwrap();
+        let mut result = base.select(stats_view::Tab::ALL[tab]);
         if tab == 2 {
             for (label, value) in &mut result.rows {
                 if label == crate::app_style::forms::STAT_HARDWARE_DECODE {

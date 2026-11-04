@@ -407,6 +407,16 @@ impl Manager {
         state
     }
 
+    /// Read only the small shared video preferences, without cloning protected credentials.
+    pub fn native_video(&self) -> crate::native_core::profile::Video {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .0
+            .native_core
+            .video
+            .clone()
+    }
     pub fn native_session_button_hidden(&self) -> bool {
         self.state
             .lock()

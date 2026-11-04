@@ -109,7 +109,9 @@ impl ApplicationHandler<eframe::UserEvent> for Application<'_> {
         if window == root {
             if matches!(
                 &event,
-                WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }
+                WindowEvent::Moved(_)
+                    | WindowEvent::Resized(_)
+                    | WindowEvent::ScaleFactorChanged { .. }
             ) {
                 self.display(event_loop);
             }

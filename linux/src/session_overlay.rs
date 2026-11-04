@@ -220,7 +220,8 @@ impl Desktop {
                                                     self.badge.open = false;
                                                 }
                                                 1 => {
-                                                    if let Some(video)=self.badge.draft.clone(){
+                                                    if let Some(mut video)=self.badge.draft.clone(){
+                                                        video.fullscreen=ctx.input(|i|i.viewport().fullscreen.unwrap_or(false));
                                                         if let Some(telemetry)=&self.telemetry {let size=ctx.input(|i|i.viewport().inner_rect.map(|r|r.size())).unwrap_or_default();let scale=ctx.pixels_per_point();*telemetry.client_size.lock().unwrap_or_else(|e|e.into_inner())=((size.x*scale).round().max(1.)as u32,((size.y-24.).max(1.)*scale).round()as u32);}
                                                         playback.push_session(crate::session_controls::Command::Apply(video));self.metrics.pending=true;
                                                     }

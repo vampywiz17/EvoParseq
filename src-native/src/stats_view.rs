@@ -43,6 +43,7 @@ impl Tab {
     }
 }
 
+#[derive(Clone)]
 pub struct Presentation<'a> {
     pub status: &'a str,
     pub cards: Vec<(&'static str, String)>,
@@ -813,7 +814,7 @@ fn rows(
         crate::app_style::forms::STAT_GPU_BUSIEST_ENGINE,
         number(cpu.1, "%"),
     );
-    #[cfg(feature = "bud")]
+    #[cfg(all(feature = "bud", not(target_os = "linux")))]
     if s.bud.is_some() {
         rows.retain(|(_, value)| value != "Not reported" && value != "—");
     }

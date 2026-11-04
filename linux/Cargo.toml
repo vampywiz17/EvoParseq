@@ -9,7 +9,7 @@ publish = false
 [features]
 default = ["bud", "desktop-telemetry"]
 bud = []
-desktop-telemetry = []
+desktop-telemetry = ["bud"]
 
 [dependencies]
 libc = "0.2"
