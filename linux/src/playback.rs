@@ -18,6 +18,7 @@ struct Pending {
     parameters: ParameterCache,
     suspended: bool,
     decoder_generation: u64,
+    initialization: Option<Vec<u8>>,
 }
 
 impl Pending {
@@ -79,6 +80,7 @@ impl Playback {
             // the entire obsolete reference chain, not arbitrary delta frames.
             // Do not start a recovery deadline until the UI can consume again.
             state.queue.clear();
+            state.initialization = None;
             state.queue.report.frames_dropped = state.queue.report.frames_dropped.saturating_add(1);
             state.suspended = true;
             drop(state);
@@ -92,6 +94,13 @@ impl Playback {
             .submit_codec(buffer, info.idr, info.parameters, 0, info.codec);
         if accepted {
             state.queue.set_last_packet(0, info.picture);
+            if state.decoder_generation != state.queue.reset_generation
+                && state.initialization.is_none()
+            {
+                // Snapshot at the first accepted packet, not at UI consumption:
+                // later queued parameter updates must not initialize an older IDR.
+                state.initialization = state.parameters.bytes();
+            }
         }
         state.check()?;
         drop(state);
@@ -176,7 +185,7 @@ impl Playback {
                 };
                 let generation = state.queue.reset_generation;
                 if state.decoder_generation != generation {
-                    let mut initialization = state.parameters.bytes().ok_or_else(|| {
+                    let mut initialization = state.initialization.take().ok_or_else(|| {
                         anyhow::anyhow!("Video resume requires cached codec parameters")
                     })?;
                     initialization.extend_from_slice(&frame.bytes);

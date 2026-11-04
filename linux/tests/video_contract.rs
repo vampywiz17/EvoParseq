@@ -108,6 +108,58 @@ fn resumed_stream_uses_shared_keyframe_deadline_and_send_failure_policy() {
 }
 
 #[test]
+fn resumed_packet_keeps_its_parameter_snapshot_when_later_updates_arrive() {
+    let playback = playback::Playback::new(eframe::egui::Context::default());
+    let fixture = include_bytes!("data/h264-40-frames.bin");
+    let size = u32::from_le_bytes(fixture[..4].try_into().unwrap()) as usize;
+    let first = &fixture[4..4 + size];
+    let mut inspector = video_stream::Inspector::default();
+    let info = inspector.receive(first).unwrap();
+    let mut cache = video_stream::ParameterCache::default();
+    cache.observe(first, info.codec);
+    let expected = cache.bytes().unwrap();
+    playback.submit_packet(first, info).unwrap();
+    playback.decode_pending(|_| Ok(())).unwrap();
+    for _ in 0..MAX_FRAMES + 1 {
+        playback.submit(&[0]).unwrap();
+    }
+    playback.resume_if_ready(true).unwrap();
+    let mut key = Vec::new();
+    let mut later = first.to_vec();
+    for nal in lowlat_decode::nal::Units::new(first) {
+        if nal.bytes[0] & 31 == 5 {
+            key.extend_from_slice(&[0, 0, 1]);
+            key.extend_from_slice(nal.bytes);
+        }
+        if nal.bytes[0] & 31 == 7 {
+            later[nal.offset + 3] ^= 1;
+        }
+    }
+    playback
+        .submit_packet(&key, inspector.receive(&key).unwrap())
+        .unwrap();
+    playback
+        .submit_packet(&later, inspector.receive(&later).unwrap())
+        .unwrap();
+    let mut consumed = 0;
+    assert_eq!(
+        playback
+            .decode_pending(|bytes| {
+                if consumed == 0 {
+                    assert_eq!(&bytes[..expected.len()], expected.as_slice());
+                    assert_eq!(&bytes[expected.len()..], key.as_slice());
+                } else {
+                    assert_eq!(bytes, later.as_slice());
+                }
+                consumed += 1;
+                Ok(())
+            })
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
 fn decode_handoff_handles_60_fps_on_a_59_94_hz_display_without_losing_references() {
     let healthy = playback::Playback::new(eframe::egui::Context::default());
     let mut legacy = std::collections::VecDeque::new();
