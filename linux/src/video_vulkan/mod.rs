@@ -250,6 +250,17 @@ impl Decoder {
         Ok(())
     }
 
+    /// CPU wall-clock waits, not GPU execution or scanout measurements.
+    pub fn timing_summary(&self) -> String {
+        self.session.as_ref().map_or_else(
+            || format!("{} decoded pictures; decoder not initialized", self.decoded),
+            |session| format!("{} decoded pictures; graphics wait last/avg/peak {:.1}/{:.1}/{:.1} ms; decode completion wait {:.1}/{:.1}/{:.1} ms",
+                self.decoded, session.graphics_wait.latest_ms, session.graphics_wait.average_ms,
+                session.graphics_wait.peak_ms, session.decode_wait.latest_ms,
+                session.decode_wait.average_ms, session.decode_wait.peak_ms),
+        )
+    }
+
     pub fn show(&self, ui: &mut egui::Ui) {
         if let Some(frame) = &self.frame {
             let available = ui.available_size();

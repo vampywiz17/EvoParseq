@@ -177,6 +177,10 @@ impl Desktop {
 impl eframe::App for Desktop {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         while let Ok(reply) = self.replies.try_recv() {
+            let video_timing = self
+                .decoder
+                .as_ref()
+                .map(|decoder| decoder.timing_summary());
             self.busy = false;
             if let Some(playback) = self.playback.take() {
                 playback.stop();
@@ -195,6 +199,9 @@ impl eframe::App for Desktop {
                 Reply::ProbePassed(message) => self.probe_result = Some(message),
                 Reply::Error { signed_in, message } => {
                     self.signed_in = signed_in;
+                    let message = video_timing
+                        .map_or_else(|| message.clone(), |timing| format!("{message}\n{timing}"));
+                    eprintln!("{message}");
                     self.error = Some(message);
                     if !signed_in {
                         self.hosts.clear();
@@ -230,7 +237,7 @@ impl eframe::App for Desktop {
             }
             ui.horizontal(|ui| {
                 ui.heading("EvoParseq");
-                ui.label("Linux preview");
+                ui.label(concat!("Linux preview ", env!("CARGO_PKG_VERSION")));
                 if ui
                     .button(if self.show_video {
                         "Back"

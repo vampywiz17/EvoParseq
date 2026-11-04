@@ -16,6 +16,8 @@ pub struct Session {
     slot_ids: [Option<u32>; MAX_FRAMES],
     slot_count: u32,
     last_sets: Option<(Sps, Pps)>,
+    pub graphics_wait: crate::video_output::Timing,
+    pub decode_wait: crate::video_output::Timing,
 }
 
 struct Resources {
@@ -134,6 +136,8 @@ impl Session {
             slot_ids: [None; MAX_FRAMES],
             slot_count: 0,
             last_sets: None,
+            graphics_wait: Default::default(),
+            decode_wait: Default::default(),
         };
         unsafe { result.initialize(sps)? };
         Ok(result)
@@ -524,7 +528,10 @@ impl Session {
         let resources = self.resources.as_mut().context("Video session closed")?;
         resources.wait()?;
         let context = resources.context.clone();
-        context.wait_graphics()?;
+        let graphics_started = std::time::Instant::now();
+        let graphics_result = context.wait_graphics();
+        self.graphics_wait.record(graphics_started.elapsed());
+        graphics_result?;
         let raw = &context.raw;
         let size = (bytes.len() as u64).div_ceil(self.alignment) * self.alignment;
         ensure!(
@@ -773,9 +780,10 @@ impl Session {
             )?;
             resources.pending = true;
         }
-        resources
-            .wait()
-            .context("Vulkan decode completion timeout")?;
+        let decode_started = std::time::Instant::now();
+        let decode_result = resources.wait();
+        self.decode_wait.record(decode_started.elapsed());
+        decode_result.context("Vulkan decode completion timeout")?;
         if resources.query != vk::QueryPool::null() {
             let mut status = vk::QueryResultStatusKHR::NOT_READY;
             unsafe {

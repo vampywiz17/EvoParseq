@@ -53,3 +53,14 @@ This removes the previous one-packet-per-refresh throughput limit without
 dropping compressed references, growing the buffer, adding threads or copying
 decoded surfaces. Offline tests cover 60 FPS input versus 59.94 Hz rendering,
 burst ordering, new arrivals during decoding, and stopping.
+
+The live laptop still exhausted the bounded queue after this scheduling change.
+The offline scheduling test does not establish native decoder throughput or
+compositor scheduling. Preview 0.1.1 therefore adds bounded timing counters:
+queue occupancy/oldest age, received/decoded counts, active decode age, peak
+queue wait and decode callback time. On failure it also reports graphics and
+decode fence wait durations using the existing shared Rust timing model.
+These are CPU wall-clock observations, not GPU execution/scanout measurements.
+They contain no payloads or credentials and are printed only on failure.
+Buffer limits, synchronization, transport behavior and GPU surface handling
+remain unchanged by this diagnostic step.

@@ -6,6 +6,44 @@ mod parameters;
 mod playback;
 
 #[test]
+fn overflow_diagnostics_distinguish_active_decode_from_waiting_for_ui() {
+    let playback = playback::Playback::new(eframe::egui::Context::default());
+    playback.submit(&[0]).unwrap();
+    playback
+        .decode_pending(|_| {
+            for _ in 0..8 {
+                playback.submit(&[0]).unwrap();
+            }
+            let error = playback.submit(&[0]).unwrap_err().to_string();
+            assert!(error.contains("packet limit"));
+            assert!(error.contains("received 9, decoded 0"));
+            assert!(!error.contains("active none"));
+            Ok(())
+        })
+        .unwrap();
+    let error = playback.submit(&[0]).unwrap_err().to_string();
+    assert!(error.contains("received 9, decoded 1"));
+    assert!(error.contains("active none"));
+}
+
+#[test]
+fn failed_decode_clears_active_diagnostics_and_does_not_count_as_decoded() {
+    let playback = playback::Playback::new(eframe::egui::Context::default());
+    for _ in 0..8 {
+        playback.submit(&[0]).unwrap();
+    }
+    assert!(
+        playback
+            .decode_pending(|_| anyhow::bail!("codec failure"))
+            .is_err()
+    );
+    playback.submit(&[0]).unwrap();
+    let error = playback.submit(&[0]).unwrap_err().to_string();
+    assert!(error.contains("active none"));
+    assert!(error.contains("decoded 0"));
+}
+
+#[test]
 fn decode_handoff_handles_60_fps_on_a_59_94_hz_display_without_losing_references() {
     let healthy = playback::Playback::new(eframe::egui::Context::default());
     let mut legacy = std::collections::VecDeque::new();
