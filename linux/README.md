@@ -1,32 +1,38 @@
 # EvoParseq Linux preview
 
-The Wayland desktop preview uses egui on Vulkan and shares account sign-in,
-two-factor authentication and computer discovery with the Windows client.
-The account worker holds credentials and session state in memory. Sign-out
-revokes the session through the same shared account code.
+The Wayland desktop uses egui on Vulkan. Authentication, 2FA, host discovery,
+BUD/WebRTC protocols, Opus decoding and H.264 parsing/reference management reuse
+the existing Rust implementations. Credentials remain in memory for this preview.
 
-Video capabilities lists driver-reported support for H.264 High, HEVC Main and
-HEVC Main 10 (progressive 4:2:0). The probe checks codec queue support, profile
-limits and formats that permit both decode output and shader sampling. It
-enumerates all Vulkan adapters separately from the UI adapter selection.
-Actual streaming, decode submission, presentation and PipeWire playback
-still need to be implemented and tested.
+Test WebRTC and Test BUD check connection, H.264 keyframe reception and an
+eight-second PipeWire audio sample. Play WebRTC and Play BUD start the native
+H.264 video preview with PipeWire sound. Disconnect remains available during playback.
 
-The Flatpak uses the Freedesktop 25.08 runtime and its matching driver
-extensions. The host supplies the Wayland compositor, kernel and compatible
-GPU driver. No host filesystem access is required for the preview. CI stages
-tracked sources and locked Cargo dependencies for an offline sandbox build.
+The playback scope is progressive H.264, 8-bit 4:2:0, without frame reordering.
+The host remains unmodified. The decoder's original NV12 surfaces feed the
+presentation shader on the same Vulkan device as the UI. The shader performs
+range expansion, cropping, scaling and YUV-to-RGB conversion in the output pass.
+This is GPU-resident rendering. Application Zero copy mode and compositor/scanout
+behavior require separate implementation or verification.
 
-Install the CI artifact on a Wayland desktop with Flathub configured:
+The initial backend uses bounded completion waits to synchronize Vulkan Video
+with wgpu. Latency, sustained playback and driver compatibility require live
+hardware validation. Encoded input is bounded, and a full input queue ends the
+preview rather than silently corrupting reference pictures. Input forwarding,
+HEVC playback and persistent sign-in are later steps.
 
-```sh
-flatpak install --user EvoParseq-Linux.flatpak
-flatpak run io.github.vampywiz17.EvoParseq
-flatpak run io.github.vampywiz17.EvoParseq --probe-video
-```
+The Flatpak uses Freedesktop 25.08 and matching driver extensions. Its build uses
+the Rust and LLVM SDK extensions. The host supplies Wayland, PipeWire, the kernel
+and a compatible GPU. The sandbox accesses the user's PipeWire socket for audio.
 
-For the streaming backend, select a physical device that can both decode and
-present. Query compatible image usages and queue families before creating the
-decoder and renderer. Sample decoded images in the presentation pass when
-the device supports that combination. This is GPU-resident conversion, and
-compositor or scanout copies require independent verification.
+Install using flatpak install --user --reinstall EvoParseq-Linux.flatpak,
+then launch using flatpak run io.github.vampywiz17.EvoParseq.
+
+On Intel drivers exposing experimental Vulkan Video through Mesa's documented
+switch, explicitly opt in for a test launch using
+flatpak run --env=ANV_DEBUG=video-decode io.github.vampywiz17.EvoParseq.
+
+The Video capabilities page lists driver-reported profiles and sampleable output
+formats. A positive report establishes eligibility for a playback attempt.
+The backend additionally checks that NV12 decode output and reference surfaces
+can be shared with shader sampling, with sufficient DPB slots and reference capacity.

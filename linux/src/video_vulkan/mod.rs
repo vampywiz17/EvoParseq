@@ -17,6 +17,8 @@ pub struct Decoder {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     frame: Option<Arc<Frame>>,
+    frames: Vec<Arc<Frame>>,
+    presentation: Option<((u32, u32), [u32; 4], bool)>,
     srgb: bool,
     pub decoded: u64,
 }
@@ -121,6 +123,8 @@ impl Decoder {
             layout,
             sampler,
             frame: None,
+            frames: Vec::new(),
+            presentation: None,
             srgb: format.is_srgb(),
             decoded: 0,
         }
@@ -133,6 +137,8 @@ impl Decoder {
             .map_err(|e| anyhow::anyhow!("H.264 parsing: {e:?}"))?;
         if read == Read::FormatChanged {
             self.frame = None;
+            self.frames.clear();
+            self.presentation = None;
             self.session = None;
             read = self
                 .stream
@@ -162,76 +168,85 @@ impl Decoder {
         while let Some(next) = self.stream.next_output() {
             output = Some(next.slot);
         }
-        if let Some(slot) = output {
-            let texture = session
-                .textures
-                .get(slot)
-                .context("Invalid output surface")?;
-            let y = texture.create_view(&wgpu::TextureViewDescriptor {
-                label: Some("Decode Y plane"),
-                format: Some(wgpu::TextureFormat::R8Unorm),
-                aspect: wgpu::TextureAspect::Plane0,
-                ..Default::default()
-            });
-            let uv = texture.create_view(&wgpu::TextureViewDescriptor {
-                label: Some("Decode UV plane"),
-                format: Some(wgpu::TextureFormat::Rg8Unorm),
-                aspect: wgpu::TextureAspect::Plane1,
-                ..Default::default()
-            });
-            let values = [
-                visible.0 as f32 / session.size.0 as f32,
-                visible.1 as f32 / session.size.1 as f32,
-                (crop[0] * 2) as f32 / session.size.0 as f32,
-                (crop[2] * 2) as f32 / session.size.1 as f32,
-                if full_range { 1.0 } else { 0.0 },
-                if self.srgb { 1.0 } else { 0.0 },
-                0.0,
-                0.0,
-            ];
-            use wgpu::util::DeviceExt;
-            let constants: Vec<u8> = values
-                .iter()
-                .flat_map(|value| value.to_ne_bytes())
-                .collect();
-            let uniform =
-                self.context
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Video range and crop"),
-                        contents: &constants,
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
-            let bindings = self
-                .context
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Original decoder output"),
-                    layout: &self.layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&y),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&uv),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: uniform.as_entire_binding(),
-                        },
-                    ],
+        let key = (visible, crop, full_range);
+        if self.presentation != Some(key) {
+            self.frames.clear();
+            for texture in &session.textures {
+                let y = texture.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some("Decode Y plane"),
+                    format: Some(wgpu::TextureFormat::R8Unorm),
+                    aspect: wgpu::TextureAspect::Plane0,
+                    ..Default::default()
                 });
-            self.frame = Some(Arc::new(Frame {
-                pipeline: self.pipeline.clone(),
-                bindings,
-                size: visible,
-            }));
+                let uv = texture.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some("Decode UV plane"),
+                    format: Some(wgpu::TextureFormat::Rg8Unorm),
+                    aspect: wgpu::TextureAspect::Plane1,
+                    ..Default::default()
+                });
+                let values = [
+                    visible.0 as f32 / session.size.0 as f32,
+                    visible.1 as f32 / session.size.1 as f32,
+                    (crop[0] * 2) as f32 / session.size.0 as f32,
+                    (crop[2] * 2) as f32 / session.size.1 as f32,
+                    if full_range { 1.0 } else { 0.0 },
+                    if self.srgb { 1.0 } else { 0.0 },
+                    0.0,
+                    0.0,
+                ];
+                use wgpu::util::DeviceExt;
+                let constants: Vec<u8> = values
+                    .iter()
+                    .flat_map(|value| value.to_ne_bytes())
+                    .collect();
+                let uniform =
+                    self.context
+                        .device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Video range and crop"),
+                            contents: &constants,
+                            usage: wgpu::BufferUsages::UNIFORM,
+                        });
+                let bindings = self
+                    .context
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Original decoder output"),
+                        layout: &self.layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&y),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(&uv),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::Sampler(&self.sampler),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: uniform.as_entire_binding(),
+                            },
+                        ],
+                    });
+                self.frames.push(Arc::new(Frame {
+                    pipeline: self.pipeline.clone(),
+                    bindings,
+                    size: visible,
+                }));
+            }
+            self.presentation = Some(key);
+        }
+        if let Some(slot) = output {
+            self.frame = Some(
+                self.frames
+                    .get(slot)
+                    .context("Invalid presentation surface")?
+                    .clone(),
+            );
         }
         self.decoded += 1;
         Ok(())
@@ -254,6 +269,13 @@ impl Decoder {
     }
 }
 
+impl Drop for Decoder {
+    fn drop(&mut self) {
+        self.frame = None;
+        self.frames.clear();
+        self.session = None;
+    }
+}
 struct Present(Arc<Frame>);
 
 impl egui_wgpu::CallbackTrait for Present {

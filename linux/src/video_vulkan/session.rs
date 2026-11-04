@@ -23,7 +23,7 @@ struct Resources {
     session: vk::VideoSessionKHR,
     parameters: vk::VideoSessionParametersKHR,
     session_memory: Vec<vk::DeviceMemory>,
-    images: Vec<(vk::Image, vk::DeviceMemory, vk::ImageView)>,
+    images: Vec<Arc<Image>>,
     buffer: vk::Buffer,
     buffer_memory: vk::DeviceMemory,
     pool: vk::CommandPool,
@@ -32,6 +32,24 @@ struct Resources {
     pending: bool,
 }
 
+struct Image {
+    context: Arc<Context>,
+    image: vk::Image,
+    memory: vk::DeviceMemory,
+    view: vk::ImageView,
+}
+
+impl Drop for Image {
+    fn drop(&mut self) {
+        // Imported textures retain their allocation until the final plane view
+        // and every submitted render command have released it.
+        unsafe {
+            self.context.raw.destroy_image_view(self.view, None);
+            self.context.raw.destroy_image(self.image, None);
+            self.context.raw.free_memory(self.memory, None);
+        }
+    }
+}
 impl Resources {
     fn new(context: Arc<Context>) -> Self {
         Self {
@@ -78,11 +96,6 @@ impl Drop for Resources {
             }
             raw.destroy_buffer(self.buffer, None);
             raw.free_memory(self.buffer_memory, None);
-            for (image, memory, view) in &self.images {
-                raw.destroy_image_view(*view, None);
-                raw.destroy_image(*image, None);
-                raw.free_memory(*memory, None);
-            }
         }
     }
 }
@@ -292,9 +305,12 @@ impl Session {
                     .queue_family_indices(&families);
             }
             let image = unsafe { raw.create_image(&info, None)? };
-            resources
-                .images
-                .push((image, vk::DeviceMemory::null(), vk::ImageView::null()));
+            let mut allocation = Image {
+                context: context.clone(),
+                image,
+                memory: vk::DeviceMemory::null(),
+                view: vk::ImageView::null(),
+            };
             let requirement = unsafe { raw.get_image_memory_requirements(image) };
             let memory = unsafe {
                 raw.allocate_memory(
@@ -307,7 +323,7 @@ impl Session {
                     None,
                 )?
             };
-            resources.images.last_mut().unwrap().1 = memory;
+            allocation.memory = memory;
             unsafe { raw.bind_image_memory(image, memory, 0)? };
             let view = unsafe {
                 raw.create_image_view(
@@ -324,7 +340,9 @@ impl Session {
                     None,
                 )?
             };
-            resources.images.last_mut().unwrap().2 = view;
+            allocation.view = view;
+            let allocation = Arc::new(allocation);
+            resources.images.push(allocation.clone());
             let hal = unsafe { context.device.as_hal::<wgpu::hal::api::Vulkan>() }
                 .context("Vulkan texture interop unavailable")?;
             let size = wgpu::Extent3d {
@@ -346,7 +364,7 @@ impl Session {
                         memory_flags: wgpu::hal::MemoryFlags::empty(),
                         view_formats: Vec::new(),
                     },
-                    Some(Box::new(|| {})),
+                    Some(Box::new(move || drop(allocation))),
                 )
             };
             let texture = unsafe {
@@ -519,7 +537,7 @@ impl Session {
                 .images
                 .get(slot)
                 .context("Invalid H.264 surface slot")?
-                .2;
+                .view;
             Ok(vk::VideoPictureResourceInfoKHR::default()
                 .image_view_binding(view)
                 .coded_extent(vk::Extent2D {
@@ -640,7 +658,7 @@ impl Session {
                 .iter()
                 .map(|slot| {
                     vk::ImageMemoryBarrier::default()
-                        .image(resources.images[*slot].0)
+                        .image(resources.images[*slot].image)
                         .subresource_range(range)
                         .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                         .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
