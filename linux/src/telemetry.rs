@@ -72,6 +72,16 @@ impl Control {
         if session.bus.host_timing.receive(session.generation, bytes) {
             return;
         }
+        // Cursor/control metadata still takes its existing decoding path once.
+        // Only host-settings replies belong to this adapter; do not allocate a
+        // second cursor JSON event on every control frame, even when UI is hidden.
+        if bytes.get(12) != Some(&17)
+            || !bytes
+                .get(4..8)
+                .is_some_and(|id| id == 11i32.to_be_bytes() || id == 12i32.to_be_bytes())
+        {
+            return;
+        }
         if let Ok(crate::control::Message::Buffer {
             event,
             payload: Some(range),
@@ -318,7 +328,6 @@ pub struct View {
     pub timing: crate::frame_timing::Snapshot,
     pub resources: crate::resources_linux::Sampler,
     pub compact: String,
-    pub fields: [String; 6],
     pub display: String,
     pub display_hint: String,
     pub status: String,
@@ -408,43 +417,6 @@ impl View {
         self.windows = host.windows;
         self.host_revision = host.revision;
         self.config_ready = host.config.ready();
-        let value = |key: &str| {
-            observed[key].as_u64().map_or_else(
-                || "Not reported by host".into(),
-                |v| {
-                    if v == 0 {
-                        "Host default".into()
-                    } else {
-                        v.to_string()
-                    }
-                },
-            )
-        };
-        let width = observed["width"].as_u64();
-        let height = observed["height"].as_u64();
-        let resolution = match width.zip(height) {
-            Some((w, h)) if w > 0 && h > 0 => format!("{w} x {h}"),
-            Some(_) => "Keep host".into(),
-            None => "Not reported by host".into(),
-        };
-        self.fields = [
-            resolution,
-            value("bandwidth_mbps"),
-            value("fps"),
-            observed["constant_fps"]
-                .as_bool()
-                .map_or("Not reported by host", |fixed| {
-                    if fixed { "Fixed" } else { "Dynamic" }
-                })
-                .into(),
-            observed["rotated"]
-                .as_bool()
-                .map_or("Not reported by host", |rotated| {
-                    if rotated { "Rotated" } else { "Normal" }
-                })
-                .into(),
-            "Off".into(),
-        ];
         self.display = host
             .config
             .output_id()
