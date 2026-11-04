@@ -603,11 +603,31 @@ impl Session {
             })
             .collect();
         let target = picture(job.current.slot)?;
+        use lowlat_decode::h264::slice::{Marking, Mmco};
+        let long_term = match first.header.marking {
+            Marking::Idr {
+                long_term: true, ..
+            } => Some(0),
+            Marking::Adaptive(operations) => {
+                operations
+                    .as_slice()
+                    .iter()
+                    .flatten()
+                    .find_map(|operation| match operation {
+                        Mmco::CurrentLong(index) => Some(*index),
+                        _ => None,
+                    })
+            }
+            _ => None,
+        };
         let mut target_standard = n::StdVideoDecodeH264ReferenceInfo {
-            FrameNum: u16::try_from(job.current.frame_num)?,
+            FrameNum: u16::try_from(long_term.unwrap_or(job.current.frame_num))?,
             PicOrderCnt: [job.current.top_poc, job.current.bottom_poc],
             ..unsafe { std::mem::zeroed() }
         };
+        target_standard
+            .flags
+            .set_used_for_long_term_reference(long_term.is_some().into());
         let mut target_codec =
             vk::VideoDecodeH264DpbSlotInfoKHR::default().std_reference_info(&target_standard);
         let target_slot = vk::VideoReferenceSlotInfoKHR::default()
