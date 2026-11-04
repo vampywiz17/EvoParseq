@@ -21,6 +21,8 @@ modules:
     buildsystem: simple
     build-commands:
       - >-
+        cargo test --manifest-path linux/Cargo.toml --bin evoparseq-linux linux_ --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
+      - >-
         cargo test --manifest-path linux/Cargo.toml --test video_contract --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
       - >-
         cargo build --manifest-path linux/Cargo.toml --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release

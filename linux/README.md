@@ -25,6 +25,11 @@ deadline, then resumes playback. Continuous background video decoding is not
 implemented in this preview. Input forwarding,
 HEVC playback and persistent sign-in are later steps.
 
+WebRTC probes and playback use the same existing Parsec host certificate
+compatibility policy as Windows/Android. Native video is delivered directly
+from the shared detached WebRTC reader to the Linux queue. Signature and SDP
+fingerprint verification remain enabled; cipher negotiation is unchanged.
+
 The Flatpak uses Freedesktop 25.08 and matching driver extensions. Its build uses
 the Rust and LLVM SDK extensions. The host supplies Wayland, PipeWire, the kernel
 and a compatible GPU. The sandbox accesses the user's PipeWire socket for audio.

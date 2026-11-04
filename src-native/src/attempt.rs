@@ -156,6 +156,8 @@ struct Completion {
     media_ingress: crate::media_ingress::Ingress,
     video_stream: Arc<Mutex<crate::video_stream::Inspector>>,
     audio_stream: Option<crate::audio_stream::Pipeline>,
+    #[cfg(target_os = "linux")]
+    linux_video: Option<Arc<crate::playback::Playback>>,
     #[cfg(any(windows, target_os = "android"))]
     video_output: Option<Arc<native_video::Pipeline>>,
 }
@@ -168,6 +170,8 @@ enum Delivery {
     Audio(Option<crate::audio_stream::Sender>),
     Video {
         inspector: Arc<Mutex<crate::video_stream::Inspector>>,
+        #[cfg(target_os = "linux")]
+        linux_pipeline: Option<Arc<crate::playback::Playback>>,
         #[cfg(any(windows, target_os = "android"))]
         pipeline: Option<Arc<native_video::Pipeline>>,
     },
@@ -187,6 +191,8 @@ impl Delivery {
             Self::Audio(audio) => Some(!audio.is_some_and(|sender| sender.submit(bytes))),
             Self::Video {
                 inspector,
+                #[cfg(target_os = "linux")]
+                linux_pipeline,
                 #[cfg(any(windows, target_os = "android"))]
                 pipeline,
             } => {
@@ -198,7 +204,11 @@ impl Delivery {
                 if let (Some(pipeline), Some(info)) = (pipeline, info) {
                     return Some(!pipeline.submit(bytes, info));
                 }
-                #[cfg(not(any(windows, target_os = "android")))]
+                #[cfg(target_os = "linux")]
+                if let (Some(pipeline), Some(info)) = (linux_pipeline, info) {
+                    return Some(!pipeline.submit_native(bytes, info));
+                }
+                #[cfg(not(any(windows, target_os = "android", target_os = "linux")))]
                 let _ = info;
                 Some(true)
             }
@@ -317,6 +327,8 @@ impl Completion {
             if channel == 1 {
                 return Some(Delivery::Video {
                     inspector: self.video_stream.clone(),
+                    #[cfg(target_os = "linux")]
+                    linux_pipeline: self.linux_video.clone(),
                     #[cfg(any(windows, target_os = "android"))]
                     pipeline: self.video_output.clone(),
                 });
@@ -558,6 +570,8 @@ impl Attempt {
             #[cfg(any(windows, target_os = "android"))]
             video_output: None,
             audio_stream: None,
+            #[cfg(target_os = "linux")]
+            linux_video: None,
         }));
         let finished = Arc::new((Mutex::new(false), Condvar::new()));
         let shared = completion.clone();
@@ -627,6 +641,10 @@ impl Attempt {
         // prevents the old worker from writing into retired output callbacks.
         let mut state = self.completion.lock().unwrap_or_else(|e| e.into_inner());
         state.cancelled = true;
+        #[cfg(target_os = "linux")]
+        if let Some(pipeline) = &state.linux_video {
+            pipeline.stop();
+        }
         #[cfg(any(windows, target_os = "android"))]
         if let Some(pipeline) = &state.video_output {
             pipeline.stop();
@@ -745,10 +763,15 @@ impl Attempt {
     #[cfg(any(target_os = "android", target_os = "linux"))]
     pub fn start_native_media(
         &self,
+        #[cfg(target_os = "linux")] video: Option<Arc<crate::playback::Playback>>,
         #[cfg(target_os = "android")] video: Arc<crate::video_android::Pipeline>,
     ) {
         let mut state = self.completion.lock().unwrap_or_else(|e| e.into_inner());
         state.audio_stream = Some(crate::audio_stream::Pipeline::start_with_budget(Some(100)));
+        #[cfg(target_os = "linux")]
+        {
+            state.linux_video = video;
+        }
         #[cfg(target_os = "android")]
         {
             state.video_output = Some(video);
@@ -1871,7 +1894,44 @@ mod tests {
             #[cfg(any(windows, target_os = "android"))]
             video_output: None,
             audio_stream: None,
+            #[cfg(target_os = "linux")]
+            linux_video: None,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_detached_video_reaches_playback_without_entering_control_receipts() {
+        let playback = crate::playback::Playback::new(eframe::egui::Context::default());
+        let mut state = empty_completion();
+        state.discard_unavailable_media = true;
+        state.linux_video = Some(playback.clone());
+        // Minimal Annex-B parameter/IDR fixture; no GPU or real host required.
+        let bytes = [
+            0, 0, 1, 0x67, 100, 0, 41, 0, 0, 1, 0x68, 0, 0, 1, 0x65, 0x88,
+        ];
+        let delivery = state.prepare_receive(1, false, &bytes).unwrap();
+        assert_eq!(delivery.submit(&bytes), Some(false));
+        assert!(state.messages.is_empty());
+        assert_eq!(
+            playback
+                .decode_pending(|packet| {
+                    assert_eq!(packet, bytes.as_slice());
+                    Ok(())
+                })
+                .unwrap(),
+            1
+        );
+        let pipeline = state.linux_video.take().unwrap();
+        pipeline.stop();
+        assert_eq!(
+            Delivery::Video {
+                inspector: state.video_stream.clone(),
+                linux_pipeline: Some(pipeline)
+            }
+            .submit(&bytes),
+            Some(true)
+        );
     }
 
     #[cfg(windows)]

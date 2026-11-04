@@ -110,6 +110,12 @@ impl Playback {
         Ok(accepted)
     }
 
+    /// Direct detached WebRTC video sink; recovery/failure is observed by the
+    /// existing network loop through take_keyframe_request, never a UI queue.
+    pub fn submit_native(&self, bytes: &[u8], info: PacketInfo) -> bool {
+        self.submit_packet(bytes, info).unwrap_or(false)
+    }
+
     /// A reference-chain restart is deferred while the compositor throttles
     /// the background UI. Audio and network/control polling remain independent.
     pub fn resume_if_ready(&self, focused: bool) -> Result<()> {

@@ -34,7 +34,7 @@ pub fn run_stream(
     session: &account::Session,
     peer: &str,
     mode: Mode,
-    playback: &crate::playback::Playback,
+    playback: &Arc<crate::playback::Playback>,
 ) -> Result<String> {
     run_session(session, peer, mode, Some(playback))
 }
@@ -43,7 +43,7 @@ fn run_session(
     session: &account::Session,
     peer: &str,
     mode: Mode,
-    playback: Option<&crate::playback::Playback>,
+    playback: Option<&Arc<crate::playback::Playback>>,
 ) -> Result<String> {
     let socket = Socket::open(session)?;
     let mut nonce = [0u8; 16];
@@ -59,11 +59,26 @@ fn run_session(
     result
 }
 
+fn create_webrtc_attempt(
+    id: &str,
+    output: Output,
+    config: control::Config,
+    playback: Option<&Arc<crate::playback::Playback>>,
+) -> Result<Attempt> {
+    // Match the existing Windows/Android Parsec host compatibility policy.
+    // This permits legacy RSA key sizes only; signature and SDP fingerprint
+    // checks remain enabled. Probe/playback must not select different policies.
+    let attempt =
+        Attempt::spawn_configured(id, output, Some(config), StunProvider::Parsec, true, None)?;
+    attempt.start_native_media(playback.cloned());
+    Ok(attempt)
+}
+
 fn run_webrtc(
     socket: &Socket,
     peer: &str,
     id: &str,
-    playback: Option<&crate::playback::Playback>,
+    playback: Option<&Arc<crate::playback::Playback>>,
 ) -> Result<String> {
     let writer = socket.writer.clone();
     let target = peer.to_owned();
@@ -88,25 +103,10 @@ fn run_webrtc(
         ten_bit: false,
         chroma_444: false,
     };
-    let mut attempt = Attempt::spawn_configured(
-        id,
-        output,
-        Some(config.clone()),
-        StunProvider::Parsec,
-        playback.is_none(),
-        None,
-    )?;
-    attempt.start_native_media();
+    let mut attempt = create_webrtc_attempt(id, output, config.clone(), playback)?;
     let receiver = attempt
         .audio_receiver()
         .context("Audio pipeline unavailable")?;
-    let mut inspector = crate::video_stream::Inspector::default();
-    inspector.configure(VideoProtocol {
-        version: 1,
-        message_size: 11,
-        version_offset: 0,
-        flag_offset: 4,
-    });
     let result = observe(Mode::WebRtc, receiver, playback, |signaling_closed| {
         if !*signaling_closed {
             for _ in 0..64 {
@@ -149,13 +149,6 @@ fn run_webrtc(
             let Some((channel, text, payload)) = attempt.pop_binary() else {
                 break;
             };
-            if channel == 1 && !text {
-                if let Some(info) = inspector.receive(&payload) {
-                    if let Some(playback) = playback {
-                        playback.submit_packet(&payload, info)?;
-                    }
-                }
-            }
             if channel == 0 && !text {
                 if let Ok(control::Message::Status(code)) = control::decode(&payload) {
                     ensure!(code == 0, "The host ended the connection (status {code})");
@@ -185,11 +178,42 @@ fn run_webrtc(
     result
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linux_probe_and_play_use_the_same_host_certificate_policy() {
+        let playback = crate::playback::Playback::new(eframe::egui::Context::default());
+        for sink in [None, Some(&playback)] {
+            let output = Output::new(Arc::new(|_| Ok(true)));
+            let config = control::Config {
+                video_protocol: VideoProtocol {
+                    version: 1,
+                    message_size: 11,
+                    version_offset: 0,
+                    flag_offset: 4,
+                },
+                allow_hevc: false,
+                ten_bit: false,
+                chroma_444: false,
+            };
+            let mut attempt =
+                create_webrtc_attempt("linux-certificate-policy", output, config, sink).unwrap();
+            let report = attempt.snapshot();
+            assert_eq!(report["legacy_rsa_1024_enabled"], true);
+            assert_eq!(report["unavailable_media_bypasses_control_queue"], true);
+            attempt.cancel();
+            attempt.wait_finished(Duration::from_secs(12)).unwrap();
+        }
+    }
+}
+
 fn run_bud(
     socket: &Socket,
     peer: &str,
     id: &str,
-    playback: Option<&crate::playback::Playback>,
+    playback: Option<&Arc<crate::playback::Playback>>,
 ) -> Result<String> {
     use evoparseq_bud::{
         bud::{Event, Route, Session},
@@ -314,7 +338,7 @@ fn run_bud(
 fn observe(
     mode: Mode,
     receiver: audio_stream::NativeReceiver,
-    playback: Option<&crate::playback::Playback>,
+    playback: Option<&Arc<crate::playback::Playback>>,
     mut poll: impl FnMut(&mut bool) -> Result<(bool, crate::video_stream::Snapshot)>,
 ) -> Result<String> {
     let output = audio_pipewire::Output::start(&receiver);

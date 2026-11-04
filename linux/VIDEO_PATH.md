@@ -101,3 +101,21 @@ decoding. Tests cover a long hidden interval, focus return, cached-parameter
 replay with an IDR lacking parameters, delta gating, repeated window switches,
 the shared recovery timeout and failed refresh requests. Live validation of
 BUD and WebRTC recovery remains necessary.
+
+## Linux WebRTC binding (0.1.4)
+
+The Linux streaming constructor accidentally supplied `playback.is_none()` as
+the shared transport's legacy RSA-1024 compatibility flag. Consequently Test
+WebRTC used the existing Windows/Android host policy, but Play WebRTC did not.
+Both now use the same explicit Parsec compatibility policy. DTLS cipher suites,
+signature verification, SDP fingerprint checks and the crypto libraries are
+unchanged.
+
+The native WebRTC reader already bypassed control receipts for video, but its
+Linux build had only the inspector and no playback sink. The new `cfg(linux)`
+binding in `src-native/src/attempt.rs` sends complete detached video messages
+directly to the existing Linux compressed queue, outside the connection lock.
+Audio continues through the shared audio pipeline. It adds no decoded-image
+copies or queues. Windows and Android retain their existing compiled adapters.
+Regression tests exercise the real probe/play constructor's compatibility flag
+and detached video delivery/cancellation without a host or GPU.
