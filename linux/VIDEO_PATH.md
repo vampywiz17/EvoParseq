@@ -198,3 +198,18 @@ Flatpak includes ANV_DEBUG=video-decode by default, without modifying the host
 Mesa installation or the non-Intel path. No HID enablement or input-device
 sandbox permission is added. GPU synchronization/decode/presentation code is
 unchanged apart from returning existing presentation geometry to the UI.
+
+## Window, settings and cursor corrections (0.1.8)
+
+winit's wayland-csd-adwaita feature restores the documented standard GNOME CSD
+fallback without adding GTK, another renderer or an input-device permission.
+Server-side decorations are still preferred when the compositor provides them.
+Settings shares its existing Windows palette/tab labels and follows its top-tab
+layout, with only implemented Network and Video content. No fullscreen control
+is exposed in the launcher. The shared viewport module calculates initial
+stream-window size from decoded extent, DPI and monitor bounds; the Linux
+adapter sends native size commands only on a new stream extent, preserving
+manual resizing. Wayland controls final position and usable desktop geometry.
+The client cursor icon and native cursor-visible flag are reset together on
+release/launcher entry; consumed remote mouse motion no longer hides hover
+bookkeeping from egui. These changes do not alter decode or GPU surface handling.

@@ -8,3 +8,9 @@ pub const SUBTITLE: &str = "NATIVE CORE  /  Your computers, your connection";
 pub const LOGIN_FIELDS: [&str; 3] = ["Email", "Password", "Two-factor code (optional)"];
 pub const LOGIN_NOTICE: &str =
     "Use your Parsec account. Passwords and two-factor codes are never saved.";
+
+pub const SETTINGS_FIELD: [u8; 3] = [33, 33, 33];
+pub const SETTINGS_TEXT: [u8; 3] = [238, 238, 238];
+pub const SETTINGS_MUTED: [u8; 3] = [188, 188, 188];
+pub const SETTINGS_ACCENT: [u8; 3] = [0, 187, 255];
+pub const SETTINGS_TABS: [&str; 4] = ["Network", "Video", "Audio", "Input"];

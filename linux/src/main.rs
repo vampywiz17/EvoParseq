@@ -88,6 +88,9 @@ struct Desktop {
     error: Option<String>,
     session_result: Option<String>,
     show_video: bool,
+    settings_video: bool,
+    fitted_stream: Option<(u32, u32)>,
+    launcher_size: Option<egui::Vec2>,
     video: Vec<String>,
     renderer: String,
     video_context: Option<Arc<video_vulkan::Context>>,
@@ -192,6 +195,12 @@ impl eframe::App for Desktop {
             if let Some(playback) = self.playback.take() {
                 self.desktop_input.release(ctx, &playback);
                 self.desktop_input.video = None;
+                self.fitted_stream = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(720., 540.)));
+                if let Some(size) = self.launcher_size.take() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+                }
                 playback.stop();
             }
             self.decoder = None;
@@ -260,7 +269,21 @@ impl eframe::App for Desktop {
             if let Some(playback) = self.playback.clone() {
                 let area = self.decoder.as_ref().and_then(|decoder| decoder.show(ui));
                 self.desktop_input.video = area.map(|(rect,_)| rect);
-                if let Some((_,source)) = area { playback.set_input_geometry(source); }
+                if let Some((_,source)) = area {
+                    playback.set_input_geometry(source);
+                    if self.fitted_stream != Some(source) {
+                        let viewport = ctx.input(|input| input.viewport().clone());
+                        if !viewport.fullscreen.unwrap_or(false) && !viewport.maximized.unwrap_or(false) {
+                            if let Some(monitor) = viewport.monitor_size {
+                                if let Some((w,h)) = crate::viewport::stream_window_size(source,ctx.pixels_per_point(),(monitor.x,monitor.y)) {
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(160.,90.)));
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w,h)));
+                                    self.fitted_stream = Some(source);
+                                }
+                            }
+                        }
+                    }
+                }
                 self.desktop_input.cursor(ctx, &playback);
                 self.desktop_input.controls = None;
                 if !self.desktop_input.enabled || self.error.is_some() {
@@ -280,7 +303,10 @@ impl eframe::App for Desktop {
                     });
                     self.desktop_input.controls = Some(area.response.rect);
                 }
-            } else { self.launcher(ui,ctx); }
+            } else {
+                desktop_linux::DesktopInput::restore_cursor(ctx);
+                self.launcher(ui,ctx);
+            }
         });
     }
 }
@@ -317,6 +343,7 @@ fn main() -> anyhow::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("EvoParseq")
             .with_decorations(true)
+            .with_resizable(true)
             .with_app_id("io.github.vampywiz17.EvoParseq")
             .with_icon(eframe::icon_data::from_png_bytes(include_bytes!(
                 "../../assets/evoparseq.png"
@@ -391,6 +418,9 @@ fn main() -> anyhow::Result<()> {
                     error: None,
                     session_result: None,
                     show_video: false,
+                    settings_video: false,
+                    fitted_stream: None,
+                    launcher_size: None,
                 }))
             }),
             &event_loop,

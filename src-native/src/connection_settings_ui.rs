@@ -52,10 +52,10 @@ const BUD_EXTRA: i32 = if cfg!(feature = "bud") { 94 } else { 0 };
 #[cfg(feature = "vendor-video")]
 const ZERO_COPY: usize = 4120;
 const BG: u32 = crate::branding::BACKGROUND;
-const FIELD: u32 = 0x00212121;
-const FG: u32 = 0x00eeeeee;
-const MUTED: u32 = 0x00bcbcbc;
-const ACCENT: u32 = 0x00ffbb00;
+const FIELD: u32 = crate::branding::colorref(crate::app_style::SETTINGS_FIELD);
+const FG: u32 = crate::branding::colorref(crate::app_style::SETTINGS_TEXT);
+const MUTED: u32 = crate::branding::colorref(crate::app_style::SETTINGS_MUTED);
+const ACCENT: u32 = crate::branding::colorref(crate::app_style::SETTINGS_ACCENT);
 const CUSTOM: u8 = 1;
 const CLOUDFLARE: u8 = 2;
 const HELP: usize = 4200;
@@ -240,10 +240,26 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         page.font,
     );
     for (id, label, rect) in [
-        (NETWORK_TAB, "Network", [0, 142, 120, 40]),
-        (VIDEO_TAB, "Video", [132, 142, 120, 40]),
-        (AUDIO_TAB, "Audio", [264, 142, 120, 40]),
-        (INPUT_TAB, "Input", [396, 142, 120, 40]),
+        (
+            NETWORK_TAB,
+            crate::app_style::SETTINGS_TABS[0],
+            [0, 142, 120, 40],
+        ),
+        (
+            VIDEO_TAB,
+            crate::app_style::SETTINGS_TABS[1],
+            [132, 142, 120, 40],
+        ),
+        (
+            AUDIO_TAB,
+            crate::app_style::SETTINGS_TABS[2],
+            [264, 142, 120, 40],
+        ),
+        (
+            INPUT_TAB,
+            crate::app_style::SETTINGS_TABS[3],
+            [396, 142, 120, 40],
+        ),
         (BACK, "Back", [550, 142, 110, 40]),
         (SAVE, "Save settings", [676, 142, 144, 40]),
     ] {

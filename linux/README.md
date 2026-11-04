@@ -85,3 +85,16 @@ Launch normally with flatpak run io.github.vampywiz17.EvoParseq. This documented
 vendor switch enables experimental Intel driver support; it is not a generic
 Vulkan requirement or a guarantee for every GPU/driver. It can be overridden
 using Flatpak's --env option.
+
+Preview 0.1.8 enables winit's standard Adwaita client-side decorations for GNOME
+Wayland, while retaining compositor/server-side decorations where available.
+This supplies a real titlebar, window buttons and resize interactions; exact
+third-party GTK/Qt theme matching is not guaranteed by winit. The launcher no
+longer contains a fullscreen action; fullscreen remains in stream controls.
+Settings follows Windows' horizontal tabs, showing only Network (transport)
+and Video (implemented backend/capability information) for now.
+The stream window fits the first decoded frame's aspect and DPI, limited to
+90% of the monitor dimensions. A source-size change fits again; ordinary user
+resizing is preserved. Launcher size is restored after disconnect. Cursor icon
+and native visibility are both explicitly restored when leaving capture, and
+pointer hover events remain available to the UI framework.

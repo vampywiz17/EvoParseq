@@ -46,6 +46,9 @@ impl Desktop {
             ));
             let playback = crate::playback::Playback::new(ctx.clone());
             self.desktop_input.video = None;
+            self.launcher_size =
+                ctx.input(|input| input.viewport().inner_rect.map(|rect| rect.size()));
+            self.fitted_stream = None;
             self.playback = Some(playback.clone());
             self.send(Command::Stream(peer, self.transport, playback));
         }
@@ -53,6 +56,7 @@ impl Desktop {
     pub(super) fn launcher(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         egui::ScrollArea::vertical().show(ui, |ui| {
         egui::Frame::new().inner_margin(28.).show(ui, |ui| {
+            if self.show_video { self.settings(ui); return; }
             ui.horizontal(|ui| {
                 ui.image((self.logo.id(), egui::vec2(44.,44.)));
                 ui.horizontal(|ui| {
@@ -62,28 +66,12 @@ impl Desktop {
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button(if self.show_video { "Back" } else { "Settings" }).clicked() { self.show_video = !self.show_video; }
-                    if ui.small_button("Full screen").clicked() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!ctx.input(|i| i.viewport().fullscreen.unwrap_or(false))));
-                    }
+
                 });
             });
             ui.label(RichText::new(app_style::SUBTITLE).size(14.).color(Color32::GRAY));
             ui.add_space(14.);
             if let Some(error) = &self.error { ui.colored_label(Color32::LIGHT_RED, error); }
-            if self.show_video {
-                ui.heading("Settings");
-                ui.label("Connection");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.transport, connection::Mode::WebRtc, "WebRTC");
-                    ui.selectable_value(&mut self.transport, connection::Mode::Bud, "BUD");
-                });
-                ui.separator();
-                ui.heading("Device capabilities");
-                ui.label(format!("UI adapter: {}",self.renderer));
-                ui.small("Driver-reported capabilities; playback support is validated separately.");
-                egui::ScrollArea::vertical().show(ui, |ui| { for line in &self.video { ui.label(line); } });
-                return;
-            }
             ui.add_enabled_ui(!self.busy, |ui| {
                 if self.signed_in {
                     ui.heading("Your computers");
@@ -146,6 +134,86 @@ impl Desktop {
     }
 }
 
+impl Desktop {
+    fn settings(&mut self, ui: &mut egui::Ui) {
+        ui.visuals_mut().override_text_color = Some(color(app_style::SETTINGS_TEXT));
+        ui.visuals_mut().extreme_bg_color = color(app_style::SETTINGS_FIELD);
+        ui.visuals_mut().selection.bg_fill = color(app_style::SETTINGS_ACCENT);
+        ui.label(RichText::new("Settings").size(46.));
+        ui.label("Customize your connection and video playback.");
+        ui.add_space(12.);
+        ui.horizontal(|ui| {
+            if ui
+                .add_sized(
+                    [120., 40.],
+                    egui::Button::new(app_style::SETTINGS_TABS[0]).selected(!self.settings_video),
+                )
+                .clicked()
+            {
+                self.settings_video = false;
+            }
+            if ui
+                .add_sized(
+                    [120., 40.],
+                    egui::Button::new(app_style::SETTINGS_TABS[1]).selected(self.settings_video),
+                )
+                .clicked()
+            {
+                self.settings_video = true;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_sized([110., 40.], egui::Button::new("Back"))
+                    .clicked()
+                {
+                    self.show_video = false;
+                }
+            });
+        });
+        ui.separator();
+        ui.label(
+            RichText::new(if self.settings_video {
+                "VIDEO"
+            } else {
+                "NETWORK"
+            })
+            .color(color(app_style::SETTINGS_ACCENT)),
+        );
+        if self.settings_video {
+            ui.label("Device capabilities");
+            ui.label(format!("UI adapter: {}", self.renderer));
+            ui.small("Driver-reported capabilities. The current playback backend supports H.264 8-bit 4:2:0.");
+            for line in &self.video {
+                ui.label(line);
+            }
+        } else {
+            egui::Grid::new("network-settings")
+                .num_columns(2)
+                .spacing([24., 18.])
+                .show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.label("Transport");
+                        ui.small("Select the transport for your next connection.");
+                    });
+                    egui::ComboBox::from_id_salt("transport")
+                        .selected_text(self.transport.label())
+                        .width(250.)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.transport,
+                                connection::Mode::WebRtc,
+                                "WebRTC",
+                            );
+                            ui.selectable_value(&mut self.transport, connection::Mode::Bud, "BUD");
+                        });
+                    ui.end_row();
+                });
+            ui.add_space(16.);
+            ui.small("Changes apply to the next connection and remain in memory for this run.");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +244,9 @@ mod tests {
             error: None,
             session_result: None,
             show_video: false,
+            settings_video: false,
+            fitted_stream: None,
+            launcher_size: None,
             video: Vec::new(),
             renderer: "fixture".into(),
             video_context: None,
@@ -184,8 +255,15 @@ mod tests {
             decoder: None,
             playback: None,
         };
-        for signed_in in [false, true] {
+        for (signed_in, settings, video) in [
+            (false, false, false),
+            (true, false, false),
+            (true, true, false),
+            (true, true, true),
+        ] {
             app.signed_in = signed_in;
+            app.show_video = settings;
+            app.settings_video = video;
             let raw = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,

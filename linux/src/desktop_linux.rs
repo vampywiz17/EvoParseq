@@ -29,8 +29,7 @@ impl DesktopInput {
         self.keyboard.bind(None);
         self.wheel = Vec2::ZERO;
         self.grabbed = false;
-        ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(egui::CursorGrab::None));
-        ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
+        Self::restore_cursor(ctx);
     }
     pub fn enable(&mut self, playback: &std::sync::Arc<Playback>) {
         if !self.enabled && playback.input_ready() && self.video.is_some() {
@@ -48,8 +47,20 @@ impl DesktopInput {
             } else {
                 egui::CursorGrab::None
             }));
-            ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(!grab));
         }
+        // Visibility commands and egui's cached cursor icon are separate state.
+        // Publish both, including when returning from a locked stream.
+        ctx.set_cursor_icon(if grab {
+            egui::CursorIcon::None
+        } else {
+            egui::CursorIcon::Default
+        });
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(!grab));
+    }
+    pub fn restore_cursor(ctx: &egui::Context) {
+        ctx.set_cursor_icon(egui::CursorIcon::Default);
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(egui::CursorGrab::None));
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
     }
     fn inside(&self, pos: Pos2) -> bool {
         self.video.is_some_and(|rect| rect.contains(pos))
@@ -116,7 +127,8 @@ impl DesktopInput {
                 {
                     let local = *pos - self.video.unwrap().min;
                     self.pointer(playback, local, false, true, (0, 0));
-                    false
+                    // Keep egui's hover/leave bookkeeping current as well.
+                    true
                 }
                 Event::MouseMoved(delta) if self.grabbed => {
                     self.pointer(playback, *delta, true, true, (0, 0));
@@ -205,5 +217,46 @@ mod tests {
         raw.focused = false;
         adapter.events(&ctx, &mut raw, &playback);
         assert!(!adapter.enabled);
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+    #[test]
+    fn linux_cursor_restore_clears_both_egui_icon_and_native_visibility() {
+        let ctx = egui::Context::default();
+        let playback = Playback::new(ctx.clone());
+        playback.set_capture(true);
+        let mut adapter = DesktopInput {
+            enabled: true,
+            ..Default::default()
+        };
+        let locked = ctx.run(egui::RawInput::default(), |ctx| {
+            adapter.cursor(ctx, &playback)
+        });
+        assert_eq!(locked.platform_output.cursor_icon, egui::CursorIcon::None);
+        let restored = ctx.run(egui::RawInput::default(), |ctx| {
+            adapter.release(ctx, &playback);
+            DesktopInput::restore_cursor(ctx);
+        });
+        assert_eq!(
+            restored.platform_output.cursor_icon,
+            egui::CursorIcon::Default
+        );
+        let commands = &restored
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .unwrap()
+            .commands;
+        assert!(
+            commands
+                .iter()
+                .any(|cmd| matches!(cmd, egui::ViewportCommand::CursorVisible(true)))
+        );
+        assert!(commands.iter().any(|cmd| matches!(
+            cmd,
+            egui::ViewportCommand::CursorGrab(egui::CursorGrab::None)
+        )));
     }
 }
