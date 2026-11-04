@@ -167,13 +167,18 @@ fn run_webrtc(
     let result = result.map_err(|error| {
         let state = attempt.snapshot();
         let message = format!(
-            "{error}. Offer ready: {}; remote description: {}; ICE candidates (local/remote): {}/{}; open channels: {}; transport: {}",
+            "{error}. Offer ready: {}; remote description: {}; ICE candidates (local/remote): {}/{}; open channels: {}; transport: {}; native media: {}; failure channel: {}; control receipts: {} / {} bytes; max C/V/A: {}",
             state["offer_ready"],
             state["remote_description_set"],
             state["local_candidates"],
             state["remote_candidates"],
             state["channels_open"],
             state["transport_states"],
+            state["unavailable_media_bypasses_control_queue"],
+            state["failure_channel"],
+            state["queued_messages"],
+            state["queued_message_bytes"],
+            state["channel_max_message_bytes"],
         );
         eprintln!("{message}");
         anyhow::anyhow!(message)

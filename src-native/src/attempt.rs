@@ -158,6 +158,8 @@ struct Completion {
     audio_stream: Option<crate::audio_stream::Pipeline>,
     #[cfg(target_os = "linux")]
     linux_video: Option<Arc<dyn crate::video_output::NativeSink>>,
+    #[cfg(target_os = "linux")]
+    linux_consumer: Option<std::thread::Thread>,
     #[cfg(any(windows, target_os = "android"))]
     video_output: Option<Arc<native_video::Pipeline>>,
 }
@@ -356,6 +358,10 @@ impl Completion {
         }
         self.message_bytes += bytes.len();
         self.messages.push_back((channel, text, bytes));
+        #[cfg(target_os = "linux")]
+        if let Some(consumer) = &self.linux_consumer {
+            consumer.unpark();
+        }
         true
     }
 
@@ -572,6 +578,8 @@ impl Attempt {
             audio_stream: None,
             #[cfg(target_os = "linux")]
             linux_video: None,
+            #[cfg(target_os = "linux")]
+            linux_consumer: None,
         }));
         let finished = Arc::new((Mutex::new(false), Condvar::new()));
         let shared = completion.clone();
@@ -771,6 +779,7 @@ impl Attempt {
         #[cfg(target_os = "linux")]
         {
             state.linux_video = video;
+            state.linux_consumer = Some(std::thread::current());
         }
         #[cfg(target_os = "android")]
         {
@@ -1896,7 +1905,31 @@ mod tests {
             audio_stream: None,
             #[cfg(target_os = "linux")]
             linux_video: None,
+            #[cfg(target_os = "linux")]
+            linux_consumer: None,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_control_receipt_wakes_the_existing_consumer() {
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            ready_tx.send(std::thread::current()).unwrap();
+            std::thread::park();
+            done_tx.send(()).unwrap();
+        });
+        let consumer = ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let mut state = empty_completion();
+        state.linux_consumer = Some(consumer.clone());
+        assert!(state.queue_received(0, false, Bytes::from_static(b"fixture-control")));
+        let result = done_rx.recv_timeout(Duration::from_secs(5));
+        // Always release the fixture thread, including a regression failure.
+        consumer.unpark();
+        worker.join().unwrap();
+        result.unwrap();
+        assert_eq!(state.messages.len(), 1);
     }
 
     #[cfg(target_os = "linux")]
@@ -1925,7 +1958,7 @@ mod tests {
         state.linux_video = Some(playback.clone());
         // Minimal Annex-B parameter/IDR fixture; no GPU or real host required.
         let bytes = [
-            0, 0, 1, 0x67, 100, 0, 41, 0, 0, 1, 0x68, 0, 0, 1, 0x65, 0x88,
+            0, 0, 1, 0x67, 100, 0, 41, 0, 0, 1, 0x68, 0xee, 0, 0, 1, 0x65, 0x88,
         ];
         let delivery = state.prepare_receive(1, false, &bytes).unwrap();
         assert_eq!(delivery.submit(&bytes), Some(false));

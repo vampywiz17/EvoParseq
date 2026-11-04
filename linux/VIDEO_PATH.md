@@ -119,3 +119,12 @@ Audio continues through the shared audio pipeline. It adds no decoded-image
 copies or queues. Windows and Android retain their existing compiled adapters.
 Regression tests exercise the real probe/play constructor's compatibility flag
 and detached video delivery/cancellation without a host or GPU.
+
+The shared reader's Linux sink is a small UI-independent `NativeSink` trait;
+the Linux frontend supplies its implementation. Android's Linux-hosted Rust
+tests therefore do not acquire an egui/playback dependency. New queued control
+receipts unpark the already existing Linux network consumer, as account
+signaling and BUD already do. The 16-message control bound, SCTP ordering,
+reliability, ICE/DTLS timers and cipher negotiation are unchanged. The Linux
+failure report includes the failed channel and bounded queue counters, without
+SDP, credentials or payload text.
