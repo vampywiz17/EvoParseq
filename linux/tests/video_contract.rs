@@ -413,3 +413,34 @@ fn shared_byte_limit_still_bounds_memory_and_consumption_releases_it() {
             .is_err()
     );
 }
+
+#[test]
+fn bud_encoder_rebuild_retires_old_references_and_resumes_with_parameters() {
+    let playback = playback::Playback::new(eframe::egui::Context::default());
+    let fixture = include_bytes!("data/h264-40-frames.bin");
+    let size = u32::from_le_bytes(fixture[..4].try_into().unwrap()) as usize;
+    let first = &fixture[4..4 + size];
+    let info = video_stream::Inspector::default().receive(first).unwrap();
+    assert!(info.idr && info.parameters);
+    assert!(playback.submit_packet(first, info).unwrap());
+    playback.encoder_rebuilt();
+    assert!(playback.take_keyframe_request().unwrap().is_some());
+    let mut count = 0;
+    playback
+        .decode_pending(|_| {
+            count += 1;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(count, 0, "old generation must not reach the decoder");
+    assert!(playback.submit_packet(first, info).unwrap());
+    playback
+        .decode_pending(|bytes| {
+            assert!(bytes.ends_with(first));
+            count += 1;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(count, 1);
+    assert!(playback.status().is_none());
+}

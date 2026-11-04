@@ -30,6 +30,13 @@ compatibility policy as Windows/Android. Native video is delivered directly
 from the shared detached WebRTC reader to the Linux queue. Signature and SDP
 fingerprint verification remain enabled; cipher negotiation is unchanged.
 
+BUD playback uses the same Rust media ingress as Windows: video-first batches
+of eight messages per media stream, immediate draining of full batches, borrowed
+payload parsing, encoder-generation handling and keyframe gating. Only native
+output adapters differ. The Linux preview still requests H.264 8-bit and stereo
+Opus; rotated playback is not implemented. No new GPU copies or decode worker
+threads are introduced by this handoff.
+
 The Flatpak uses Freedesktop 25.08 and matching driver extensions. Its build uses
 the Rust and LLVM SDK extensions. The host supplies Wayland, PipeWire, the kernel
 and a compatible GPU. The sandbox accesses the user's PipeWire socket for audio.

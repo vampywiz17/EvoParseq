@@ -162,7 +162,7 @@ fn run_webrtc(
         if let Some(stage) = attempt.failure_stage() {
             bail!("WebRTC connection failed ({stage})");
         }
-        Ok((attempt.control_ready(), attempt.video_snapshot()))
+        Ok((attempt.control_ready(), attempt.video_snapshot(), false))
     });
     let result = result.map_err(|error| {
         let state = attempt.snapshot();
@@ -225,8 +225,7 @@ fn run_bud(
     playback: Option<&Arc<crate::playback::Playback>>,
 ) -> Result<String> {
     use evoparseq_bud::{
-        bud::{Event, Route, Session},
-        media,
+        bud::{Event, Route},
         signaling::Signaling,
     };
 
@@ -248,7 +247,13 @@ fn run_bud(
         .map(|addresses| addresses.collect())
         .unwrap_or_default()
     });
-    let mut session = Session::external_video(false)?;
+    let mut session = crate::bud_ingress::session(
+        false,
+        false,
+        false,
+        false,
+        crate::audio_layout::Layout::STEREO,
+    )?;
     session.wake_consumer(std::thread::current());
     let credentials = session.offer(id, Route::Direct { stun })?;
     let mut source = session.take_media()?;
@@ -259,7 +264,7 @@ fn run_bud(
     );
     let audio = audio_stream::Pipeline::start_with_budget(Some(100));
     let sender = audio.sender().context("Audio pipeline unavailable")?;
-    let mut inspector = crate::video_stream::Inspector::default();
+    let mut ingress = crate::bud_ingress::VideoState::new(false, false, false);
     let mut established = false;
     let result = observe(
         Mode::Bud,
@@ -303,41 +308,15 @@ fn run_bud(
             }
             if let Some(playback) = playback {
                 if let Some(generation) = playback.take_keyframe_request()? {
+                    ingress.wait_for_keyframe();
                     if !session.request_keyframe_format(false) {
                         playback.keyframe_request_failed(generation);
                         anyhow::bail!("BUD could not request a video resume keyframe");
                     }
                 }
             }
-            for _ in 0..32 {
-                if source
-                    .with_audio(|bytes| {
-                        sender.submit(media::opus(bytes)?);
-                        Ok(())
-                    })?
-                    .is_none()
-                {
-                    break;
-                }
-            }
-            for _ in 0..32 {
-                if source
-                    .with_video(|bytes| {
-                        if let media::Video::AccessUnit { annex_b, .. } = media::video(bytes)? {
-                            if let Some(info) = inspector.receive(annex_b) {
-                                if let Some(playback) = playback {
-                                    playback.submit_packet(annex_b, info)?;
-                                }
-                            }
-                        }
-                        Ok(())
-                    })?
-                    .is_none()
-                {
-                    break;
-                }
-            }
-            Ok((established, inspector.snapshot()))
+            let pumped = crate::bud_ingress::pump(&mut source, &mut ingress, &playback, &sender)?;
+            Ok((established, ingress.snapshot(), pumped.more_pending()))
         },
     );
     session.close();
@@ -348,7 +327,7 @@ fn observe(
     mode: Mode,
     receiver: audio_stream::NativeReceiver,
     playback: Option<&Arc<crate::playback::Playback>>,
-    mut poll: impl FnMut(&mut bool) -> Result<(bool, crate::video_stream::Snapshot)>,
+    mut poll: impl FnMut(&mut bool) -> Result<(bool, crate::video_stream::Snapshot, bool)>,
 ) -> Result<String> {
     let output = audio_pipewire::Output::start(&receiver);
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -360,7 +339,7 @@ fn observe(
         if playback.is_some_and(|playback| playback.stopped()) {
             return Ok(format!("{mode} stream disconnected"));
         }
-        let (ready, video) = poll(&mut signaling_closed)?;
+        let (ready, video, more_pending) = poll(&mut signaling_closed)?;
         connected |= ready;
         let now = Instant::now();
         if keyframe.is_none() && ready && video.parameter_sets_and_idr_observed {
@@ -388,6 +367,34 @@ fn observe(
             }
             bail!("{mode} connection timed out");
         }
-        std::thread::park_timeout(Duration::from_millis(10));
+        if !more_pending {
+            std::thread::park_timeout(Duration::from_millis(10));
+        }
+    }
+}
+
+// The connection probe shares all framing/gating policy but has no decoder.
+impl crate::bud_ingress::VideoTarget for Option<&Arc<crate::playback::Playback>> {
+    fn encoder_rebuilt(&self) {
+        if let Some(playback) = self {
+            playback.encoder_rebuilt();
+        }
+    }
+    fn submit_oriented(
+        &self,
+        bytes: &[u8],
+        info: crate::video_stream::PacketInfo,
+        rotation: u8,
+    ) -> Result<bool> {
+        match self {
+            Some(playback) => {
+                ensure!(
+                    rotation == 0,
+                    "Rotated video is not supported in the Linux playback preview"
+                );
+                playback.submit_packet(bytes, info)
+            }
+            None => Ok(true),
+        }
     }
 }

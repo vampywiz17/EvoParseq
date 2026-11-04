@@ -110,6 +110,13 @@ impl Playback {
         Ok(accepted)
     }
 
+    pub fn encoder_rebuilt(&self) {
+        let mut state = self.packets.lock().unwrap_or_else(|e| e.into_inner());
+        if state.queue.encoder_rebuilt(Instant::now()) {
+            state.initialization = None;
+        }
+    }
+
     /// A reference-chain restart is deferred while the compositor throttles
     /// the background UI. Audio and network/control polling remain independent.
     pub fn resume_if_ready(&self, focused: bool) -> Result<()> {

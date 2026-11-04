@@ -925,7 +925,7 @@ fn run(
             continue;
         }
         ensure!(!ended, "BUD transport ended");
-        if pumped.video_messages >= 8 || pumped.audio_messages >= 8 {
+        if pumped.more_pending() {
             continue;
         }
         // Packet arrivals unpark this consumer; this timeout only checks lifecycle/stats.

@@ -9,6 +9,8 @@ pub mod audio_layout;
 mod audio_pipewire;
 #[path = "../../src-native/src/audio_stream.rs"]
 pub mod audio_stream;
+#[path = "../../src-native/src/bud_ingress.rs"]
+mod bud_ingress;
 #[path = "../../src-native/src/codec_initialization.rs"]
 pub mod codec_initialization;
 mod connection_probe;

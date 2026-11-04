@@ -20,6 +20,8 @@ mod branding;
 #[cfg(all(windows, feature = "bud"))]
 mod bud_attempt;
 #[cfg(all(windows, feature = "bud"))]
+mod bud_ingress;
+#[cfg(all(windows, feature = "bud"))]
 mod bud_media;
 #[cfg(feature = "bud")]
 mod bud_routes;
