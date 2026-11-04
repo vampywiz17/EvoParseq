@@ -9,6 +9,7 @@ pub struct Context {
     pub raw: ash::Device,
     pub physical: vk::PhysicalDevice,
     pub decode_family: u32,
+    pub decode_status: bool,
     pub decode_queue: vk::Queue,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -77,9 +78,15 @@ unsafe fn create_on(instance: &wgpu::Instance, adapter: &wgpu::Adapter) -> Resul
     }
     let count = unsafe { raw_instance.get_physical_device_queue_family_properties2_len(physical) };
     let mut operations = vec![vk::QueueFamilyVideoPropertiesKHR::default(); count];
+    let mut statuses = vec![vk::QueueFamilyQueryResultStatusPropertiesKHR::default(); count];
     let mut queries: Vec<_> = operations
         .iter_mut()
-        .map(|op| vk::QueueFamilyProperties2::default().push_next(op))
+        .zip(&mut statuses)
+        .map(|(op, status)| {
+            vk::QueueFamilyProperties2::default()
+                .push_next(op)
+                .push_next(status)
+        })
         .collect();
     unsafe { raw_instance.get_physical_device_queue_family_properties2(physical, &mut queries) };
     let families: Vec<_> = queries.iter().map(|q| q.queue_family_properties).collect();
@@ -156,6 +163,7 @@ unsafe fn create_on(instance: &wgpu::Instance, adapter: &wgpu::Adapter) -> Resul
         instance: raw_instance.clone(),
         physical,
         decode_family,
+        decode_status: statuses[decode_family as usize].query_result_status_support != 0,
         decode_queue: unsafe { raw.get_device_queue(decode_family, 0) },
         properties: unsafe { raw_instance.get_physical_device_memory_properties(physical) },
         video: super::commands::Commands::new(raw_instance, &raw),

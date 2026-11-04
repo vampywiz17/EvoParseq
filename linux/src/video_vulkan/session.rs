@@ -29,6 +29,7 @@ struct Resources {
     pool: vk::CommandPool,
     command: vk::CommandBuffer,
     fence: vk::Fence,
+    query: vk::QueryPool,
     pending: bool,
 }
 
@@ -63,6 +64,7 @@ impl Resources {
             pool: vk::CommandPool::null(),
             command: vk::CommandBuffer::null(),
             fence: vk::Fence::null(),
+            query: vk::QueryPool::null(),
             pending: false,
         }
     }
@@ -86,6 +88,7 @@ impl Drop for Resources {
         unsafe {
             let raw = &self.context.raw;
             raw.destroy_fence(self.fence, None);
+            raw.destroy_query_pool(self.query, None);
             raw.destroy_command_pool(self.pool, None);
             self.context
                 .video
@@ -244,6 +247,18 @@ impl Session {
                 .video
                 .bind_video_session_memory(resources.session, &bindings)?
         };
+        if context.decode_status {
+            let mut query_profile = profile;
+            resources.query = unsafe {
+                raw.create_query_pool(
+                    &vk::QueryPoolCreateInfo::default()
+                        .query_type(vk::QueryType::RESULT_STATUS_ONLY_KHR)
+                        .query_count(1)
+                        .push_next(&mut query_profile),
+                    None,
+                )?
+            };
+        }
         let profiles = [profile];
         let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
         let usage = vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
@@ -501,7 +516,7 @@ impl Session {
         self.slot_ids[job.current.slot] = Some(free);
         let resources = self.resources.as_mut().context("Video session closed")?;
         resources.wait()?;
-        let context = &resources.context;
+        let context = resources.context.clone();
         context.wait_graphics()?;
         let raw = &context.raw;
         let size = (bytes.len() as u64).div_ceil(self.alignment) * self.alignment;
@@ -679,6 +694,9 @@ impl Session {
                 &[],
                 &barriers,
             );
+            if resources.query != vk::QueryPool::null() {
+                raw.cmd_reset_query_pool(resources.command, resources.query, 0, 1);
+            }
             context.video.cmd_begin_video_coding(
                 resources.command,
                 &vk::VideoBeginCodingInfoKHR::default()
@@ -693,7 +711,18 @@ impl Session {
                         .flags(vk::VideoCodingControlFlagsKHR::RESET),
                 );
             }
+            if resources.query != vk::QueryPool::null() {
+                raw.cmd_begin_query(
+                    resources.command,
+                    resources.query,
+                    0,
+                    vk::QueryControlFlags::empty(),
+                );
+            }
             context.video.cmd_decode_video(resources.command, &decode);
+            if resources.query != vk::QueryPool::null() {
+                raw.cmd_end_query(resources.command, resources.query, 0);
+            }
             context
                 .video
                 .cmd_end_video_coding(resources.command, &Default::default());
@@ -729,6 +758,21 @@ impl Session {
         resources
             .wait()
             .context("Vulkan decode completion timeout")?;
+        if resources.query != vk::QueryPool::null() {
+            let mut status = vk::QueryResultStatusKHR::NOT_READY;
+            unsafe {
+                raw.get_query_pool_results(
+                    resources.query,
+                    0,
+                    std::slice::from_mut(&mut status),
+                    vk::QueryResultFlags::WITH_STATUS_KHR,
+                )?
+            };
+            ensure!(
+                status.as_raw() > 0,
+                "Vulkan decoder rejected the picture: {status:?}"
+            );
+        }
         self.initialized = true;
         let _ = &mut target_standard;
         Ok(())
