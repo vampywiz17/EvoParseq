@@ -11,6 +11,9 @@ pub mod audio_layout;
 #[path = "../../../src-native/src/audio_stream.rs"]
 pub mod audio_stream;
 #[path = "../../../src-native/src/bud_ingress.rs"]
+// Native lifecycle calls pump only on Android; host builds exercise its
+// borrowed-media contracts through this same source's isolated unit tests.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub mod bud_ingress;
 #[path = "../../../src-native/src/codec_initialization.rs"]
 pub mod codec_initialization;

@@ -188,7 +188,7 @@ impl PacketSource for MediaSource {
 }
 
 /// Bounded work on the consumer, without holding session/global GUI locks.
-pub fn pump(
+pub(crate) fn pump(
     source: &mut MediaSource,
     state: &mut VideoState,
     target: &impl VideoTarget,

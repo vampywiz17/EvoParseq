@@ -176,6 +176,20 @@ impl Desktop {
                 );
             });
         }
+        label(
+            ui,
+            r([0, footer, 820, 64]),
+            "N/A",
+            13.,
+            color(app_style::SETTINGS_MUTED),
+        );
+        label(
+            ui,
+            r([0, footer + 78, 820, 40]),
+            "N/A",
+            16.,
+            color(app_style::SETTINGS_TEXT),
+        );
     }
     pub(super) fn menu_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("native-menu")
