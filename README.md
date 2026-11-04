@@ -12,12 +12,58 @@ requires no browser, WebView or helper executable.
 **This is an independent community project, not affiliated with or endorsed by
 Parsec, Unity or lowlat.** A Parsec account and a compatible host are required.
 
-**This is the development branch (0.9.6-dev.1): Windows plus an Android TV preview.**
-Download [**v0.9.6-dev.1**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6-dev.1)
-for Windows ZIPs and the Android TV APK. This prerelease is installed manually.
-The stable Windows client is [**EvoParseq v0.9.5**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.5)
-on `main`. This branch adds controller support on Windows and Android TV;
-these additions are not included in the stable Windows release.
+**This is the Linux Flatpak development branch (`codex/linux-flatpak`).**
+The current Linux preview is **0.1.13**, alongside the existing Windows and
+Android TV clients. Linux support is experimental and is not a stable release.
+Download `EvoParseq-Linux-Flatpak` from a successful
+[Linux Flatpak CI run](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Acodex%2Flinux-flatpak).
+The stable Windows client remains [**v0.9.5**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.5);
+[**v0.9.6-dev.1**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6-dev.1)
+provides the published Windows/Android TV prerelease. Linux preview version
+numbers are separate from those releases.
+
+## Linux Flatpak preview
+
+- **Wayland + Vulkan:** egui desktop UI follows the Windows client's shared
+  wording, logical dimensions and layout, with native desktop window decorations.
+  Login/computer picker and Settings have fixed sizes; the stream is resizable
+  and uses centered aspect fitting. Connection stats is a separate native window.
+- **Shared Rust core:** account/2FA, discovery, session preferences, settings,
+  WebRTC/BUD, media ingress, normal input and diagnostic models are reused.
+  Linux adapters provide Vulkan Video/Vulkan, PipeWire, Wayland input and
+  Secret portal credential protection.
+- **Playback:** WebRTC and explicit BUD selection, progressive H.264 8-bit 4:2:0
+  and stereo Opus. Original NV12 decoder surfaces feed the same-device Vulkan
+  presentation shader; no application-side decoded-image copy or CPU readback.
+  Shader conversion still costs GPU work: this is GPU-resident rendering,
+  **not the application's Zero copy mode**.
+- **Controls:** normal mouse/keyboard, host-requested relative capture, a
+  draggable session icon, host display selection, resolution/bitrate/FPS/pacing
+  requests, fullscreen, local PipeWire mute/volume and Disconnect. Host settings
+  replies and Apply confirmation use the shared Rust models.
+- **Diagnostics:** live overlay and Connection stats, with four Overview cards
+  in a 2-by-2 layout. CPU/RSS are sampled at most once per second and only while
+  Connection stats is open. No GPU utilization sampler or extra render pass is
+  introduced; unavailable measurements remain explicitly unavailable.
+- **Persistence:** Windows-compatible `settings.json` schema and encrypted
+  remembered sessions through the Linux Secret portal. Passwords and 2FA codes
+  are never saved; protected credentials are not portable between platforms.
+
+Linux currently requires a working Wayland desktop, PipeWire and a driver
+exposing the necessary Vulkan Video H.264 decode and sampleable NV12 surfaces.
+A Flatpak runtime cannot add missing GPU/kernel capabilities. Intel HD 520
+playback has been tested on the maintainer's HP EliteBook 840 G3; that does not
+establish support on every Skylake system or driver. The package defaults to
+`ANV_DEBUG=video-decode` for Mesa Intel's experimental video path.
+
+**Not yet integrated on Linux:** HEVC/10-bit/4:4:4 playback, the application's
+Zero copy mode, AI upscaling, HID, controllers, clipboard synchronization,
+rotation, explicit immersive-mode selection and TURN configuration controls.
+The full Settings layout is present; unimplemented controls remain disabled.
+
+See [Linux installation, current scope and diagnostics](linux/README.md) and
+the [video-path audit](linux/VIDEO_PATH.md). The Windows feature list below
+should not be read as Linux feature parity.
 
 ## Android TV preview
 
@@ -44,9 +90,9 @@ Use the [preview release](https://github.com/vampywiz17/EvoParseq/releases/tag/v
 or successful [dev Android CI artifacts](https://github.com/vampywiz17/EvoParseq/actions/workflows/android-tv.yml?query=branch%3Adev)
 for previews; the stable Windows ZIP is not an Android package.
 [Android TV setup, build and limits](android-tv/README.md).
-The Windows features below remain available on this branch.
+The Windows features below describe the Windows client, not Android/Linux parity.
 
-## Features
+## Windows features
 
 - **Native account and sessions:** optional 2FA, encrypted remembered sign-in,
   background-refreshing computer picker and manual peer ID. Owner connections
@@ -91,7 +137,7 @@ fixed-refresh cadence; it never changes the display automatically. VRR activatio
 is not verified. A confirmed 120 FPS request does not prove 120 distinct frames:
 the captured host display/mode must support it, and static content can lower FPS.
 
-## Video rendering modes
+## Windows video rendering modes
 
 ![Animated comparison of normal GPU rendering, Zero copy and optional AI upscaling.](assets/evoparseq-rendering-modes.gif)
 
@@ -105,7 +151,7 @@ The animation illustrates processing order, not measured speed. Check
 
 1. Download `EvoParseq-v0.9.5-win64.zip` from the
    [stable release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.5).
-   For this branch's Windows preview (including controllers), use artifacts from successful
+   For the Windows development preview (including controllers), use artifacts from successful
    [dev CI runs](https://github.com/vampywiz17/EvoParseq/actions/workflows/native-core.yml?query=branch%3Adev).
 2. Extract to a writable folder and run **EvoParseq.exe**. Settings and optional
    encrypted sessions are stored beside it in `settings.json`.
@@ -212,7 +258,7 @@ from its edge to the TURN client. Usage above the shared allowance is currently
 **$0.05/GB**; check [current pricing](https://developers.cloudflare.com/realtime/sfu/platform/pricing/)
 and the [TURN billing FAQ](https://developers.cloudflare.com/realtime/turn/faq/).
 
-## Optional AI upscaling
+## Windows AI upscaling
 
 The Video tab offers one **AI upscaling (experimental)** selector: NVIDIA RTX
 VSR has Off/Low/Medium/High/Ultra; Intel VPL AI has Off/On. Other GPUs disable the
@@ -236,7 +282,7 @@ or generated frames are introduced.
   runtime/configuration details remain in event logs. Currently limited to
   8-bit SDR upscaling; 10-bit, 4:4:4 and Zero copy keep their existing paths.
 
-## Experimental features and limits
+## Windows experimental features and limits
 
 **Vendor HEVC, zero-copy, 10-bit HEVC, 4:4:4, display timing, USB HID and
 multichannel audio remain experimental.** For conservative operation, use H.264,
@@ -271,7 +317,7 @@ stereo Opus and Automatic timing with experimental options disabled.
 
 Microphone/camera forwarding, HDR and multi-monitor HID mapping are not implemented. See the [changelog](CHANGELOG.md) for shipped changes.
 
-## Troubleshooting and development
+## Windows troubleshooting and development
 
 Enable **Event logging** in Network settings for `client-events.jsonl` beside
 settings.json. Include the build, GPU/driver, transport and reproduction steps
