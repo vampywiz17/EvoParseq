@@ -13,6 +13,8 @@ pub struct Badge {
     pub open: bool,
     hidden: bool,
     draft: Option<crate::session_preferences::Video>,
+    draft_revision: u64,
+    draft_dirty: bool,
 }
 impl Default for Badge {
     fn default() -> Self {
@@ -21,10 +23,18 @@ impl Default for Badge {
             open: false,
             hidden: false,
             draft: None,
+            draft_revision: 0,
+            draft_dirty: false,
         }
     }
 }
 impl Badge {
+    fn synchronize_draft(&mut self, video: crate::session_preferences::Video, revision: u64) {
+        if self.draft.is_none() || (!self.draft_dirty && self.draft_revision != revision) {
+            self.draft = Some(video);
+            self.draft_revision = revision;
+        }
+    }
     pub fn set_hidden(&mut self, hidden: bool) {
         self.hidden = hidden;
     }
@@ -32,6 +42,7 @@ impl Badge {
         self.hidden = false;
         self.open = true;
         self.draft = None;
+        self.draft_dirty = false;
     }
 }
 impl Desktop {
@@ -97,12 +108,14 @@ impl Desktop {
             self.desktop_input.release(ctx, playback);
             self.badge.open = !self.badge.open;
             self.badge.draft = None;
+            self.badge.draft_dirty = false;
         }
         self.desktop_input.badge = Some(response.rect);
         self.desktop_input.controls = None;
         if self.badge.open {
             let initial = self.metrics.draft.clone();
-            self.badge.draft.get_or_insert(initial);
+            self.badge
+                .synchronize_draft(initial, self.metrics.host_revision);
             // Keep the canonical Windows panel geometry and control positions.
             // Unavailable controls are hidden; opening scrolls to Disconnect.
             let width = s::PANEL_WIDTH as f32;
@@ -151,7 +164,7 @@ impl Desktop {
                                             });
                                         });
                                     });
-                                    if available&&self.metrics.current_output.as_deref()!=Some(selected.as_str())&&!selected.is_empty(){playback.push_session(crate::session_controls::Command::SelectDisplay(selected));}
+                                    if available&&self.metrics.current_output.as_deref()!=Some(selected.as_str())&&!selected.is_empty(){playback.push_session(crate::session_controls::Command::SelectDisplay(selected));self.badge.draft_dirty=false;self.badge.draft=None;}
                                     if ui.put(r([314,164,80,28]),egui::Button::new("Refresh")).clicked(){playback.push_session(crate::session_controls::Command::RefreshDisplays);}
                                     label(
                                         ui,
@@ -160,16 +173,19 @@ impl Desktop {
                                         16.,
                                         fg,
                                     );
+                                    self.badge.draft.get_or_insert_with(||self.metrics.draft.clone());
                                     for (i,text) in f::SESSION_LABELS.iter().enumerate(){
                                         label(ui,r([24,254+i as i32*44,150,24]),text,16.,fg);
                                         let draft=self.badge.draft.as_mut().unwrap();
                                         let mut value=match i {0=>crate::session_preferences::resolution_text(draft.resolution),1=>draft.bandwidth_mbps.unwrap_or(10).to_string(),2=>draft.fps.unwrap_or(60).to_string(),3=>if draft.constant_fps.unwrap_or(false){"Fixed"}else{"Dynamic"}.into(),4=>if draft.rotated.unwrap_or(false){"Rotated"}else{"Normal"}.into(),_=>"Off".into()};
                                         let options:&[&str]=match i {0=>crate::session_preferences::RESOLUTION_CHOICES,1=>crate::session_preferences::BANDWIDTH_CHOICES,2=>crate::session_preferences::FPS_CHOICES,3=>&["Dynamic","Fixed"],4=>&["Normal","Rotated"],_=>&["Off"]};
-                                        ui.add_enabled_ui(!self.metrics.pending&&i!=5&&i!=4,|ui|{
+                                        let before=value.clone();
+                                        ui.add_enabled_ui(self.metrics.config_ready&&!self.metrics.pending&&i!=5&&i!=4,|ui|{
                                             ui.scope_builder(egui::UiBuilder::new().max_rect(r([174,250+i as i32*44,218,28])),|ui|{
-                                                egui::ComboBox::from_id_salt(("session-field",i)).width(208.).selected_text(&value).show_ui(ui,|ui|{for &option in options{ui.selectable_value(&mut value,option.to_owned(),option);}});
+                                                egui::ComboBox::from_id_salt(("session-field",i)).width(208.).selected_text(if self.metrics.config_ready{value.as_str()}else{"Waiting for host"}).show_ui(ui,|ui|{for &option in options{ui.selectable_value(&mut value,option.to_owned(),option);}});
                                             });
                                         });
+                                        if before!=value{self.badge.draft_dirty=true;}
                                         match i {0=>if let Ok(parsed)=crate::session_preferences::resolution(&value){draft.resolution=parsed;},1=>draft.bandwidth_mbps=value.parse().ok(),2=>draft.fps=value.parse().ok(),3=>draft.constant_fps=Some(value=="Fixed"),4=>draft.rotated=Some(value=="Rotated"),_=>{}}
                                     }
                                     let mut fullscreen =
@@ -187,12 +203,12 @@ impl Desktop {
                                     }
                                     let mut muted=self.metrics.audio.muted.unwrap_or(false);
                                     let audio_commands=self.metrics.audio.commands.clone();
-                                    let response=ui.add_enabled_ui(audio_commands.is_some()&&self.metrics.audio.muted.is_some(),|ui|ui.put(r([24,554,160,30]),egui::Checkbox::new(&mut muted,"Mute audio"))).inner;
+                                    let response=ui.add_enabled_ui(audio_commands.is_some()&&self.metrics.audio.ready&&self.metrics.audio.muted.is_some(),|ui|ui.put(r([24,554,160,30]),egui::Checkbox::new(&mut muted,"Mute audio"))).inner;
                                     if response.changed(){if let Some(commands)=&audio_commands{let _=commands.send(crate::audio_pipewire::Command::Mute(muted));}}
                                     let volume=self.metrics.audio.volume.map_or_else(||"Volume: not reported by PipeWire".into(),|v|format!("Volume: {:.0}%",v*100.));
                                     label(ui,r([194,558,198,26]),&volume,16.,fg);
                                     let mut level=self.metrics.audio.volume.unwrap_or(0.)*100.;
-                                    let slider=ui.add_enabled_ui(audio_commands.is_some()&&self.metrics.audio.volume.is_some(),|ui|ui.put(r([24,590,368,32]),egui::Slider::new(&mut level,0. ..=100.).show_value(false))).inner;
+                                    let slider=ui.add_enabled_ui(audio_commands.is_some()&&self.metrics.audio.ready&&self.metrics.audio.volume.is_some(),|ui|ui.put(r([24,590,368,32]),egui::Slider::new(&mut level,0. ..=100.).show_value(false))).inner;
                                     if slider.changed(){if let Some(commands)=&audio_commands{let _=commands.send(crate::audio_pipewire::Command::Volume(level.round()as u8));}}
                                     label(
                                         ui,
@@ -206,7 +222,7 @@ impl Desktop {
                                     for (i, (text, rect)) in f::SESSION_ACTIONS.iter().enumerate() {
                                         let response = ui
                                             .scope(|ui| {
-                                                if (i==1&&self.metrics.pending)||(i==5&&!self.metrics.windows) {
+                                                if (i==1&&(self.metrics.pending||!self.metrics.config_ready))||(i==5&&!self.metrics.windows) {
                                                     ui.disable();
                                                 }
                                                 ui.put(r(*rect), egui::Button::new(*text))
@@ -246,5 +262,30 @@ impl Desktop {
                 });
             self.desktop_input.controls = Some(panel.response.rect);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn linux_overlay_late_host_reply_updates_untouched_draft_but_preserves_user_edits() {
+        let mut badge = Badge::default();
+        badge.synchronize_draft(Default::default(), 0);
+        let mut host = crate::session_preferences::Video {
+            fps: Some(30),
+            bandwidth_mbps: Some(20),
+            ..Default::default()
+        };
+        badge.synchronize_draft(host.clone(), 1);
+        assert_eq!(badge.draft.as_ref().unwrap().fps, Some(30));
+        badge.draft.as_mut().unwrap().fps = Some(45);
+        badge.draft_dirty = true;
+        host.fps = Some(60);
+        badge.synchronize_draft(host.clone(), 2);
+        assert_eq!(badge.draft.as_ref().unwrap().fps, Some(45));
+        badge.restore();
+        badge.synchronize_draft(host, 2);
+        assert_eq!(badge.draft.as_ref().unwrap().fps, Some(60));
     }
 }

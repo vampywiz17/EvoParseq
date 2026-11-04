@@ -223,6 +223,16 @@ impl Control {
                     );
                     send(host.config.select_output(id)?)?;
                     self.confirmation = Some(crate::host_video::Confirmation::output(id, now));
+                    if let Some(manager) = session
+                        .settings
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .as_ref()
+                    {
+                        manager.update_native(|profile| {
+                            profile.video.resolution = crate::session_preferences::Resolution::Host
+                        })?;
+                    }
                     Ok(())
                 })();
                 self.selection = None;
@@ -319,6 +329,8 @@ pub struct View {
     pub displays: Vec<crate::host_displays::Output>,
     pub current_output: Option<String>,
     pub windows: bool,
+    pub host_revision: u64,
+    pub config_ready: bool,
 }
 impl View {
     pub fn refresh(
@@ -394,6 +406,8 @@ impl View {
         self.displays = host.outputs.clone();
         self.current_output = host.config.output_id().map(str::to_owned);
         self.windows = host.windows;
+        self.host_revision = host.revision;
+        self.config_ready = host.config.ready();
         let value = |key: &str| {
             observed[key].as_u64().map_or_else(
                 || "Not reported by host".into(),
@@ -520,6 +534,30 @@ impl View {
                     *value = "Scheduled Vulkan draws; not monitor scanout".into();
                 }
             }
+        }
+        if tab == 3 {
+            for (label, value) in &mut result.rows {
+                if label == crate::app_style::forms::STAT_AUDIO_OUTPUT {
+                    *value = if self.audio.ready {
+                        "PipeWire / streaming"
+                    } else {
+                        "PipeWire / not streaming"
+                    }
+                    .into();
+                }
+            }
+            result.rows.push((
+                crate::app_style::forms::STAT_AUDIO_UNDERRUNS.into(),
+                "Not collected by this backend".into(),
+            ));
+            result.rows.push((
+                crate::app_style::forms::STAT_AUDIO_DEVICE_BUFFER.into(),
+                "Not collected (device/graph latency is not sampled)".into(),
+            ));
+            result.rows.push((
+                crate::app_style::forms::STAT_AUDIO_RECOVERIES.into(),
+                "Automatic output reopening is not enabled".into(),
+            ));
         }
         if tab == 0 {
             let f = crate::app_style::forms::STAT_MEMORY_RESIDENT_TOTAL;
