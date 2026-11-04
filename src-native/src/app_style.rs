@@ -30,6 +30,9 @@ pub mod desktop {
     pub const HOSTS: [i32; 4] = [32, 130, 664, 220];
     pub const PEER_LABEL: [i32; 4] = [32, 370, 155, 26];
     pub const PEER: [i32; 4] = [200, 366, 496, 32];
+    pub const REMEMBER: [i32; 4] = [250, 322, 450, 30];
+    pub const REMEMBER_WINDOWS: &str = "Remember sign-in for this Windows user";
+    pub const REMEMBER_LINUX: &str = "Remember sign-in for this Linux user";
     pub const LOGIN: [i32; 4] = [490, 370, 206, 40];
     pub const ACTIONS: [[i32; 4]; 3] =
         [[32, 420, 140, 40], [184, 420, 140, 40], [490, 420, 206, 40]];

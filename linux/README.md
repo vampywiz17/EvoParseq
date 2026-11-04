@@ -2,7 +2,8 @@
 
 The Wayland desktop uses egui on Vulkan. Authentication, 2FA, host discovery,
 BUD/WebRTC protocols, Opus decoding and H.264 parsing/reference management reuse
-the existing Rust implementations. Credentials remain in memory for this preview.
+the existing Rust implementations. Protected session persistence uses the same
+Rust account/profile/settings models as Windows, with Linux Secret portal protection.
 
 Play WebRTC and Play BUD start the native H.264 video preview with PipeWire
 sound. Disconnect remains available during playback. The former standalone
@@ -23,7 +24,7 @@ If the UI stops consuming video (for example when another window covers it),
 a full backlog suspends video without ending the connection or audio pipeline.
 Returning focus requests a fresh keyframe using the shared recovery gate and
 deadline, then resumes playback. Continuous background video decoding is not
-implemented in this preview. HEVC playback and persistent sign-in are later steps.
+implemented in this preview. HEVC playback remains a later step.
 
 WebRTC probes and playback use the same existing Parsec host certificate
 compatibility policy as Windows/Android. Native video is delivered directly
@@ -135,3 +136,40 @@ repair. https://docs.flatpak.org/en/latest/desktop-integration.html#icons
 Adwaita artwork is by the GNOME Project (https://www.gnome.org), distributed
 under the upstream dual LGPLv3 / CC-BY-SA 3.0 license; copies ship in the bundle.
 Live Wayland validation remains required.
+
+
+Preview 0.1.11 restores the host cursor endpoint after remote window dragging or
+leaving relative input. While the Wayland pointer remains locked, winit receives
+the endpoint position hint; the next presentation commits it before unlocking.
+Stale pre-lock and restoration-echo pointer events do not jump the host back.
+Ordinary absolute cursor updates do not cause recurring native warps. Live
+Wayland validation is still required on the target compositor.
+
+Connection stats now uses an eframe native viewport, with native OS decorations
+and independent resizing/closing. Events from that window are not forwarded to
+the remote host. The same Windows content descriptors still supply its rows.
+
+The Settings Save action persists the integrated transport choice. The existing
+Windows JSON schema and Manager are reused directly, including nativeCore,
+unknown top-level fields and opaque protected values for unintegrated features.
+Those dormant settings do not enable Linux HID, HEVC, VSR, TURN configuration or
+other unwired features. The file is settings.json under
+$XDG_CONFIG_HOME/EvoParseq (normally ~/.config/EvoParseq); Flatpak maps that into
+its private app configuration directory. --data-dir can select a dedicated
+profile directory. Linux writes use atomic same-directory rename, private 0600
+files, and a private 0700 profile directory. Invalid JSON is preserved.
+
+Remember sign-in saves only the email and encrypted session token, never the
+password or two-factor code. The XDG Secret portal supplies a per-application
+master secret held by the desktop keyring. HKDF-SHA256 derives an application
+key, and AES-256-GCM protects each blob with a fresh random nonce and an
+application-specific authentication domain. No plaintext key/credential fallback
+is written. A missing/locked/unavailable portal leaves the new sign-in in memory
+and reports that it could not be saved; the account worker handles portal I/O
+without blocking the GUI. Startup restores a saved session and validates it
+through host discovery; explicit sign-out removes it and revokes the session.
+The JSON format matches Windows, but DPAPI and Linux protected blobs are bound
+to their own platform/user and are not portable credentials.
+
+Secret portal contract:
+https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Secret.html

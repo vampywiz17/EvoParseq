@@ -211,11 +211,8 @@ impl Desktop {
                                 && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         }
                         ui.put(
-                            r([250, 322, 450, 30]),
-                            egui::Checkbox::new(
-                                &mut self.remember_login,
-                                "Remember sign-in on this device",
-                            ),
+                            r(d::REMEMBER),
+                            egui::Checkbox::new(&mut self.remember_login, d::REMEMBER_LINUX),
                         );
                         submit |= ui.put(r(d::LOGIN), egui::Button::new(d::SIGN_IN)).clicked();
                         if submit {

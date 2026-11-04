@@ -51,6 +51,10 @@ impl DesktopInput {
     }
     pub fn cursor(&mut self, ctx: &egui::Context, playback: &Playback) {
         let grab = self.enabled && playback.capture() && ctx.input(|i| i.focused);
+        if grab && self.unlock_after_present {
+            self.unlock_after_present = false;
+            self.restored_position = None;
+        }
         if self.grabbed
             && !grab
             && self.enabled
@@ -204,7 +208,9 @@ impl DesktopInput {
                         playback,
                         *pos - self.video.unwrap().min,
                         false,
-                        !self.grabbed,
+                        !self.grabbed
+                            && self.capture_anchor != Some(*pos)
+                            && self.restored_position != Some(*pos),
                         (0, 0),
                     );
                     false

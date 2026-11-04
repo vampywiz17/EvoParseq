@@ -583,10 +583,10 @@ pub fn choose(
             hwnd,
             &f,
             "BUTTON",
-            "Remember sign-in for this Windows user",
+            layout::REMEMBER_WINDOWS,
             REMEMBER,
             BS_AUTOCHECKBOX as u32 | WS_TABSTOP,
-            [250, 322, 450, 30],
+            layout::REMEMBER,
         );
         SendMessageW(
             f.remember,

@@ -308,6 +308,7 @@ impl eframe::App for Desktop {
                     };
                 }
                 Reply::SignedOut => {
+                    self.remember_login = false;
                     self.picker = Default::default();
                     self.signed_in = false;
                     self.status_text = app_style::desktop::SIGNED_OUT;
@@ -324,6 +325,7 @@ impl eframe::App for Desktop {
                     eprintln!("{message}");
                     self.error = Some(message);
                     if !signed_in {
+                        self.remember_login = false;
                         self.picker = Default::default();
                     }
                 }
