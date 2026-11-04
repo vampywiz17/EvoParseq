@@ -58,10 +58,23 @@ impl Desktop {
             self.show_video = false;
             self.fitted_stream = None;
         }
-        ui.scope(|ui| {
-            ui.disable();
-            ui.put(r(s::SAVE), egui::Button::new("Save settings"));
-        });
+        if ui
+            .put(r(s::SAVE), egui::Button::new("Save settings"))
+            .clicked()
+        {
+            let bud = self.transport == connection::Mode::Bud;
+            match self.settings.update_local(|settings| {
+                settings.bud = bud;
+                Ok(())
+            }) {
+                Ok(()) => {
+                    self.error = None;
+                    self.show_video = false;
+                    self.fitted_stream = None;
+                }
+                Err(error) => self.error = Some(error.to_string()),
+            }
+        }
         ui.painter().line_segment(
             [
                 origin + egui::vec2(0., 147.),
@@ -119,7 +132,7 @@ impl Desktop {
                 });
             } else if row.label == f::TURN_PROVIDER.label {
                 // Navigation between the two existing Windows form groups, not a saved
-                // provider value; Save remains disabled until provisioning is integrated.
+                // provider value. Saving persists only the integrated transport choice.
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     egui::ComboBox::from_id_salt("provider-page")
                         .width(400.)
@@ -225,89 +238,113 @@ impl Desktop {
         if !self.ui_state.stats {
             return;
         }
-        egui::Window::new(f::MENU_STATS)
-            .id(egui::Id::new("connection-stats"))
-            .default_size([744., 720.])
-            .open(&mut self.ui_state.stats)
-            .show(ctx, |ui| {
-                ui.style_mut().override_font_id = Some(egui::FontId::proportional(16.));
-                ui.label(RichText::new(f::MENU_STATS).size(32.));
-                ui.label(RichText::new("N/A").color(color(app_style::SETTINGS_ACCENT)));
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("connection-stats-native"),
+            egui::ViewportBuilder::default()
+                .with_title(f::MENU_STATS)
+                .with_decorations(true)
+                .with_resizable(true)
+                .with_inner_size([744., 781.])
+                .with_min_inner_size([480., 360.]),
+            |child, class| {
+                if child.input(|i| i.viewport().close_requested()) {
+                    self.ui_state.stats = false;
+                    ctx.request_repaint();
+                    return;
+                }
+                if class == egui::ViewportClass::Embedded {
+                    // Only non-native/headless integrations embed viewports.
+                    egui::Window::new(f::MENU_STATS).show(child, |ui| self.statistics_contents(ui));
+                } else {
+                    egui::CentralPanel::default()
+                        .frame(
+                            egui::Frame::new()
+                                .fill(color(app_style::BACKGROUND))
+                                .inner_margin(24.),
+                        )
+                        .show(child, |ui| self.statistics_contents(ui));
+                }
+            },
+        );
+    }
+    fn statistics_contents(&mut self, ui: &mut egui::Ui) {
+        ui.style_mut().override_font_id = Some(egui::FontId::proportional(16.));
+        ui.label(RichText::new(f::MENU_STATS).size(32.));
+        ui.label(RichText::new("N/A").color(color(app_style::SETTINGS_ACCENT)));
+        ui.horizontal(|ui| {
+            for (i, tab) in f::STATS_TABS.iter().enumerate() {
+                if ui
+                    .add_sized(
+                        [124., 34.],
+                        egui::Button::new(*tab).selected(i == self.ui_state.stats_tab),
+                    )
+                    .clicked()
+                {
+                    self.ui_state.stats_tab = i;
+                }
+            }
+        });
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            if self.ui_state.stats_tab == 0 {
+                ui.horizontal_wrapped(|ui| {
+                    for text in [
+                        "Connection RTT",
+                        "Decoded video",
+                        "Incoming traffic",
+                        "Outgoing traffic",
+                    ] {
+                        egui::Frame::new()
+                            .fill(color(app_style::SETTINGS_FIELD))
+                            .inner_margin(16.)
+                            .show(ui, |ui| {
+                                ui.set_min_width(290.);
+                                ui.label(text);
+                                ui.label(RichText::new("N/A").size(32.));
+                            });
+                    }
+                });
+            }
+            for row in f::STATS
+                .iter()
+                .filter(|row| row.tab == self.ui_state.stats_tab)
+            {
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), if row.section { 48. } else { 44. }),
+                    egui::Sense::hover(),
+                );
+                label(
+                    ui,
+                    egui::Rect::from_min_size(
+                        rect.min + egui::vec2(0., 8.),
+                        egui::vec2(if row.section { rect.width() } else { 210. }, 36.),
+                    ),
+                    row.label,
+                    16.,
+                    color(if row.section {
+                        app_style::SETTINGS_ACCENT
+                    } else {
+                        app_style::SETTINGS_MUTED
+                    }),
+                );
+                if !row.section {
+                    label(
+                        ui,
+                        egui::Rect::from_min_size(
+                            rect.min + egui::vec2(220., 8.),
+                            egui::vec2(rect.width() - 220., 36.),
+                        ),
+                        "N/A",
+                        16.,
+                        Color32::WHITE,
+                    );
+                }
+            }
+            for text in f::additional_stats(self.ui_state.stats_tab) {
                 ui.horizontal(|ui| {
-                    for (i, tab) in f::STATS_TABS.iter().enumerate() {
-                        if ui
-                            .add_sized(
-                                [124., 34.],
-                                egui::Button::new(*tab).selected(i == self.ui_state.stats_tab),
-                            )
-                            .clicked()
-                        {
-                            self.ui_state.stats_tab = i;
-                        }
-                    }
+                    ui.add_sized([210., 44.], egui::Label::new(text));
+                    ui.label("N/A");
                 });
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    if self.ui_state.stats_tab == 0 {
-                        ui.horizontal_wrapped(|ui| {
-                            for text in [
-                                "Connection RTT",
-                                "Decoded video",
-                                "Incoming traffic",
-                                "Outgoing traffic",
-                            ] {
-                                egui::Frame::new()
-                                    .fill(color(app_style::SETTINGS_FIELD))
-                                    .inner_margin(16.)
-                                    .show(ui, |ui| {
-                                        ui.set_min_width(290.);
-                                        ui.label(text);
-                                        ui.label(RichText::new("N/A").size(32.));
-                                    });
-                            }
-                        });
-                    }
-                    for row in f::STATS
-                        .iter()
-                        .filter(|row| row.tab == self.ui_state.stats_tab)
-                    {
-                        let (rect, _) = ui.allocate_exact_size(
-                            egui::vec2(ui.available_width(), if row.section { 48. } else { 44. }),
-                            egui::Sense::hover(),
-                        );
-                        label(
-                            ui,
-                            egui::Rect::from_min_size(
-                                rect.min + egui::vec2(0., 8.),
-                                egui::vec2(if row.section { rect.width() } else { 210. }, 36.),
-                            ),
-                            row.label,
-                            16.,
-                            color(if row.section {
-                                app_style::SETTINGS_ACCENT
-                            } else {
-                                app_style::SETTINGS_MUTED
-                            }),
-                        );
-                        if !row.section {
-                            label(
-                                ui,
-                                egui::Rect::from_min_size(
-                                    rect.min + egui::vec2(220., 8.),
-                                    egui::vec2(rect.width() - 220., 36.),
-                                ),
-                                "N/A",
-                                16.,
-                                Color32::WHITE,
-                            );
-                        }
-                    }
-                    for text in f::additional_stats(self.ui_state.stats_tab) {
-                        ui.horizontal(|ui| {
-                            ui.add_sized([210., 44.], egui::Label::new(text));
-                            ui.label("N/A");
-                        });
-                    }
-                });
-            });
+            }
+        });
     }
 }

@@ -210,6 +210,13 @@ impl Desktop {
                             submit |= response.lost_focus()
                                 && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         }
+                        ui.put(
+                            r([250, 322, 450, 30]),
+                            egui::Checkbox::new(
+                                &mut self.remember_login,
+                                "Remember sign-in on this device",
+                            ),
+                        );
                         submit |= ui.put(r(d::LOGIN), egui::Button::new(d::SIGN_IN)).clicked();
                         if submit {
                             let login = account::Login {
@@ -217,7 +224,7 @@ impl Desktop {
                                 password: std::mem::take(&mut self.password),
                                 tfa: std::mem::take(&mut self.tfa),
                             };
-                            self.send(Command::SignIn(login));
+                            self.send(Command::SignIn(login, self.remember_login));
                         }
                     }
                 });
@@ -270,6 +277,10 @@ mod tests {
         let mut app = Desktop {
             commands,
             replies,
+            settings: crate::connection_settings::Manager::open(
+                std::env::temp_dir().join("evoparseq-ui-fixture-absent.json"),
+            ),
+            remember_login: false,
             email: String::new(),
             password: Default::default(),
             tfa: Default::default(),

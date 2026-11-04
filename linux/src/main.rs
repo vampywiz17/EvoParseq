@@ -1,5 +1,5 @@
 #[path = "../../src-native/src/native_core/account.rs"]
-mod account;
+pub(crate) mod account;
 #[path = "../../src-native/src/native_core/signaling.rs"]
 mod account_signaling;
 #[path = "../../src-native/src/app_style.rs"]
@@ -16,6 +16,21 @@ mod bud_ingress;
 #[path = "../../src-native/src/codec_initialization.rs"]
 pub mod codec_initialization;
 mod connection;
+#[path = "../../src-native/src/connection_settings.rs"]
+mod connection_settings;
+#[path = "../../src-native/src/native_core/profile.rs"]
+pub(crate) mod profile;
+mod secure_storage;
+#[path = "../../src-native/src/session_preferences.rs"]
+pub mod session_preferences;
+mod settings_linux;
+#[path = "../../src-native/src/native_core/sign_in.rs"]
+pub(crate) mod sign_in;
+#[path = "../../src-native/src/turn_configuration.rs"]
+mod turn_configuration;
+mod native_core {
+    pub(crate) use crate::{account, profile, sign_in};
+}
 #[path = "../../src-native/src/control.rs"]
 pub mod control;
 mod cursor_theme;
@@ -63,22 +78,31 @@ use std::sync::{Arc, mpsc};
 use zeroize::Zeroizing;
 
 enum Command {
-    SignIn(account::Login),
+    Restore,
+    SignIn(account::Login, bool),
     Refresh,
     SignOut,
     Stream(String, connection::Mode, Arc<playback::Playback>),
 }
 
 enum Reply {
-    Hosts(Vec<account::Host>),
+    Hosts {
+        hosts: Vec<account::Host>,
+        notice: Option<String>,
+    },
     SignedOut,
     StreamEnded(String),
-    Error { signed_in: bool, message: String },
+    Error {
+        signed_in: bool,
+        message: String,
+    },
 }
 
 struct Desktop {
     commands: mpsc::Sender<Command>,
     replies: mpsc::Receiver<Reply>,
+    settings: Arc<connection_settings::Manager>,
+    remember_login: bool,
     email: String,
     password: Zeroizing<String>,
     tfa: Zeroizing<String>,
@@ -107,23 +131,36 @@ fn account_worker(
     commands: mpsc::Receiver<Command>,
     replies: mpsc::Sender<Reply>,
     ui: egui::Context,
+    settings: Arc<connection_settings::Manager>,
 ) {
-    let mut session = None;
+    let mut form = sign_in::SignIn::new(None, settings.view().0.native_core.email, false);
     for command in commands {
+        let mut notice = None;
         let result = match command {
-            Command::SignIn(login) => account::login(&login).map(|new_session| {
-                session = Some(new_session);
+            Command::Restore => settings.view().0.native_core.session().map(|saved| {
+                form.session = saved.map(Arc::new);
+            }).map_err(|_| anyhow::anyhow!("Could not unlock the saved sign-in. Sign in again or unlock your desktop keyring.")),
+            Command::SignIn(login, remember) => account::login(&login).map(|new_session| {
+                form.email = login.email.trim().into();
+                form.remember_login = remember;
+                form.accept(Arc::new(new_session), settings.as_ref(), |reason| {
+                    notice = Some(match reason {
+                        sign_in::PersistenceNotice::ProtectedSessionNotSaved => "Signed in, but the desktop keyring could not save the protected session. This sign-in will stay in memory.".into(),
+                        _ => reason.text().into(),
+                    });
+                });
             }),
             Command::Refresh => Ok(()),
             Command::Stream(peer, mode, playback) => {
-                let result = session
+                let _ = settings.update_native(|profile| profile.last_peer = peer.clone());
+                let result = form.session
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("Sign in first."))
                     .and_then(|session| connection::run_stream(session, &peer, mode, &playback));
                 let reply = match result {
                     Ok(message) => Reply::StreamEnded(message),
                     Err(error) => Reply::Error {
-                        signed_in: session.is_some(),
+                        signed_in: form.session.is_some(),
                         message: error.to_string(),
                     },
                 };
@@ -134,9 +171,15 @@ fn account_worker(
                 continue;
             }
             Command::SignOut => {
-                session = None;
-                if replies.send(Reply::SignedOut).is_err() {
-                    break;
+                // A failed file transaction must not claim that a saved login was removed.
+                match form.prepare_logout(settings.as_ref()) {
+                    Ok(()) => {
+                        if let Some(session) = form.session.take() { session.revoke(); }
+                        if replies.send(Reply::SignedOut).is_err() { break; }
+                    }
+                    Err(error) => {
+                        if replies.send(Reply::Error { signed_in: form.session.is_some(), message: error.to_string() }).is_err() { break; }
+                    }
                 }
                 ui.request_repaint();
                 continue;
@@ -144,19 +187,19 @@ fn account_worker(
         };
         let result = result.and_then(|()| {
             account::hosts(
-                session
+                form.session
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("Sign in first."))?,
             )
         });
         let reply = match result {
-            Ok(hosts) => Reply::Hosts(hosts),
+            Ok(hosts) => Reply::Hosts { hosts, notice },
             Err(error) => {
                 if error.is::<account::ExpiredSession>() {
-                    session = None;
+                    form.expire_saved(settings.as_ref());
                 }
                 Reply::Error {
-                    signed_in: session.is_some(),
+                    signed_in: form.session.is_some(),
                     message: error.to_string(),
                 }
             }
@@ -171,7 +214,7 @@ fn account_worker(
 impl Desktop {
     fn send(&mut self, command: Command) {
         self.status_text = match &command {
-            Command::SignIn(_) => app_style::desktop::SIGNING_IN,
+            Command::Restore | Command::SignIn(..) => app_style::desktop::SIGNING_IN,
             Command::Refresh => app_style::desktop::REFRESHING,
             Command::SignOut => app_style::desktop::SIGNING_OUT,
             Command::Stream(..) => app_style::desktop::CHOOSE,
@@ -188,13 +231,16 @@ impl Desktop {
 
 impl eframe::App for Desktop {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if raw.viewport_id != egui::ViewportId::ROOT {
+            return;
+        }
         if raw.events.iter().any(|event| matches!(event, egui::Event::PointerButton {pos,pressed:true,..} if pos.y < 24.)) {
             if let Some(playback) = &self.playback {
                 if self.desktop_input.enabled { self.desktop_input.release(ctx, playback); }
             }
             return;
         }
-        if self.show_video || self.ui_state.stats {
+        if self.show_video {
             if let Some(playback) = &self.playback {
                 if self.desktop_input.enabled {
                     self.desktop_input.release(ctx, playback);
@@ -232,7 +278,8 @@ impl eframe::App for Desktop {
             }
             self.decoder = None;
             match reply {
-                Reply::Hosts(hosts) => {
+                Reply::Hosts { hosts, notice } => {
+                    self.error = notice;
                     let selected = self
                         .picker
                         .hosts()
@@ -371,6 +418,9 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    let settings = settings_linux::open()?;
+    let (saved, settings_error) = settings.view();
+    let restore = !saved.native_core.encrypted_session.is_empty();
     let mut setup = egui_wgpu::WgpuSetupCreateNew::default();
     setup.instance_descriptor.backends = wgpu::Backends::VULKAN;
     let (wgpu_setup, video_context, video_error) = match video_vulkan::create() {
@@ -402,64 +452,79 @@ fn main() -> anyhow::Result<()> {
     let event_loop =
         winit::event_loop::EventLoop::<eframe::UserEvent>::with_user_event().build()?;
     let result = {
-        let app = eframe::create_native(
-            "io.github.vampywiz17.EvoParseq",
-            options,
-            Box::new(|cc| {
-                launcher::style(&cc.egui_ctx);
-                let icon = eframe::icon_data::from_png_bytes(include_bytes!(
-                    "../../assets/evoparseq.png"
-                ))?;
-                let image = egui::ColorImage::from_rgba_unmultiplied(
-                    [icon.width as usize, icon.height as usize],
-                    &icon.rgba,
-                );
-                let logo =
-                    cc.egui_ctx
-                        .load_texture("EvoParseq logo", image, egui::TextureOptions::LINEAR);
+        let app =
+            eframe::create_native(
+                "io.github.vampywiz17.EvoParseq",
+                options,
+                Box::new(|cc| {
+                    launcher::style(&cc.egui_ctx);
+                    let icon = eframe::icon_data::from_png_bytes(include_bytes!(
+                        "../../assets/evoparseq.png"
+                    ))?;
+                    let image = egui::ColorImage::from_rgba_unmultiplied(
+                        [icon.width as usize, icon.height as usize],
+                        &icon.rgba,
+                    );
+                    let logo = cc.egui_ctx.load_texture(
+                        "EvoParseq logo",
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    );
 
-                let (commands, incoming) = mpsc::channel();
-                let (outgoing, replies) = mpsc::channel();
-                let context = cc.egui_ctx.clone();
-                worker = Some(
-                    std::thread::Builder::new()
-                        .name("account".into())
-                        .spawn(move || account_worker(incoming, outgoing, context))?,
-                );
-                let output_format = cc
-                    .wgpu_render_state
-                    .as_ref()
-                    .map(|state| state.target_format)
-                    .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
-                Ok(Box::new(Desktop {
-                    video_context,
-                    video_error,
-                    output_format,
-                    decoder: None,
-                    playback: None,
-                    commands,
-                    replies,
-                    email: String::new(),
-                    password: Zeroizing::default(),
-                    tfa: Zeroizing::default(),
-                    picker: Default::default(),
-                    peer: String::new(),
-                    transport: connection::Mode::WebRtc,
-                    logo,
-                    desktop_input: desktop_linux::DesktopInput::new(keyboard.clone()),
-                    signed_in: false,
-                    busy: false,
-                    status_text: app_style::LOGIN_NOTICE,
-                    error: None,
-                    show_video: false,
-                    ui_state: Default::default(),
-                    badge: Default::default(),
-                    fitted_stream: None,
-                    launcher_size: None,
-                }))
-            }),
-            &event_loop,
-        );
+                    let (commands, incoming) = mpsc::channel();
+                    let (outgoing, replies) = mpsc::channel();
+                    let context = cc.egui_ctx.clone();
+                    let worker_settings = settings.clone();
+                    worker = Some(std::thread::Builder::new().name("account".into()).spawn(
+                        move || account_worker(incoming, outgoing, context, worker_settings),
+                    )?);
+                    if restore {
+                        commands.send(Command::Restore)?;
+                    }
+                    let output_format = cc
+                        .wgpu_render_state
+                        .as_ref()
+                        .map(|state| state.target_format)
+                        .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
+                    Ok(Box::new(Desktop {
+                        video_context,
+                        video_error,
+                        output_format,
+                        decoder: None,
+                        playback: None,
+                        commands,
+                        replies,
+                        settings: settings.clone(),
+                        remember_login: restore,
+                        email: saved.native_core.email.clone(),
+                        password: Zeroizing::default(),
+                        tfa: Zeroizing::default(),
+                        picker: Default::default(),
+                        peer: saved.native_core.last_peer.clone(),
+                        transport: if saved.bud {
+                            connection::Mode::Bud
+                        } else {
+                            connection::Mode::WebRtc
+                        },
+                        logo,
+                        desktop_input: desktop_linux::DesktopInput::new(keyboard.clone()),
+                        signed_in: false,
+                        busy: restore,
+                        status_text: if restore {
+                            app_style::desktop::SIGNING_IN
+                        } else {
+                            app_style::LOGIN_NOTICE
+                        },
+                        error: settings_error.clone(),
+                        show_video: false,
+                        ui_state: Default::default(),
+                        badge: Default::default(),
+                        fitted_stream: None,
+                        launcher_size: None,
+                    }))
+                }),
+                &event_loop,
+            );
         let mut app = native_loop::Application::new(app, keyboard.clone());
         let result = event_loop.run_app(&mut app);
         drop(app);

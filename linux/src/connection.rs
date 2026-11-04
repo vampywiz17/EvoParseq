@@ -394,7 +394,11 @@ impl Input {
                     cursor["positionX"].as_i64().unwrap_or(0) as i32,
                     cursor["positionY"].as_i64().unwrap_or(0) as i32,
                 );
-                playback.set_capture(crate::desktop_input::relative_capture(relative, hidden));
+                playback.host_cursor(
+                    crate::desktop_input::relative_capture(relative, hidden),
+                    cursor["positionX"].as_i64().unwrap_or(0) as i32,
+                    cursor["positionY"].as_i64().unwrap_or(0) as i32,
+                );
             }
         }
     }

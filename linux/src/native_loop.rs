@@ -44,6 +44,7 @@ pub struct Application<'a> {
     inner: eframe::EframeWinitApplication<'a>,
     pub keyboard: Arc<KeyboardBridge>,
     modifiers: ModifiersState,
+    root: Option<WindowId>,
 }
 impl<'a> Application<'a> {
     pub fn new(inner: eframe::EframeWinitApplication<'a>, keyboard: Arc<KeyboardBridge>) -> Self {
@@ -51,6 +52,7 @@ impl<'a> Application<'a> {
             inner,
             keyboard,
             modifiers: ModifiersState::empty(),
+            root: None,
         }
     }
     fn key(&self, key: PhysicalKey, down: bool) -> bool {
@@ -87,15 +89,20 @@ impl ApplicationHandler<eframe::UserEvent> for Application<'_> {
         self.inner.resumed(event_loop);
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, window: WindowId, event: WindowEvent) {
-        match &event {
-            WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
-            WindowEvent::Focused(false) | WindowEvent::CloseRequested => self.keyboard.release(),
-            WindowEvent::KeyboardInput { event, .. }
-                if self.key(event.physical_key, event.state == ElementState::Pressed) =>
-            {
-                return;
+        let root = *self.root.get_or_insert(window);
+        if window == root {
+            match &event {
+                WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
+                WindowEvent::Focused(false) | WindowEvent::CloseRequested => {
+                    self.keyboard.release()
+                }
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.key(event.physical_key, event.state == ElementState::Pressed) =>
+                {
+                    return;
+                }
+                _ => {}
             }
-            _ => {}
         }
         self.inner.window_event(event_loop, window, event);
     }

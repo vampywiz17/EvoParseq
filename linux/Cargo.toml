@@ -1,6 +1,6 @@
 [package]
 name = "evoparseq-linux"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -9,6 +9,10 @@ publish = false
 [dependencies]
 anyhow = "1"
 xcursor = "=0.3.11"
+ashpd = { version = "=0.13.13", default-features = false, features = ["tokio", "secret"] }
+ring = "=0.17.14"
+base64 = "0.22"
+sha2 = "0.10"
 ash = "0.38"
 lowlat-decode = { git = "https://github.com/nomi-san/lowlat", rev = "5f8db5689e55de0d396b0520824caa9fc053dd86" }
 bytes = "1"

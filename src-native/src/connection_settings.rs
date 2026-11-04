@@ -102,12 +102,12 @@ impl GpuPreference {
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub native_core: crate::native_core::profile::Profile,
-    #[cfg(feature = "bud")]
+    #[cfg(any(feature = "bud", target_os = "linux"))]
     #[serde(alias = "experimentalBud")]
     pub bud: bool,
-    #[cfg(feature = "bud")]
+    #[cfg(any(feature = "bud", target_os = "linux"))]
     pub experimental_hid_mouse: bool,
-    #[cfg(feature = "bud")]
+    #[cfg(any(feature = "bud", target_os = "linux"))]
     pub experimental_hid_keyboard: bool,
     pub prefer_hevc: bool,
     pub presentation_mode: PresentationMode,
@@ -126,7 +126,7 @@ pub struct Settings {
     #[serde(alias = "experimentalRawAudio")]
     pub allow_raw_audio: bool,
     pub experimental_surround_audio: bool,
-    #[cfg(feature = "vendor-video")]
+    #[cfg(any(feature = "vendor-video", target_os = "linux"))]
     pub experimental_zero_copy: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub video_gpu: Option<GpuPreference>,
@@ -173,11 +173,11 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             native_core: Default::default(),
-            #[cfg(feature = "bud")]
+            #[cfg(any(feature = "bud", target_os = "linux"))]
             bud: false,
-            #[cfg(feature = "bud")]
+            #[cfg(any(feature = "bud", target_os = "linux"))]
             experimental_hid_mouse: false,
-            #[cfg(feature = "bud")]
+            #[cfg(any(feature = "bud", target_os = "linux"))]
             experimental_hid_keyboard: false,
             prefer_hevc: false,
             presentation_mode: PresentationMode::Automatic,
@@ -193,7 +193,7 @@ impl Default for Settings {
             audio_max_buffer_ms: 150,
             allow_raw_audio: false,
             experimental_surround_audio: false,
-            #[cfg(feature = "vendor-video")]
+            #[cfg(any(feature = "vendor-video", target_os = "linux"))]
             experimental_zero_copy: false,
             video_gpu: None,
             provider: "cloudflare".into(),
@@ -478,7 +478,10 @@ impl Manager {
             Ok(())
         })
     }
-    fn update_local(&self, update: impl FnOnce(&mut Settings) -> Result<()>) -> Result<()> {
+    pub(crate) fn update_local(
+        &self,
+        update: impl FnOnce(&mut Settings) -> Result<()>,
+    ) -> Result<()> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         anyhow::ensure!(
             state.1.is_none(),
@@ -588,6 +591,7 @@ impl Manager {
     }
 }
 
+#[cfg(windows)]
 fn atomic_write(path: &std::path::Path, raw: &[u8]) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
@@ -619,6 +623,37 @@ fn atomic_write(path: &std::path::Path, raw: &[u8]) -> Result<()> {
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(temporary);
+    }
+    result
+}
+
+#[cfg(target_os = "linux")]
+fn atomic_write(path: &std::path::Path, raw: &[u8]) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random)
+        .map_err(|_| anyhow::anyhow!("Cannot allocate settings transaction"))?;
+    let name: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    let temporary = path.with_file_name(format!("settings-{name}.tmp"));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)
+        .context("Cannot write settings.json")?;
+    let result = (|| -> Result<()> {
+        file.write_all(raw)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temporary, path)
+            .context("Cannot replace settings.json; existing settings were preserved")?;
+        if let Some(parent) = path.parent() {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
     }
     result
 }

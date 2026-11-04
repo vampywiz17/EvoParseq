@@ -44,6 +44,7 @@ pub struct Playback {
     input_geometry: AtomicU64,
     input_ready: AtomicBool,
     capture: AtomicBool,
+    cursor_restore: Mutex<Option<(i32, i32)>>,
 }
 
 impl Playback {
@@ -57,6 +58,7 @@ impl Playback {
             input_geometry: AtomicU64::new(0),
             input_ready: AtomicBool::new(false),
             capture: AtomicBool::new(false),
+            cursor_restore: Mutex::new(None),
         })
     }
     pub fn repaint(&self) {
@@ -101,6 +103,24 @@ impl Playback {
         if self.capture.swap(capture, Ordering::AcqRel) != capture {
             self.ui.request_repaint();
         }
+    }
+    pub fn host_cursor(&self, capture: bool, x: i32, y: i32) {
+        let mut restore = self
+            .cursor_restore
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if self.capture() && !capture {
+            *restore = Some((x, y));
+        } else if capture {
+            *restore = None;
+        }
+        self.set_capture(capture);
+    }
+    pub fn take_cursor_restore(&self) -> Option<(i32, i32)> {
+        self.cursor_restore
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
     }
     pub fn capture(&self) -> bool {
         self.capture.load(Ordering::Acquire)

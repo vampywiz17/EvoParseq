@@ -15,6 +15,10 @@ pub struct DesktopInput {
     keyboard: std::sync::Arc<crate::native_loop::KeyboardBridge>,
     wheel: Vec2,
     grabbed: bool,
+    unlock_after_present: bool,
+    last_absolute: Option<Pos2>,
+    capture_anchor: Option<Pos2>,
+    restored_position: Option<Pos2>,
 }
 impl DesktopInput {
     pub fn new(keyboard: std::sync::Arc<crate::native_loop::KeyboardBridge>) -> Self {
@@ -30,6 +34,10 @@ impl DesktopInput {
         self.keyboard.bind(None);
         self.wheel = Vec2::ZERO;
         self.grabbed = false;
+        self.unlock_after_present = false;
+        self.capture_anchor = None;
+        self.restored_position = None;
+        playback.take_cursor_restore();
         self.controls = None;
         self.badge = None;
         Self::restore_cursor(ctx);
@@ -43,8 +51,38 @@ impl DesktopInput {
     }
     pub fn cursor(&mut self, ctx: &egui::Context, playback: &Playback) {
         let grab = self.enabled && playback.capture() && ctx.input(|i| i.focused);
+        if self.grabbed
+            && !grab
+            && self.enabled
+            && ctx.input(|i| i.focused)
+            && !self.unlock_after_present
+        {
+            if let (Some((x, y)), Some(rect)) = (playback.take_cursor_restore(), self.video) {
+                let viewport = crate::viewport::Viewport {
+                    source: playback.input_geometry(),
+                    client: (rect.width().round() as u32, rect.height().round() as u32),
+                };
+                if let Some((x, y)) = viewport.unmap(x, y) {
+                    let position = rect.min + egui::vec2(x as f32, y as f32);
+                    // Wayland permits position hints only while the pointer is locked.
+                    // Keep it locked through this presentation's surface commit, then
+                    // unlock on the next frame. No recurring warp in absolute mode.
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CursorPosition(position));
+                    ctx.set_cursor_icon(egui::CursorIcon::None);
+                    self.restored_position = Some(position);
+                    self.unlock_after_present = true;
+                    ctx.request_repaint();
+                    return;
+                }
+            }
+        }
         if self.grabbed != grab {
             self.grabbed = grab;
+            self.unlock_after_present = false;
+            if grab {
+                self.capture_anchor = self.last_absolute;
+                self.restored_position = None;
+            }
             ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(!grab));
             ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(if grab {
                 egui::CursorGrab::Locked
@@ -129,12 +167,18 @@ impl DesktopInput {
                 Event::PointerMoved(pos)
                     if !self.grabbed && (self.inside(*pos) || self.buttons != 0) =>
                 {
+                    // Do not send the stale pre-lock location or the compositor's
+                    // restoration echo back to the host as a new absolute move.
+                    if self.capture_anchor == Some(*pos) || self.restored_position == Some(*pos) { return true; }
+                    self.capture_anchor = None;
+                    self.restored_position = None;
+                    self.last_absolute = Some(*pos);
                     let local = *pos - self.video.unwrap().min;
                     self.pointer(playback, local, false, true, (0, 0));
                     // Keep egui's hover/leave bookkeeping current as well.
                     true
                 }
-                Event::MouseMoved(delta) if self.grabbed => {
+                Event::MouseMoved(delta) if self.grabbed && playback.capture() => {
                     self.pointer(playback, *delta, true, true, (0, 0));
                     false
                 }
@@ -319,5 +363,77 @@ mod ordinary_cursor_tests {
                     ))
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod drag_restore_tests {
+    use super::*;
+    #[test]
+    fn linux_drag_exit_commits_position_hint_before_unlock_and_ignores_stale_anchor() {
+        let ctx = egui::Context::default();
+        let playback = Playback::new(ctx.clone());
+        playback.set_input_ready(true);
+        playback.set_input_geometry((1920, 1080));
+        let mut adapter = DesktopInput {
+            enabled: true,
+            video: Some(Rect::from_min_size(
+                egui::pos2(10., 24.),
+                egui::vec2(960., 540.),
+            )),
+            last_absolute: Some(egui::pos2(100., 100.)),
+            ..Default::default()
+        };
+        playback.host_cursor(true, 180, 152);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            adapter.cursor(ctx, &playback)
+        });
+        playback.host_cursor(false, 1440, 810);
+        let hint = ctx.run(egui::RawInput::default(), |ctx| {
+            adapter.cursor(ctx, &playback)
+        });
+        let commands = &hint.viewport_output[&egui::ViewportId::ROOT].commands;
+        assert!(commands.iter().any(|cmd| matches!(cmd,egui::ViewportCommand::CursorPosition(pos) if *pos==egui::pos2(730.,429.))));
+        assert!(!commands.iter().any(|cmd| matches!(
+            cmd,
+            egui::ViewportCommand::CursorGrab(egui::CursorGrab::None)
+        )));
+        assert!(adapter.grabbed);
+        let unlock = ctx.run(egui::RawInput::default(), |ctx| {
+            adapter.cursor(ctx, &playback)
+        });
+        assert!(
+            unlock.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|cmd| matches!(
+                    cmd,
+                    egui::ViewportCommand::CursorGrab(egui::CursorGrab::None)
+                ))
+        );
+        assert!(!adapter.grabbed);
+        let mut raw = egui::RawInput::default();
+        raw.events = vec![
+            Event::PointerMoved(egui::pos2(100., 100.)),
+            Event::PointerMoved(egui::pos2(730., 429.)),
+        ];
+        adapter.events(&ctx, &mut raw, &playback);
+        let mut batch = std::collections::VecDeque::new();
+        playback.input.take(&mut batch).unwrap();
+        assert!(batch.is_empty());
+        raw.events = vec![Event::PointerMoved(egui::pos2(735., 430.))];
+        adapter.events(&ctx, &mut raw, &playback);
+        playback.input.take(&mut batch).unwrap();
+        assert_eq!(batch.len(), 1);
+        playback.host_cursor(false, 1000, 500);
+        let idle = ctx.run(egui::RawInput::default(), |ctx| {
+            adapter.cursor(ctx, &playback)
+        });
+        assert!(
+            !idle.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|cmd| matches!(cmd, egui::ViewportCommand::CursorPosition(_)))
+        );
     }
 }
