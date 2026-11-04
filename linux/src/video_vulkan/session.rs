@@ -168,6 +168,9 @@ impl Session {
             )
             .result()?
         };
+        let separate_images = caps
+            .flags
+            .contains(vk::VideoCapabilityFlagsKHR::SEPARATE_REFERENCE_IMAGES);
         let max_coded_extent = caps.max_coded_extent;
         let max_dpb_slots = caps.max_dpb_slots;
         let max_active_reference_pictures = caps.max_active_reference_pictures;
@@ -191,6 +194,10 @@ impl Session {
         ensure!(
             codec_caps.max_level_idc >= parameters::level(sps.level_idc)?,
             "H.264 level exceeds the decoder limit"
+        );
+        ensure!(
+            separate_images,
+            "This driver requires a layered DPB; separate reference surfaces are unavailable"
         );
         self.slot_count = max_dpb_slots.min(MAX_FRAMES as u32);
         self.alignment = min_bitstream_buffer_size_alignment.max(1);
