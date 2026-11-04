@@ -22,7 +22,7 @@ pub mod desktop {
     pub const SETTINGS_WINDOW: [i32; 2] = [984, 721];
     pub const BODY: i32 = 17;
     pub const HEADING: i32 = 32;
-    pub const CANVAS: [i32; 2] = [728, 560];
+    pub const CANVAS: [i32; 2] = [728, 551];
     pub const LOGO: [i32; 4] = [32, 24, 40, 46];
     pub const WORDMARK: [[i32; 4]; 2] = [[84, 24, 68, 46], [152, 24, 180, 46]];
     pub const SETTINGS: [i32; 4] = [580, 28, 116, 36];
