@@ -1,6 +1,8 @@
 //! Translate the existing shared H.264 parser output into Vulkan standard structs.
 use anyhow::{Result, ensure};
 use ash::vk::native as n;
+// Vulkan standard C structs contain integers, bitfields and nullable pointers;
+// zero initializes reserved fields and absent optional parameter pointers.
 use lowlat_decode::h264::{
     pps::Pps,
     sps::{ScalingLists, Sps},
@@ -20,7 +22,7 @@ pub fn scaling(source: &ScalingLists) -> n::StdVideoH264ScalingLists {
     let mut result = n::StdVideoH264ScalingLists {
         scaling_list_present_mask: 0xff,
         ScalingList4x4: source.list_4x4,
-        ..Default::default()
+        ..unsafe { std::mem::zeroed() }
     };
     // Vulkan standard parameters use the bitstream's scan order.
     for list in &mut result.ScalingList4x4 {
@@ -69,7 +71,7 @@ pub fn sps(
         frame_crop_bottom_offset: crop[3],
         pOffsetForRefFrame: source.offset_for_ref_frame.as_ptr(),
         pScalingLists: lists,
-        ..Default::default()
+        ..unsafe { std::mem::zeroed() }
     };
     result
         .flags
@@ -126,7 +128,7 @@ pub fn pps(
         chroma_qp_index_offset: source.chroma_qp_index_offset,
         second_chroma_qp_index_offset: source.second_chroma_qp_index_offset,
         pScalingLists: lists,
-        ..Default::default()
+        ..unsafe { std::mem::zeroed() }
     };
     result
         .flags

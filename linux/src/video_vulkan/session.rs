@@ -152,9 +152,13 @@ impl Session {
             )
             .result()?
         };
+        let max_coded_extent = caps.max_coded_extent;
+        let max_dpb_slots = caps.max_dpb_slots;
+        let max_active_reference_pictures = caps.max_active_reference_pictures;
+        let min_bitstream_buffer_size_alignment = caps.min_bitstream_buffer_size_alignment;
+        let std_header_version = caps.std_header_version;
         ensure!(
-            caps.max_coded_extent.width >= self.size.0
-                && caps.max_coded_extent.height >= self.size.1,
+            max_coded_extent.width >= self.size.0 && max_coded_extent.height >= self.size.1,
             "Stream exceeds Vulkan decoder dimensions"
         );
         ensure!(
@@ -164,23 +168,23 @@ impl Session {
             "Decoder cannot share its original DPB surfaces with presentation"
         );
         ensure!(
-            caps.max_dpb_slots >= u32::from(sps.max_num_ref_frames) + 1
-                && caps.max_active_reference_pictures >= u32::from(sps.max_num_ref_frames),
+            max_dpb_slots >= u32::from(sps.max_num_ref_frames) + 1
+                && max_active_reference_pictures >= u32::from(sps.max_num_ref_frames),
             "Insufficient Vulkan DPB capacity"
         );
         ensure!(
             codec_caps.max_level_idc >= parameters::level(sps.level_idc)?,
             "H.264 level exceeds the decoder limit"
         );
-        self.slot_count = caps.max_dpb_slots.min(MAX_FRAMES as u32);
-        self.alignment = caps.min_bitstream_buffer_size_alignment.max(1);
+        self.slot_count = max_dpb_slots.min(MAX_FRAMES as u32);
+        self.alignment = min_bitstream_buffer_size_alignment.max(1);
         let extent = vk::Extent2D {
             width: self.size.0,
             height: self.size.1,
         };
         let standard = vk::ExtensionProperties {
-            extension_name: caps.std_header_version.extension_name,
-            spec_version: caps.std_header_version.spec_version,
+            extension_name: std_header_version.extension_name,
+            spec_version: std_header_version.spec_version,
         };
         resources.session = unsafe {
             context.video.create_video_session(
@@ -533,7 +537,7 @@ impl Session {
             let mut info = n::StdVideoDecodeH264ReferenceInfo {
                 FrameNum: u16::try_from(reference.frame_idx)?,
                 PicOrderCnt: [reference.top_poc, reference.bottom_poc],
-                ..Default::default()
+                ..unsafe { std::mem::zeroed() }
             };
             info.flags
                 .set_used_for_long_term_reference(reference.long_term.into());
@@ -562,7 +566,7 @@ impl Session {
         let mut target_standard = n::StdVideoDecodeH264ReferenceInfo {
             FrameNum: u16::try_from(job.current.frame_num)?,
             PicOrderCnt: [job.current.top_poc, job.current.bottom_poc],
-            ..Default::default()
+            ..unsafe { std::mem::zeroed() }
         };
         let mut target_codec =
             vk::VideoDecodeH264DpbSlotInfoKHR::default().std_reference_info(&target_standard);
@@ -576,7 +580,7 @@ impl Session {
             frame_num: u16::try_from(job.current.frame_num)?,
             idr_pic_id: u16::try_from(first.header.idr_pic_id)?,
             PicOrderCnt: [job.current.top_poc, job.current.bottom_poc],
-            ..Default::default()
+            ..unsafe { std::mem::zeroed() }
         };
         picture_info.flags.set_IdrPicFlag(job.current.idr.into());
         picture_info

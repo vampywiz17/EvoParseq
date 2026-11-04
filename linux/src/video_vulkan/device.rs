@@ -47,7 +47,7 @@ unsafe fn create_on(instance: &wgpu::Instance, adapter: &wgpu::Adapter) -> Resul
         .context("Vulkan instance unavailable")?;
     let hal_adapter = unsafe { adapter.as_hal::<wgpu::hal::api::Vulkan>() }
         .context("Vulkan adapter unavailable")?;
-    let raw_instance = hal_instance.raw_instance();
+    let raw_instance = hal_instance.shared_instance().raw_instance();
     let physical = hal_adapter.raw_physical_device();
     let features = wgpu::Features::TEXTURE_FORMAT_NV12;
     ensure!(

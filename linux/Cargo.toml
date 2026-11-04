@@ -42,3 +42,6 @@ lowlat-core = { path = "../src-native/crates/bud/vendor/lowlat-core" }
 lowlat-crypto = { path = "../src-native/crates/bud/vendor/lowlat-crypto" }
 
 lowlat-drivers = { path = "../src-native/vendor/lowlat-drivers" }
+
+[dev-dependencies]
+naga = { version = "=27.0.3", features = ["wgsl-in"] }
