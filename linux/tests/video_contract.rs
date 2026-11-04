@@ -2,6 +2,95 @@
 mod output;
 #[path = "../src/video_vulkan/parameters.rs"]
 mod parameters;
+#[path = "../src/playback.rs"]
+mod playback;
+
+#[test]
+fn decode_handoff_handles_60_fps_on_a_59_94_hz_display_without_losing_references() {
+    let healthy = playback::Playback::new(eframe::egui::Context::default());
+    let mut legacy = std::collections::VecDeque::new();
+    let mut next_input = 0u64;
+    let mut sent = 0u32;
+    let mut decoded = 0u32;
+    let mut legacy_failed = false;
+    // One frame every 999 ticks vs one repaint every 1000 ticks: exact 60/59.94.
+    // Exercise more than five minutes without depending on wall-clock timing.
+    for repaint in 0..20_000u64 {
+        while next_input <= repaint * 1000 {
+            let bytes = sent.to_le_bytes();
+            healthy.submit(&bytes).unwrap();
+            if !legacy_failed {
+                if legacy.len() == 8 {
+                    legacy_failed = true;
+                } else {
+                    legacy.push_back(sent);
+                }
+            }
+            sent += 1;
+            next_input += 999;
+        }
+        // Reproduce the old single-packet-per-repaint consumer.
+        legacy.pop_front();
+        healthy
+            .decode_pending(|bytes| {
+                assert_eq!(u32::from_le_bytes(bytes.try_into().unwrap()), decoded);
+                decoded += 1;
+                Ok(())
+            })
+            .unwrap();
+    }
+    assert_eq!(decoded, sent);
+    healthy.stop();
+    assert!(healthy.stopped());
+    assert!(legacy_failed);
+}
+
+#[test]
+fn decode_batch_preserves_bursts_and_is_bounded_despite_new_arrivals() {
+    let playback = playback::Playback::new(eframe::egui::Context::default());
+    for id in 0..8u8 {
+        playback.submit(&[id]).unwrap();
+    }
+    assert!(playback.submit(&[99]).is_err());
+    let mut ids = Vec::new();
+    assert_eq!(
+        playback
+            .decode_pending(|bytes| {
+                ids.push(bytes[0]);
+                // The producer can use the queue while the native callback runs.
+                // These arrivals must not turn this UI update into an unbounded loop.
+                playback.submit(&[bytes[0] + 8])?;
+                Ok(())
+            })
+            .unwrap(),
+        8
+    );
+    assert_eq!(ids, (0..8u8).collect::<Vec<_>>());
+    assert_eq!(
+        playback
+            .decode_pending(|bytes| {
+                ids.push(bytes[0]);
+                Ok(())
+            })
+            .unwrap(),
+        8
+    );
+    assert_eq!(ids, (0..16u8).collect::<Vec<_>>());
+    assert_eq!(
+        playback
+            .decode_pending(|_| panic!("Queue must be empty"))
+            .unwrap(),
+        0
+    );
+    playback.submit(&[16]).unwrap();
+    playback.stop();
+    assert_eq!(
+        playback
+            .decode_pending(|_| panic!("Stopped playback must not decode"))
+            .unwrap(),
+        0
+    );
+}
 
 #[test]
 fn presentation_releases_output_leases_beyond_the_dpb_capacity() {

@@ -204,8 +204,8 @@ impl eframe::App for Desktop {
         }
 
         if let (Some(playback), Some(decoder)) = (&self.playback, &mut self.decoder) {
-            if let Some(bytes) = playback.next() {
-                if let Err(error) = decoder.submit(&bytes) {
+            match playback.decode_pending(|bytes| decoder.submit(bytes)) {
+                Err(error) => {
                     playback.stop();
                     let message = format!(
                         "Vulkan video stopped after {} pictures: {error:#}",
@@ -214,7 +214,8 @@ impl eframe::App for Desktop {
                     eprintln!("{message}");
                     self.error = Some(message);
                 }
-                ctx.request_repaint();
+                Ok(consumed) if consumed > 0 => ctx.request_repaint(),
+                Ok(_) => {}
             }
         }
         egui::CentralPanel::default().show(ctx, |ui| {

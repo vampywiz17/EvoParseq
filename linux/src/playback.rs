@@ -42,11 +42,35 @@ impl Playback {
         self.ui.request_repaint();
         Ok(())
     }
-    pub fn next(&self) -> Option<Vec<u8>> {
+    fn next(&self) -> Option<Vec<u8>> {
         let mut packets = self.packets.lock().unwrap_or_else(|e| e.into_inner());
         let packet = packets.0.pop_front()?;
         packets.1 -= packet.len();
         Some(packet)
+    }
+
+    /// Decode the bounded backlog present at the start of this UI update.
+    /// Presentation happens afterwards, so it cannot throttle decoding to one
+    /// packet per display refresh. New arrivals wait for the next update;
+    /// compressed references are never discarded to catch up.
+    pub fn decode_pending(&self, mut decode: impl FnMut(&[u8]) -> Result<()>) -> Result<usize> {
+        let pending = self
+            .packets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .0
+            .len();
+        let mut consumed = 0;
+        for _ in 0..pending {
+            if self.stopped() {
+                break;
+            }
+            let Some(packet) = self.next() else { break };
+            // No queue lock is held while executing native codec operations.
+            decode(&packet)?;
+            consumed += 1;
+        }
+        Ok(consumed)
     }
 }
 
