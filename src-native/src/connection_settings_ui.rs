@@ -26,7 +26,7 @@ use windows_sys::Win32::{
 pub const OPEN: usize = 4100;
 pub const ABOUT: usize = crate::updater_ui::ABOUT;
 // Give the large heading and subtitle enough space, including font overhang.
-const HEADER_EXTRA: i32 = 20;
+const HEADER_EXTRA: i32 = crate::app_style::settings::HEADER_EXTRA;
 const SAVE: usize = 4101;
 const BACK: usize = 4102;
 
@@ -170,9 +170,9 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         ai_hint: null_mut(),
         background: CreateSolidBrush(BG),
         field: CreateSolidBrush(FIELD),
-        font: font(16, 400),
-        heading: font(46, 300),
-        small: font(13, 400),
+        font: font(crate::app_style::settings::BODY, 400),
+        heading: font(crate::app_style::settings::HEADING, 300),
+        small: font(crate::app_style::settings::SMALL, 400),
         items: Vec::new(),
         building_tab: None,
         scroll: 0,
@@ -223,7 +223,7 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         "STATIC",
         "Settings",
         0,
-        [0, 24, 820, 64],
+        crate::app_style::settings::TITLE_RECT,
         0,
         0,
         page.heading,
@@ -232,9 +232,9 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         hwnd,
         page,
         "STATIC",
-        "Customize your connection, video and audio playback.",
+        crate::app_style::settings::SUBTITLE,
         0,
-        [4, 88, 816, 24],
+        crate::app_style::settings::SUBTITLE_RECT,
         0,
         0,
         page.font,
@@ -243,25 +243,29 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         (
             NETWORK_TAB,
             crate::app_style::SETTINGS_TABS[0],
-            [0, 142, 120, 40],
+            crate::app_style::settings::TABS[0],
         ),
         (
             VIDEO_TAB,
             crate::app_style::SETTINGS_TABS[1],
-            [132, 142, 120, 40],
+            crate::app_style::settings::TABS[1],
         ),
         (
             AUDIO_TAB,
             crate::app_style::SETTINGS_TABS[2],
-            [264, 142, 120, 40],
+            crate::app_style::settings::TABS[2],
         ),
         (
             INPUT_TAB,
             crate::app_style::SETTINGS_TABS[3],
-            [396, 142, 120, 40],
+            crate::app_style::settings::TABS[3],
         ),
-        (BACK, "Back", [550, 142, 110, 40]),
-        (SAVE, "Save settings", [676, 142, 144, 40]),
+        (
+            BACK,
+            crate::app_style::settings::BACK_TEXT,
+            crate::app_style::settings::BACK,
+        ),
+        (SAVE, "Save settings", crate::app_style::settings::SAVE),
     ] {
         add(
             hwnd,
@@ -605,7 +609,15 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     page.building_tab = Some(Tab::Network);
     #[cfg(feature = "bud")]
     {
-        row_label(hwnd, page, "Transport", "WebRTC or BUD: direct UDP or TURN over UDP/TLS/TCP.\nUses the TURN URLs above. Reconnect after changing.", 844, 0, 40);
+        row_label(
+            hwnd,
+            page,
+            crate::app_style::settings::TRANSPORT,
+            crate::app_style::settings::TRANSPORT_HELP,
+            crate::app_style::settings::TRANSPORT_Y,
+            0,
+            40,
+        );
         let transport = add(
             hwnd,
             page,
@@ -756,7 +768,7 @@ unsafe fn row_label(
         "STATIC",
         label,
         0,
-        [0, y + 2, 392, 24],
+        crate::app_style::settings::label(y),
         0,
         group,
         page.font,
@@ -767,7 +779,7 @@ unsafe fn row_label(
         "STATIC",
         help,
         0,
-        [0, y + 32, 392, help_height],
+        crate::app_style::settings::help(y, help_height),
         HELP,
         group,
         page.small,

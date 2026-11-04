@@ -264,17 +264,25 @@ impl Decoder {
     pub fn show(&self, ui: &mut egui::Ui) -> Option<(egui::Rect, (u32, u32))> {
         if let Some(frame) = &self.frame {
             let available = ui.available_size();
-            let ratio = frame.size.0 as f32 / frame.size.1 as f32;
-            let width = available.x.min(available.y * ratio).max(1.0);
-            let size = egui::vec2(width, width / ratio);
-            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            let (canvas, _) = ui.allocate_exact_size(available, egui::Sense::hover());
+            let [l, t, r, b] = crate::viewport::Viewport {
+                source: frame.size,
+                client: (
+                    available.x.round().max(1.) as u32,
+                    available.y.round().max(1.) as u32,
+                ),
+            }
+            .rect()?;
+            let rect = egui::Rect::from_min_max(
+                canvas.min + egui::vec2(l as f32, t as f32),
+                canvas.min + egui::vec2(r as f32, b as f32),
+            );
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                 rect,
                 Present(frame.clone()),
             ));
             Some((rect, frame.size))
         } else {
-            ui.label("Waiting for a decoded H.264 picture...");
             None
         }
     }

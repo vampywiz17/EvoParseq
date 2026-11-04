@@ -213,3 +213,16 @@ manual resizing. Wayland controls final position and usable desktop geometry.
 The client cursor icon and native cursor-visible flag are reset together on
 release/launcher entry; consumed remote mouse motion no longer hides hover
 bookkeeping from egui. These changes do not alter decode or GPU surface handling.
+
+## Desktop parity and centered presentation (0.1.9)
+
+The application now consumes the canonical Windows logical GUI metrics/copy
+from app_style.rs. The live video contains only the translucent draggable session
+badge; its panel currently exposes Disconnect. Diagnostic text is not drawn over
+video. Presentation uses the shared Viewport letterbox on both axes, and the same
+rectangle defines normal mouse coordinates. Decoder surfaces, texture imports,
+shader pipeline, queue bounds, pacing and transport/audio paths are unchanged.
+This remains GPU-resident NV12 conversion, not the project's Zero copy mode.
+The cursor patch is scoped to the Linux UI dependency graph and adds no media
+work. Windows UI substitutions retain their exact previous values; Windows and
+Android CI must pass independently of the Linux Flatpak checks.

@@ -18,6 +18,14 @@ The user's standing requirement is to keep current and future development standa
 
 ## UI and platform boundaries for future development
 
+### Desktop GUI parity (standing user requirement)
+
+- Windows is the canonical desktop GUI. Linux and future desktop ports must use the same visible wording, font sizes, control dimensions, spacing, ordering and layout. Put these definitions in shared Rust and have the platform adapters consume them; do not maintain approximate per-platform copies.
+- Only expose controls for features actually integrated into the port. Do not add preview labels, diagnostic reports, platform-specific explanatory copy or replacement layouts to the product GUI. Keep diagnostics in explicitly requested diagnostic tools/logs.
+- Session controls use the Windows translucent, draggable session icon and panel layout. Add individual controls in their Windows positions as their features become available.
+- Window decorations, native resize cursors, window management and OS event translation follow the host desktop. These are platform adapters, not exceptions to application content parity. Verify layout, text sizes, centering and cursor transitions when changing desktop UI.
+- This desktop rule does not replace the Android TV requirements below: TV presentation follows Android TV design and D-pad navigation while reusing shared application models and policy.
+
 The user requires continuing the incremental separation established on the native-core branch:
 
 - Put application state, parsing/validation rules, option dependencies, persistence decisions and presentation text/units in shared Rust models/controllers. Reuse the existing models; do not duplicate their rules in each UI.

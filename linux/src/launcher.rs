@@ -19,15 +19,25 @@ pub fn style(ctx: &egui::Context) {
     style.spacing.item_spacing = egui::vec2(12., 14.);
     style.spacing.button_padding = egui::vec2(16., 9.);
     style.spacing.interact_size.y = 34.;
-    style
-        .text_styles
-        .insert(egui::TextStyle::Body, egui::FontId::proportional(17.));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Button, egui::FontId::proportional(17.));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Heading, egui::FontId::proportional(30.));
+    style.text_styles.insert(
+        egui::TextStyle::Body,
+        egui::FontId::proportional(app_style::desktop::BODY as f32),
+    );
+    style.text_styles.insert(
+        egui::TextStyle::Button,
+        egui::FontId::proportional(app_style::desktop::BODY as f32),
+    );
+    style.text_styles.insert(
+        egui::TextStyle::Heading,
+        egui::FontId::proportional(app_style::desktop::HEADING as f32),
+    );
+    style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::ZERO;
+    style.visuals.widgets.hovered.corner_radius = egui::CornerRadius::ZERO;
+    style.visuals.widgets.active.corner_radius = egui::CornerRadius::ZERO;
+    style.text_styles.insert(
+        egui::TextStyle::Small,
+        egui::FontId::proportional(app_style::settings::SMALL as f32),
+    );
     ctx.set_style(style);
 }
 impl Desktop {
@@ -53,167 +63,277 @@ impl Desktop {
             self.send(Command::Stream(peer, self.transport, playback));
         }
     }
+
     pub(super) fn launcher(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-        egui::Frame::new().inner_margin(28.).show(ui, |ui| {
-            if self.show_video { self.settings(ui); return; }
-            ui.horizontal(|ui| {
-                ui.image((self.logo.id(), egui::vec2(44.,44.)));
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.;
-                    ui.label(RichText::new(app_style::WORDMARK[0]).size(30.).strong());
-                    ui.label(RichText::new(app_style::WORDMARK[1]).size(30.).strong().color(color(app_style::BLUE)));
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(if self.show_video { "Back" } else { "Settings" }).clicked() { self.show_video = !self.show_video; }
-
-                });
-            });
-            ui.label(RichText::new(app_style::SUBTITLE).size(14.).color(Color32::GRAY));
-            ui.add_space(14.);
-            if let Some(error) = &self.error { ui.colored_label(Color32::LIGHT_RED, error); }
-            ui.add_enabled_ui(!self.busy, |ui| {
-                if self.signed_in {
-                    ui.heading("Your computers");
-                    let list_height = (ui.available_height() - 190.).clamp(110.,260.);
-                    egui::Frame::new().fill(color(app_style::FIELD)).inner_margin(8.).corner_radius(4).show(ui, |ui| {
-                        ui.set_min_width((ui.available_width()-16.).max(1.));
-                        egui::ScrollArea::vertical().max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
-                            for host in self.picker.hosts() {
-                                let response = ui.add_sized([ui.available_width(),42.], egui::Button::new(format!("{}   /   {}",host.name,host.peer)).selected(self.peer == host.peer));
-                                if response.clicked() { self.peer = host.peer.clone(); }
-                            }
-                            if self.picker.hosts().is_empty() { ui.label("No computers listed. Refresh, or enter the host peer ID."); }
-                        });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Host peer ID");
-                        ui.add(egui::TextEdit::singleline(&mut self.peer).desired_width(ui.available_width()));
-                    });
-                    ui.horizontal(|ui| {
-                        if ui.button("Refresh").clicked() { self.send(Command::Refresh); }
-                        if ui.button("Sign out").clicked() { self.send(Command::SignOut); }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add_enabled(self.video_context.is_some(), egui::Button::new("Connect").fill(color(app_style::BLUE))).clicked() { self.start_stream(ctx); }
-                            ui.small(self.transport.label());
-                        });
-                    });
-                    if let Some(result) = &self.session_result { ui.label(result); }
-                    if let Some(error) = &self.video_error { ui.colored_label(Color32::LIGHT_RED,error); }
-                } else {
-                    ui.heading("Sign in to Parsec");
-                    ui.add_space(12.);
-                    let field_width = (ui.available_width() - 230.).max(140.);
-                    let mut submit = false;
-                    egui::Grid::new("account-fields").spacing([24.,20.]).show(ui, |ui| {
-                        for (i,label) in app_style::LOGIN_FIELDS.iter().enumerate() {
-                            ui.add_sized([200.,34.],egui::Label::new(*label));
-                            let text: &mut String = match i { 0 => &mut self.email, 1 => &mut self.password, _ => &mut self.tfa };
-                            let response = ui.add_sized([field_width,34.],egui::TextEdit::singleline(text).password(i != 0));
-                            submit |= response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                            ui.end_row();
-                        }
-                    });
-                    ui.add_space(22.);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        submit |= ui.add_sized([180.,40.],egui::Button::new("Sign in").fill(color(app_style::BLUE))).clicked();
-                    });
-                    if submit {
-                        let login = account::Login { email:self.email.clone(), password:std::mem::take(&mut self.password), tfa:std::mem::take(&mut self.tfa) };
-                        self.send(Command::SignIn(login));
-                    }
-                    ui.add_space(20.);
-                    ui.small(app_style::LOGIN_NOTICE);
+        // A fixed logical canvas, as on Windows. Small viewports scroll instead
+        // of shrinking label columns or changing control/text dimensions.
+        egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if self.show_video {
+                    self.settings(ui);
+                    return;
                 }
+                use app_style::desktop as d;
+                let origin = ui.cursor().min;
+                let r = |rect| rect_at(origin, rect);
+                ui.allocate_space(egui::vec2(d::CANVAS[0] as f32, d::CANVAS[1] as f32));
+                // The Win32 owner-drawn logo is vertically centered in its slot.
+                let slot = r(d::LOGO);
+                ui.put(
+                    egui::Rect::from_center_size(slot.center(), egui::vec2(40., 40.)),
+                    egui::Image::new((self.logo.id(), egui::vec2(40., 40.))),
+                );
+                for i in 0..2 {
+                    label(
+                        ui,
+                        r(d::WORDMARK[i]),
+                        app_style::WORDMARK[i],
+                        d::HEADING as f32,
+                        if i == 1 {
+                            color(app_style::BLUE)
+                        } else {
+                            color(app_style::TEXT)
+                        },
+                    );
+                }
+                if ui
+                    .put(r(d::SETTINGS), egui::Button::new(d::SETTINGS_TEXT))
+                    .clicked()
+                    && !self.busy
+                {
+                    self.show_video = true;
+                }
+                label(
+                    ui,
+                    r(d::SUBTITLE),
+                    app_style::SUBTITLE,
+                    d::BODY as f32,
+                    color(app_style::TEXT),
+                );
+                ui.add_enabled_ui(!self.busy, |ui| {
+                    if self.signed_in {
+                        let list = r(d::HOSTS);
+                        ui.painter().rect_filled(list, 0., color(app_style::FIELD));
+                        ui.scope_builder(
+                            egui::UiBuilder::new()
+                                .max_rect(list.shrink(2.))
+                                .layout(egui::Layout::top_down(egui::Align::Min)),
+                            |ui| {
+                                ui.set_clip_rect(list);
+                                ui.spacing_mut().item_spacing.y = 0.;
+                                egui::ScrollArea::vertical()
+                                    .id_salt("hosts")
+                                    .show(ui, |ui| {
+                                        for host in self.picker.hosts() {
+                                            let (row, response) = ui.allocate_exact_size(
+                                                egui::vec2(list.width() - 4., 22.),
+                                                egui::Sense::click(),
+                                            );
+                                            if self.peer == host.peer {
+                                                ui.painter().rect_filled(
+                                                    row,
+                                                    0.,
+                                                    color(app_style::BLUE),
+                                                );
+                                            }
+                                            ui.painter().with_clip_rect(row).text(
+                                                row.left_center(),
+                                                egui::Align2::LEFT_CENTER,
+                                                d::host_text(&host.name, &host.peer),
+                                                egui::FontId::proportional(d::BODY as f32),
+                                                color(app_style::TEXT),
+                                            );
+                                            if response.clicked() {
+                                                self.peer = host.peer.clone();
+                                            }
+                                        }
+                                    });
+                            },
+                        );
+                        label(
+                            ui,
+                            r(d::PEER_LABEL),
+                            d::PEER_TEXT,
+                            d::BODY as f32,
+                            color(app_style::TEXT),
+                        );
+                        ui.put(
+                            r(d::PEER),
+                            egui::TextEdit::singleline(&mut self.peer).char_limit(256),
+                        );
+                        for i in 0..3 {
+                            let response = ui
+                                .scope(|ui| {
+                                    if i == 2 {
+                                        if self.video_context.is_none() {
+                                            ui.disable();
+                                        }
+                                    }
+                                    ui.put(r(d::ACTIONS[i]), egui::Button::new(d::ACTION_LABELS[i]))
+                                })
+                                .inner;
+                            if response.clicked() {
+                                match i {
+                                    0 => self.send(Command::Refresh),
+                                    1 => self.send(Command::SignOut),
+                                    _ => self.start_stream(ctx),
+                                }
+                            }
+                        }
+                    } else {
+                        let mut submit = false;
+                        for (i, text) in app_style::LOGIN_FIELDS.iter().enumerate() {
+                            label(
+                                ui,
+                                r(d::login_label(i)),
+                                text,
+                                d::BODY as f32,
+                                color(app_style::TEXT),
+                            );
+                            let value: &mut String = match i {
+                                0 => &mut self.email,
+                                1 => &mut self.password,
+                                _ => &mut self.tfa,
+                            };
+                            let response = ui.put(
+                                r(d::login_edit(i)),
+                                egui::TextEdit::singleline(value)
+                                    .password(i == 1)
+                                    .char_limit(4096),
+                            );
+                            submit |= response.lost_focus()
+                                && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        }
+                        submit |= ui.put(r(d::LOGIN), egui::Button::new(d::SIGN_IN)).clicked();
+                        if submit {
+                            let login = account::Login {
+                                email: self.email.clone(),
+                                password: std::mem::take(&mut self.password),
+                                tfa: std::mem::take(&mut self.tfa),
+                            };
+                            self.send(Command::SignIn(login));
+                        }
+                    }
+                });
+                let status = self
+                    .error
+                    .as_deref()
+                    .or(self.video_error.as_deref())
+                    .unwrap_or(if self.busy {
+                        "Please wait..."
+                    } else if !self.signed_in {
+                        app_style::LOGIN_NOTICE
+                    } else if self.picker.hosts().is_empty() {
+                        d::EMPTY
+                    } else {
+                        d::CHOOSE
+                    });
+                label(
+                    ui,
+                    r(d::STATUS),
+                    status,
+                    d::BODY as f32,
+                    if self.error.is_some() {
+                        Color32::LIGHT_RED
+                    } else {
+                        color(app_style::TEXT)
+                    },
+                );
             });
-            if self.busy { ui.horizontal(|ui| { ui.spinner(); ui.label("Please wait..."); }); }
-            ui.add_space(12.);
-            ui.small(concat!("EvoParseq Linux preview ",env!("CARGO_PKG_VERSION")));
-        });
-        });
     }
-}
-
-impl Desktop {
     fn settings(&mut self, ui: &mut egui::Ui) {
+        use app_style::settings as s;
         ui.visuals_mut().override_text_color = Some(color(app_style::SETTINGS_TEXT));
         ui.visuals_mut().extreme_bg_color = color(app_style::SETTINGS_FIELD);
         ui.visuals_mut().selection.bg_fill = color(app_style::SETTINGS_ACCENT);
-        ui.label(RichText::new("Settings").size(46.));
-        ui.label("Customize your connection and video playback.");
-        ui.add_space(12.);
-        ui.horizontal(|ui| {
-            if ui
-                .add_sized(
-                    [120., 40.],
-                    egui::Button::new(app_style::SETTINGS_TABS[0]).selected(!self.settings_video),
-                )
-                .clicked()
-            {
-                self.settings_video = false;
-            }
-            if ui
-                .add_sized(
-                    [120., 40.],
-                    egui::Button::new(app_style::SETTINGS_TABS[1]).selected(self.settings_video),
-                )
-                .clicked()
-            {
-                self.settings_video = true;
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add_sized([110., 40.], egui::Button::new("Back"))
-                    .clicked()
-                {
-                    self.show_video = false;
-                }
-            });
-        });
-        ui.separator();
-        ui.label(
-            RichText::new(if self.settings_video {
-                "VIDEO"
-            } else {
-                "NETWORK"
-            })
-            .color(color(app_style::SETTINGS_ACCENT)),
+        ui.style_mut().override_font_id = Some(egui::FontId::proportional(s::BODY as f32));
+        let origin = ui.cursor().min
+            + egui::vec2(((ui.available_width() - s::WIDTH as f32) / 2.).max(24.), 0.);
+        let r = |rect| rect_at(origin, s::positioned(rect));
+        ui.allocate_space(egui::vec2(s::WIDTH as f32 + 48., 360.));
+        label(
+            ui,
+            r(s::TITLE_RECT),
+            s::TITLE,
+            s::HEADING as f32,
+            color(app_style::SETTINGS_TEXT),
         );
-        if self.settings_video {
-            ui.label("Device capabilities");
-            ui.label(format!("UI adapter: {}", self.renderer));
-            ui.small("Driver-reported capabilities. The current playback backend supports H.264 8-bit 4:2:0.");
-            for line in &self.video {
-                ui.label(line);
-            }
-        } else {
-            egui::Grid::new("network-settings")
-                .num_columns(2)
-                .spacing([24., 18.])
-                .show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        ui.label("Transport");
-                        ui.small("Select the transport for your next connection.");
-                    });
-                    egui::ComboBox::from_id_salt("transport")
-                        .selected_text(self.transport.label())
-                        .width(250.)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.transport,
-                                connection::Mode::WebRtc,
-                                "WebRTC",
-                            );
-                            ui.selectable_value(&mut self.transport, connection::Mode::Bud, "BUD");
-                        });
-                    ui.end_row();
-                });
-            ui.add_space(16.);
-            ui.small("Changes apply to the next connection and remain in memory for this run.");
+        label(
+            ui,
+            r(s::SUBTITLE_RECT),
+            s::SUBTITLE,
+            s::BODY as f32,
+            color(app_style::SETTINGS_TEXT),
+        );
+        ui.put(
+            r(s::TABS[0]),
+            egui::Button::new(app_style::SETTINGS_TABS[0]).fill(color(app_style::SETTINGS_ACCENT)),
+        );
+        // Video/Audio/Input have no editable settings integrated yet. The raw
+        // Vulkan capability report remains in --probe-video, outside product UI.
+        if ui
+            .put(r(s::BACK), egui::Button::new(s::BACK_TEXT))
+            .clicked()
+        {
+            self.show_video = false;
         }
+        ui.painter().line_segment(
+            [
+                origin + egui::vec2(0., 147.),
+                origin + egui::vec2(s::WIDTH as f32, 147.),
+            ],
+            egui::Stroke::new(1., color(app_style::FIELD)),
+        );
+        label(
+            ui,
+            r(s::NETWORK_RECT),
+            s::NETWORK,
+            s::BODY as f32,
+            color(app_style::SETTINGS_ACCENT),
+        );
+        // Preserve the Windows Transport row and column coordinates. Controls
+        // for unavailable features are hidden, rather than replaced with copy.
+        label(
+            ui,
+            r(s::label(s::TRANSPORT_Y)),
+            s::TRANSPORT,
+            s::BODY as f32,
+            color(app_style::SETTINGS_TEXT),
+        );
+        ui.allocate_space(egui::vec2(1., 640.));
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(r(s::field(s::TRANSPORT_Y, 32))),
+            |ui| {
+                egui::ComboBox::from_id_salt("transport")
+                    .selected_text(self.transport.label())
+                    .width(400.)
+                    .height(160.)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.transport,
+                            connection::Mode::WebRtc,
+                            "WebRTC",
+                        );
+                        ui.selectable_value(&mut self.transport, connection::Mode::Bud, "BUD");
+                    });
+            },
+        );
     }
 }
 
+pub fn rect_at(origin: egui::Pos2, [x, y, w, h]: [i32; 4]) -> egui::Rect {
+    egui::Rect::from_min_size(
+        origin + egui::vec2(x as f32, y as f32),
+        egui::vec2(w as f32, h as f32),
+    )
+}
+fn label(ui: &mut egui::Ui, rect: egui::Rect, text: &str, size: f32, color: Color32) {
+    ui.put(
+        rect,
+        egui::Label::new(RichText::new(text).size(size).color(color)).halign(egui::Align::Min),
+    );
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,28 +362,19 @@ mod tests {
             signed_in: false,
             busy: false,
             error: None,
-            session_result: None,
             show_video: false,
-            settings_video: false,
+            badge: Default::default(),
             fitted_stream: None,
             launcher_size: None,
-            video: Vec::new(),
-            renderer: "fixture".into(),
             video_context: None,
             video_error: None,
             output_format: wgpu::TextureFormat::Bgra8Unorm,
             decoder: None,
             playback: None,
         };
-        for (signed_in, settings, video) in [
-            (false, false, false),
-            (true, false, false),
-            (true, true, false),
-            (true, true, true),
-        ] {
+        for (signed_in, settings) in [(false, false), (true, false), (true, true)] {
             app.signed_in = signed_in;
             app.show_video = settings;
-            app.settings_video = video;
             let raw = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -271,15 +382,45 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let _ = ctx.run(raw, |ctx| {
+            let output = ctx.run(raw, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     app.launcher(ui, ctx);
                     assert!(
                         ui.min_rect().right() <= 780.,
-                        "launcher must not overflow horizontally"
+                        "scroll viewport must fit the native window"
                     );
                 });
             });
+            fn texts(shape: &egui::epaint::Shape, out: &mut Vec<(String, f32)>) {
+                match shape {
+                    egui::epaint::Shape::Text(t) => {
+                        for section in &t.galley.job.sections {
+                            assert!(section.format.font_id.size >= 13., "unreadable UI text");
+                        }
+                        out.push((t.galley.job.text.clone(), t.pos.x));
+                    }
+                    egui::epaint::Shape::Vec(shapes) => {
+                        for shape in shapes {
+                            texts(shape, out)
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let mut rendered = Vec::new();
+            for shape in &output.shapes {
+                texts(&shape.shape, &mut rendered);
+            }
+            assert!(
+                !rendered
+                    .iter()
+                    .any(|(text, _)| text.contains("Linux preview")
+                        || text == "Your computers"
+                        || text.contains("UI adapter:"))
+            );
+            if !settings {
+                assert!(rendered.iter().any(|(text, _)| text == app_style::SUBTITLE));
+            }
         }
     }
 }

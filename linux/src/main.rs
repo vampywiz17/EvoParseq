@@ -40,6 +40,7 @@ mod picker;
 mod playback;
 #[path = "../../src-native/src/rtc_configuration.rs"]
 pub mod rtc_configuration;
+mod session_overlay;
 #[path = "../../src-native/src/signaling.rs"]
 pub mod signaling;
 #[path = "../../src-native/src/transport.rs"]
@@ -86,13 +87,10 @@ struct Desktop {
     signed_in: bool,
     busy: bool,
     error: Option<String>,
-    session_result: Option<String>,
     show_video: bool,
-    settings_video: bool,
+    badge: session_overlay::Badge,
     fitted_stream: Option<(u32, u32)>,
     launcher_size: Option<egui::Vec2>,
-    video: Vec<String>,
-    renderer: String,
     video_context: Option<Arc<video_vulkan::Context>>,
     video_error: Option<String>,
     output_format: wgpu::TextureFormat,
@@ -171,7 +169,6 @@ impl Desktop {
             Ok(()) => {
                 self.busy = true;
                 self.error = None;
-                self.session_result = None;
             }
             Err(_) => self.error = Some("Account worker is unavailable.".into()),
         }
@@ -233,7 +230,10 @@ impl eframe::App for Desktop {
                     self.signed_in = false;
                     self.error = None;
                 }
-                Reply::StreamEnded(message) => self.session_result = Some(message),
+                Reply::StreamEnded(message) => {
+                    eprintln!("{message}");
+                    self.badge.open = false;
+                }
                 Reply::Error { signed_in, message } => {
                     self.signed_in = signed_in;
                     let message = video_timing
@@ -265,49 +265,47 @@ impl eframe::App for Desktop {
                 Ok(_) => {}
             }
         }
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(if self.playback.is_some() { egui::Color32::BLACK } else { launcher::color(app_style::BACKGROUND) })).show(ctx, |ui| {
-            if let Some(playback) = self.playback.clone() {
-                let area = self.decoder.as_ref().and_then(|decoder| decoder.show(ui));
-                self.desktop_input.video = area.map(|(rect,_)| rect);
-                if let Some((_,source)) = area {
-                    playback.set_input_geometry(source);
-                    if self.fitted_stream != Some(source) {
-                        let viewport = ctx.input(|input| input.viewport().clone());
-                        if !viewport.fullscreen.unwrap_or(false) && !viewport.maximized.unwrap_or(false) {
-                            if let Some(monitor) = viewport.monitor_size {
-                                if let Some((w,h)) = crate::viewport::stream_window_size(source,ctx.pixels_per_point(),(monitor.x,monitor.y)) {
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(160.,90.)));
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w,h)));
-                                    self.fitted_stream = Some(source);
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(if self.playback.is_some() {
+                egui::Color32::BLACK
+            } else {
+                launcher::color(app_style::BACKGROUND)
+            }))
+            .show(ctx, |ui| {
+                if let Some(playback) = self.playback.clone() {
+                    let area = self.decoder.as_ref().and_then(|decoder| decoder.show(ui));
+                    self.desktop_input.video = area.map(|(rect, _)| rect);
+                    if let Some((_, source)) = area {
+                        playback.set_input_geometry(source);
+                        if self.fitted_stream != Some(source) {
+                            let viewport = ctx.input(|input| input.viewport().clone());
+                            if !viewport.fullscreen.unwrap_or(false)
+                                && !viewport.maximized.unwrap_or(false)
+                            {
+                                if let Some(monitor) = viewport.monitor_size {
+                                    if let Some((w, h)) = crate::viewport::stream_window_size(
+                                        source,
+                                        ctx.pixels_per_point(),
+                                        (monitor.x, monitor.y),
+                                    ) {
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(
+                                            egui::vec2(160., 90.),
+                                        ));
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
+                                            egui::vec2(w, h),
+                                        ));
+                                        self.fitted_stream = Some(source);
+                                    }
                                 }
                             }
                         }
                     }
+                    self.desktop_input.cursor(ctx, &playback);
+                    self.session_overlay(ctx, &playback);
+                } else {
+                    self.launcher(ui, ctx);
                 }
-                self.desktop_input.cursor(ctx, &playback);
-                self.desktop_input.controls = None;
-                if !self.desktop_input.enabled || self.error.is_some() {
-                    let area = egui::Area::new(egui::Id::new("stream-controls")).fixed_pos(egui::pos2(16.,16.)).order(egui::Order::Foreground).show(ctx, |ui| {
-                        egui::Frame::new().fill(launcher::color(app_style::BACKGROUND)).inner_margin(16.).corner_radius(6).show(ui, |ui| {
-                            ui.set_max_width(480.);
-                            ui.horizontal(|ui| {
-                                if ui.add_enabled(playback.input_ready() && self.desktop_input.video.is_some(),egui::Button::new("Enable input")).clicked() { self.desktop_input.enable(&playback); }
-                                if ui.button("Disconnect").clicked() { self.desktop_input.release(ctx,&playback); playback.stop(); }
-                                if ui.button("Full screen").clicked() { ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)))); }
-                            });
-                            ui.label(format!("{} / H.264 / Vulkan Video",self.transport.label()));
-                            ui.small("Click the video to control. Ctrl+Shift+M releases input and opens controls.");
-                            if let Some(status) = playback.status() { ui.label(status); }
-                            if let Some(error) = &self.error { ui.colored_label(egui::Color32::LIGHT_RED,error); }
-                        });
-                    });
-                    self.desktop_input.controls = Some(area.response.rect);
-                }
-            } else {
-                desktop_linux::DesktopInput::restore_cursor(ctx);
-                self.launcher(ui,ctx);
-            }
-        });
+            });
     }
 }
 
@@ -330,8 +328,6 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let video =
-        video_probe::report().unwrap_or_else(|error| vec![format!("Probe failed: {error}")]);
     let mut setup = egui_wgpu::WgpuSetupCreateNew::default();
     setup.instance_descriptor.backends = wgpu::Backends::VULKAN;
     let (wgpu_setup, video_context, video_error) = match video_vulkan::create() {
@@ -385,11 +381,6 @@ fn main() -> anyhow::Result<()> {
                         .name("account".into())
                         .spawn(move || account_worker(incoming, outgoing, context))?,
                 );
-                let renderer = cc
-                    .wgpu_render_state
-                    .as_ref()
-                    .map(|state| state.adapter.get_info().name)
-                    .unwrap_or_else(|| "Unknown".into());
                 let output_format = cc
                     .wgpu_render_state
                     .as_ref()
@@ -403,8 +394,6 @@ fn main() -> anyhow::Result<()> {
                     playback: None,
                     commands,
                     replies,
-                    renderer,
-                    video,
                     email: String::new(),
                     password: Zeroizing::default(),
                     tfa: Zeroizing::default(),
@@ -416,9 +405,8 @@ fn main() -> anyhow::Result<()> {
                     signed_in: false,
                     busy: false,
                     error: None,
-                    session_result: None,
                     show_video: false,
-                    settings_video: false,
+                    badge: Default::default(),
                     fitted_stream: None,
                     launcher_size: None,
                 }))

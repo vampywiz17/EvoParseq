@@ -34,6 +34,8 @@ modules:
       - install -Dm644 linux/flatpak/io.github.vampywiz17.EvoParseq.desktop -t /app/share/applications
       - install -Dm644 assets/evoparseq.svg /app/share/icons/hicolor/scalable/apps/io.github.vampywiz17.EvoParseq.svg
       - install -Dm644 LICENSE /app/share/licenses/evoparseq/LICENSE
+      - install -Dm644 linux/vendor/egui-winit/LICENSE-MIT /app/share/licenses/evoparseq/egui-winit-MIT
+      - install -Dm644 linux/vendor/egui-winit/LICENSE-APACHE /app/share/licenses/evoparseq/egui-winit-APACHE
       - install -Dm644 src-native/crates/bud/vendor/lowlat-client/LICENSE /app/share/licenses/evoparseq/LOWLAT-LICENSE
     sources:
       - type: dir

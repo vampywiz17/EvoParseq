@@ -1,6 +1,6 @@
 [package]
 name = "evoparseq-linux"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -33,6 +33,7 @@ strip = true
 lto = "thin"
 
 [patch.crates-io]
+egui-winit = { path = "vendor/egui-winit" }
 dtls = { path = "../src-native/vendor/dtls-0.13.0" }
 webrtc = { path = "../src-native/vendor/webrtc-0.14.0" }
 webrtc-ice = { path = "../src-native/vendor/webrtc-ice-0.14.0" }

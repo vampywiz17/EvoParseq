@@ -6,6 +6,7 @@ use super::controls::{self, BG, FG, FIELD};
 pub(super) use super::controls::{font, wide};
 use super::picker::{self, Picker, Refresh};
 use super::sign_in::{Completion, SignIn};
+use crate::app_style::desktop as layout;
 use anyhow::{ensure, Result};
 use std::{
     ptr::{null, null_mut},
@@ -184,7 +185,7 @@ unsafe fn hosts_completed(f: &mut Form, job: picker::Completion) {
                 }
                 SendMessageW(f.list, LB_RESETCONTENT, 0, 0);
                 for h in f.picker.hosts() {
-                    let name = format!("{}   /   {}", h.name, h.peer);
+                    let name = layout::host_text(&h.name, &h.peer);
                     SendMessageW(f.list, LB_ADDSTRING, 0, wide(&name).as_ptr() as isize);
                 }
                 if let Some(selected) = change.selected {
@@ -203,9 +204,9 @@ unsafe fn hosts_completed(f: &mut Form, job: picker::Completion) {
                 status(
                     f,
                     if f.picker.hosts().is_empty() {
-                        "No computers listed. Refresh, or enter the host peer ID."
+                        layout::EMPTY
                     } else {
-                        "Choose a computer, or enter its peer ID. Owner connections are supported."
+                        layout::CHOOSE
                     },
                 );
                 view(f);
@@ -476,8 +477,8 @@ pub fn choose(
             common_controls: vec![],
             login_controls: vec![],
             picker_controls: vec![],
-            font: font(17, 400),
-            heading: font(32, 600),
+            font: font(layout::BODY, 400),
+            heading: font(layout::HEADING, 600),
             brush: CreateSolidBrush(BG),
             field_brush: CreateSolidBrush(FIELD),
             sign_in: SignIn::new(
@@ -524,15 +525,15 @@ pub fn choose(
             "",
             WORDMARK_ICON,
             SS_OWNERDRAW,
-            [32, 24, 40, 46],
+            layout::LOGO,
         );
         f.common_controls.push(mark);
         for (label, id, rect) in [
-            (crate::app_style::WORDMARK[0], 0, [84, 24, 68, 46]),
+            (crate::app_style::WORDMARK[0], 0, layout::WORDMARK[0]),
             (
                 crate::app_style::WORDMARK[1],
                 WORDMARK_BLUE,
-                [152, 24, 180, 46],
+                layout::WORDMARK[1],
             ),
         ] {
             let heading = add(hwnd, &f, "STATIC", label, id, SS_CENTERIMAGE, rect);
@@ -546,7 +547,7 @@ pub fn choose(
             "Settings",
             SETTINGS,
             WS_TABSTOP,
-            [580, 28, 116, 36],
+            layout::SETTINGS,
         );
         f.common_controls.push(settings);
         let subtitle = add(
@@ -556,12 +557,11 @@ pub fn choose(
             crate::app_style::SUBTITLE,
             0,
             0,
-            [32, 80, 650, 26],
+            layout::SUBTITLE,
         );
         f.common_controls.push(subtitle);
         for (i, label) in crate::app_style::LOGIN_FIELDS.iter().enumerate() {
-            let y = 136 + i as i32 * 60;
-            let l = add(hwnd, &f, "STATIC", label, 0, 0, [32, y, 215, 26]);
+            let l = add(hwnd, &f, "STATIC", label, 0, 0, layout::login_label(i));
             let edit = add(
                 hwnd,
                 &f,
@@ -572,7 +572,7 @@ pub fn choose(
                     | WS_BORDER
                     | ES_AUTOHSCROLL as u32
                     | if i == 1 { ES_PASSWORD as u32 } else { 0 },
-                [250, y - 2, 446, 32],
+                layout::login_edit(i),
             );
             SendMessageW(edit, EM_SETLIMITTEXT, 4096, 0);
             f.fields[i] = edit;
@@ -602,7 +602,7 @@ pub fn choose(
             "Sign in",
             LOGIN,
             WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
-            [490, 370, 206, 40],
+            layout::LOGIN,
         );
         f.login_controls.push(b);
         let list = add(
@@ -612,11 +612,19 @@ pub fn choose(
             "",
             LIST,
             WS_TABSTOP | WS_BORDER | WS_VSCROLL | LBS_NOTIFY as u32,
-            [32, 130, 664, 220],
+            layout::HOSTS,
         );
         f.list = list;
         f.picker_controls.push(list);
-        let l = add(hwnd, &f, "STATIC", "Host peer ID", 0, 0, [32, 370, 155, 26]);
+        let l = add(
+            hwnd,
+            &f,
+            "STATIC",
+            layout::PEER_TEXT,
+            0,
+            0,
+            layout::PEER_LABEL,
+        );
         f.peer = add(
             hwnd,
             &f,
@@ -624,16 +632,20 @@ pub fn choose(
             &profile.last_peer,
             20,
             WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL as u32,
-            [200, 366, 496, 32],
+            layout::PEER,
         );
         SendMessageW(f.peer, EM_SETLIMITTEXT, 256, 0);
         f.picker_controls.extend([l, f.peer]);
-        for (id, label, x, w) in [
-            (REFRESH, "Refresh", 32, 140),
-            (LOGOUT, "Sign out", 184, 140),
-            (CONNECT, "Connect", 490, 206),
-        ] {
-            let b = add(hwnd, &f, "BUTTON", label, id, WS_TABSTOP, [x, 420, w, 40]);
+        for (i, id) in [REFRESH, LOGOUT, CONNECT].into_iter().enumerate() {
+            let b = add(
+                hwnd,
+                &f,
+                "BUTTON",
+                layout::ACTION_LABELS[i],
+                id,
+                WS_TABSTOP,
+                layout::ACTIONS[i],
+            );
             f.picker_controls.push(b);
         }
         f.status = add(
@@ -643,7 +655,7 @@ pub fn choose(
             notice.unwrap_or(crate::app_style::LOGIN_NOTICE),
             0,
             0,
-            [32, 484, 664, 66],
+            layout::STATUS,
         );
         f.common_controls.push(f.status);
         view(&f);

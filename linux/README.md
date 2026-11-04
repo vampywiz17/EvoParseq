@@ -67,8 +67,8 @@ screen uses the native fullscreen command. Windows and Linux colors/labels are
 defined once in src-native/src/app_style.rs. No Win32 widgets are ported to Linux.
 
 Normal Parsec mouse/keyboard control is available on BUD and WebRTC. Click the
-video or Enable input to activate it; Ctrl+Shift+M releases input and opens the
-stream controls. Focus loss, disconnect and queue overload release host keys
+video to activate it; Ctrl+Shift+M releases input. The translucent draggable
+session icon opens the controls (Disconnect only for now). Focus loss, disconnect and queue overload release host keys
 and buttons. Geometry, key framing, button mapping, fractional relative motion
 and the bounded input inbox reuse the existing shared Rust implementations.
 Host cursor flags request relative Wayland pointer locking. No HID devices or
@@ -86,15 +86,29 @@ vendor switch enables experimental Intel driver support; it is not a generic
 Vulkan requirement or a guarantee for every GPU/driver. It can be overridden
 using Flatpak's --env option.
 
-Preview 0.1.8 enables winit's standard Adwaita client-side decorations for GNOME
-Wayland, while retaining compositor/server-side decorations where available.
-This supplies a real titlebar, window buttons and resize interactions; exact
-third-party GTK/Qt theme matching is not guaranteed by winit. The launcher no
-longer contains a fullscreen action; fullscreen remains in stream controls.
-Settings follows Windows' horizontal tabs, showing only Network (transport)
-and Video (implemented backend/capability information) for now.
-The stream window fits the first decoded frame's aspect and DPI, limited to
-90% of the monitor dimensions. A source-size change fits again; ordinary user
-resizing is preserved. Launcher size is restored after disconnect. Cursor icon
-and native visibility are both explicitly restored when leaving capture, and
-pointer hover events remain available to the UI framework.
+Preview 0.1.9 uses the Windows launcher/settings text, logical font sizes and
+control rectangles from shared `src-native/src/app_style.rs`. Unsupported
+controls are hidden; their positions are reserved so later integrations do not
+create another platform-specific layout. For now only Network/Transport is
+editable. Raw GPU capability output remains available via `--probe-video`,
+not as a replacement Video settings page. Settings keeps its Windows 820px
+canvas with scrollbars when necessary; Transport retains its Windows row.
+Native font rasterization and installed font faces can differ between systems.
+
+The video has no status text or input/fullscreen buttons. It uses the Windows
+48px translucent draggable session badge and 32px logo, initially at (16,16).
+The session panel exposes Disconnect in its Windows position, scrolling to it
+while other features are not integrated. Badge/panel interaction releases host
+input and never sends local control clicks or drags to the host.
+
+The stream fits its first decoded frame, with existing DPI/monitor bounds.
+On resize both presentation and mouse mapping use the common centered
+letterbox geometry. This changes only the viewport, with no added media copy.
+
+Standard winit Adwaita client-side decorations remain the GNOME Wayland
+fallback; compositor-side decorations are used when available. Native window
+buttons and resizing follow the desktop, independently of application content.
+Cursor visibility/grab changes are sent only at capture transitions and release,
+rather than overwriting decoration cursors every frame. A narrow Linux-only
+patch to pinned egui-winit invalidates its cursor cache on surface entry/exit;
+see `vendor/egui-winit/EVOPARSEQ.md`. Live Wayland cursor validation is required.

@@ -10,6 +10,7 @@ pub struct DesktopInput {
     pub enabled: bool,
     pub video: Option<Rect>,
     pub controls: Option<Rect>,
+    pub badge: Option<Rect>,
     buttons: u32,
     keyboard: std::sync::Arc<crate::native_loop::KeyboardBridge>,
     wheel: Vec2,
@@ -29,6 +30,8 @@ impl DesktopInput {
         self.keyboard.bind(None);
         self.wheel = Vec2::ZERO;
         self.grabbed = false;
+        self.controls = None;
+        self.badge = None;
         Self::restore_cursor(ctx);
     }
     pub fn enable(&mut self, playback: &std::sync::Arc<Playback>) {
@@ -42,20 +45,19 @@ impl DesktopInput {
         let grab = self.enabled && playback.capture() && ctx.input(|i| i.focused);
         if self.grabbed != grab {
             self.grabbed = grab;
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(!grab));
             ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(if grab {
                 egui::CursorGrab::Locked
             } else {
                 egui::CursorGrab::None
             }));
         }
-        // Visibility commands and egui's cached cursor icon are separate state.
-        // Publish both, including when returning from a locked stream.
-        ctx.set_cursor_icon(if grab {
-            egui::CursorIcon::None
-        } else {
-            egui::CursorIcon::Default
-        });
-        ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(!grab));
+        // Keep None while locked, but let ordinary UI hover choose its cursor.
+        // Repeated native visibility commands would overwrite Wayland CSD resize
+        // cursors even though the capture state has not changed.
+        if grab {
+            ctx.set_cursor_icon(egui::CursorIcon::None);
+        }
     }
     pub fn restore_cursor(ctx: &egui::Context) {
         ctx.set_cursor_icon(egui::CursorIcon::Default);
@@ -65,6 +67,7 @@ impl DesktopInput {
     fn inside(&self, pos: Pos2) -> bool {
         self.video.is_some_and(|rect| rect.contains(pos))
             && !self.controls.is_some_and(|rect| rect.contains(pos))
+            && !self.badge.is_some_and(|rect| rect.contains(pos))
     }
     fn pointer(
         &self,
@@ -112,9 +115,10 @@ impl DesktopInput {
                     self.enable(playback);
                 }
             }
-            if !self.enabled {
-                return true;
+            if self.enabled && matches!(event, Event::PointerButton {pos, pressed:true,..} if self.controls.is_some_and(|r|r.contains(*pos)) || self.badge.is_some_and(|r|r.contains(*pos))) {
+                self.release(ctx,playback);
             }
+            if !self.enabled { return true; }
             match event {
                 Event::Key { .. }
                 | Event::Copy
@@ -181,6 +185,35 @@ impl DesktopInput {
 mod tests {
     use super::*;
     use egui::Modifiers;
+    #[test]
+    fn linux_session_control_click_releases_host_without_forwarding_local_mouse() {
+        let ctx = egui::Context::default();
+        let playback = Playback::new(ctx.clone());
+        playback.set_input_ready(true);
+        let mut adapter = DesktopInput {
+            enabled: true,
+            video: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.))),
+            badge: Some(Rect::from_min_size(egui::pos2(16., 16.), Vec2::splat(48.))),
+            ..Default::default()
+        };
+        let mut raw = egui::RawInput::default();
+        raw.events.push(Event::PointerButton {
+            pos: egui::pos2(30., 30.),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::default(),
+        });
+        adapter.events(&ctx, &mut raw, &playback);
+        assert!(!adapter.enabled);
+        assert_eq!(raw.events.len(), 1, "local overlay must receive its click");
+        let mut batch = std::collections::VecDeque::new();
+        playback.input.take(&mut batch).unwrap();
+        assert_eq!(batch.len(), 1);
+        assert!(matches!(
+            batch.pop_front(),
+            Some(crate::input_handoff::Event::Desktop(Input::Focus(false)))
+        ));
+    }
     #[test]
     fn linux_input_release_hotkey_drops_pressed_buttons_and_focus_loss_releases_host() {
         let ctx = egui::Context::default();
@@ -258,5 +291,33 @@ mod cursor_tests {
             cmd,
             egui::ViewportCommand::CursorGrab(egui::CursorGrab::None)
         )));
+    }
+}
+
+#[cfg(test)]
+mod ordinary_cursor_tests {
+    use super::*;
+    #[test]
+    fn linux_unlocked_cursor_preserves_widget_cursor_and_does_not_override_decorations() {
+        let ctx = egui::Context::default();
+        let playback = Playback::new(ctx.clone());
+        let mut adapter = DesktopInput::default();
+        for _ in 0..3 {
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                ctx.set_cursor_icon(egui::CursorIcon::Text);
+                adapter.cursor(ctx, &playback);
+            });
+            assert_eq!(output.platform_output.cursor_icon, egui::CursorIcon::Text);
+            assert!(
+                !output.viewport_output[&egui::ViewportId::ROOT]
+                    .commands
+                    .iter()
+                    .any(|cmd| matches!(
+                        cmd,
+                        egui::ViewportCommand::CursorVisible(_)
+                            | egui::ViewportCommand::CursorGrab(_)
+                    ))
+            );
+        }
     }
 }
