@@ -524,6 +524,7 @@ impl View {
         let sample = self.sample.as_ref().unwrap();
         let mut result = base.select(stats_view::Tab::ALL[tab]);
         if tab == 2 {
+            result.footer="Presentation rate counts scheduled Vulkan draw callbacks, not verified GPU submission or monitor scanout. Color depth and chroma describe the decoded stream and application output.".into();
             for (label, value) in &mut result.rows {
                 if label == crate::app_style::forms::STAT_HARDWARE_DECODE {
                     *value =
@@ -583,6 +584,11 @@ impl View {
             }
         }
         if tab == 4 {
+            for (label, value) in &mut result.rows {
+                if label == crate::app_style::forms::STAT_TIMING_SCOPE {
+                    *value="CPU wall time including blocking driver waits; not GPU execution or scanout".into();
+                }
+            }
             if let Some(video) = sample.video.as_ref() {
                 for (label, timing) in [
                     (
