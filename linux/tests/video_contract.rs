@@ -6,6 +6,27 @@ mod parameters;
 mod playback;
 
 #[test]
+fn native_transport_sink_feeds_linux_playback_and_obeys_cancellation() {
+    let playback = playback::Playback::new(eframe::egui::Context::default());
+    let sink: std::sync::Arc<dyn video_output::NativeSink> = playback.clone();
+    let bytes = [0, 0, 1, 0x65, 0x88];
+    let info = video_stream::Inspector::default().receive(&bytes).unwrap();
+    assert!(sink.submit(&bytes, info));
+    assert_eq!(
+        playback
+            .decode_pending(|packet| {
+                assert_eq!(packet, bytes);
+                Ok(())
+            })
+            .unwrap(),
+        1
+    );
+    sink.stop();
+    assert!(playback.stopped());
+    assert!(!sink.submit(&bytes, info));
+}
+
+#[test]
 fn background_backlog_defers_recovery_until_focus_and_restarts_from_cached_parameters() {
     let playback = playback::Playback::new(eframe::egui::Context::default());
     let fixture = include_bytes!("data/h264-40-frames.bin");

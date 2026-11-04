@@ -70,7 +70,11 @@ fn create_webrtc_attempt(
     // checks remain enabled. Probe/playback must not select different policies.
     let attempt =
         Attempt::spawn_configured(id, output, Some(config), StunProvider::Parsec, true, None)?;
-    attempt.start_native_media(playback.cloned());
+    attempt.start_native_media(
+        playback
+            .cloned()
+            .map(|sink| sink as Arc<dyn crate::video_output::NativeSink>),
+    );
     Ok(attempt)
 }
 

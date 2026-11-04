@@ -157,7 +157,7 @@ struct Completion {
     video_stream: Arc<Mutex<crate::video_stream::Inspector>>,
     audio_stream: Option<crate::audio_stream::Pipeline>,
     #[cfg(target_os = "linux")]
-    linux_video: Option<Arc<crate::playback::Playback>>,
+    linux_video: Option<Arc<dyn crate::video_output::NativeSink>>,
     #[cfg(any(windows, target_os = "android"))]
     video_output: Option<Arc<native_video::Pipeline>>,
 }
@@ -171,7 +171,7 @@ enum Delivery {
     Video {
         inspector: Arc<Mutex<crate::video_stream::Inspector>>,
         #[cfg(target_os = "linux")]
-        linux_pipeline: Option<Arc<crate::playback::Playback>>,
+        linux_pipeline: Option<Arc<dyn crate::video_output::NativeSink>>,
         #[cfg(any(windows, target_os = "android"))]
         pipeline: Option<Arc<native_video::Pipeline>>,
     },
@@ -206,7 +206,7 @@ impl Delivery {
                 }
                 #[cfg(target_os = "linux")]
                 if let (Some(pipeline), Some(info)) = (linux_pipeline, info) {
-                    return Some(!pipeline.submit_native(bytes, info));
+                    return Some(!pipeline.submit(bytes, info));
                 }
                 #[cfg(not(any(windows, target_os = "android", target_os = "linux")))]
                 let _ = info;
@@ -763,7 +763,7 @@ impl Attempt {
     #[cfg(any(target_os = "android", target_os = "linux"))]
     pub fn start_native_media(
         &self,
-        #[cfg(target_os = "linux")] video: Option<Arc<crate::playback::Playback>>,
+        #[cfg(target_os = "linux")] video: Option<Arc<dyn crate::video_output::NativeSink>>,
         #[cfg(target_os = "android")] video: Arc<crate::video_android::Pipeline>,
     ) {
         let mut state = self.completion.lock().unwrap_or_else(|e| e.into_inner());
@@ -1902,7 +1902,24 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_detached_video_reaches_playback_without_entering_control_receipts() {
-        let playback = crate::playback::Playback::new(eframe::egui::Context::default());
+        #[derive(Default)]
+        struct Sink {
+            stopped: std::sync::atomic::AtomicBool,
+            packets: Mutex<Vec<Vec<u8>>>,
+        }
+        impl crate::video_output::NativeSink for Sink {
+            fn submit(&self, bytes: &[u8], _: crate::video_stream::PacketInfo) -> bool {
+                if self.stopped.load(Ordering::Acquire) {
+                    return false;
+                }
+                self.packets.lock().unwrap().push(bytes.to_vec());
+                true
+            }
+            fn stop(&self) {
+                self.stopped.store(true, Ordering::Release);
+            }
+        }
+        let playback = Arc::new(Sink::default());
         let mut state = empty_completion();
         state.discard_unavailable_media = true;
         state.linux_video = Some(playback.clone());
@@ -1913,15 +1930,7 @@ mod tests {
         let delivery = state.prepare_receive(1, false, &bytes).unwrap();
         assert_eq!(delivery.submit(&bytes), Some(false));
         assert!(state.messages.is_empty());
-        assert_eq!(
-            playback
-                .decode_pending(|packet| {
-                    assert_eq!(packet, bytes.as_slice());
-                    Ok(())
-                })
-                .unwrap(),
-            1
-        );
+        assert_eq!(*playback.packets.lock().unwrap(), vec![bytes.to_vec()]);
         let pipeline = state.linux_video.take().unwrap();
         pipeline.stop();
         assert_eq!(
