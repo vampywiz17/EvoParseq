@@ -13,7 +13,7 @@ pub mod audio_stream;
 mod bud_ingress;
 #[path = "../../src-native/src/codec_initialization.rs"]
 pub mod codec_initialization;
-mod connection_probe;
+mod connection;
 #[path = "../../src-native/src/control.rs"]
 pub mod control;
 #[path = "../../src-native/src/event_log.rs"]
@@ -34,6 +34,7 @@ pub mod transport;
 #[path = "../../src-native/src/video_output.rs"]
 pub mod video_output;
 mod video_probe;
+mod video_profile;
 #[path = "../../src-native/src/video_stream.rs"]
 pub mod video_stream;
 mod video_vulkan;
@@ -46,14 +47,13 @@ enum Command {
     SignIn(account::Login),
     Refresh,
     SignOut,
-    Probe(String, connection_probe::Mode),
-    Stream(String, connection_probe::Mode, Arc<playback::Playback>),
+    Stream(String, connection::Mode, Arc<playback::Playback>),
 }
 
 enum Reply {
     Hosts(Vec<account::Host>),
     SignedOut,
-    ProbePassed(String),
+    StreamEnded(String),
     Error { signed_in: bool, message: String },
 }
 
@@ -67,7 +67,7 @@ struct Desktop {
     signed_in: bool,
     busy: bool,
     error: Option<String>,
-    probe_result: Option<String>,
+    session_result: Option<String>,
     show_video: bool,
     video: Vec<String>,
     renderer: String,
@@ -90,33 +90,13 @@ fn account_worker(
                 session = Some(new_session);
             }),
             Command::Refresh => Ok(()),
-            Command::Probe(peer, mode) => {
-                let reply = match session
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("Sign in first."))
-                    .and_then(|session| connection_probe::run(session, &peer, mode))
-                {
-                    Ok(message) => Reply::ProbePassed(message),
-                    Err(error) => Reply::Error {
-                        signed_in: session.is_some(),
-                        message: error.to_string(),
-                    },
-                };
-                if replies.send(reply).is_err() {
-                    break;
-                }
-                ui.request_repaint();
-                continue;
-            }
             Command::Stream(peer, mode, playback) => {
                 let result = session
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("Sign in first."))
-                    .and_then(|session| {
-                        connection_probe::run_stream(session, &peer, mode, &playback)
-                    });
+                    .and_then(|session| connection::run_stream(session, &peer, mode, &playback));
                 let reply = match result {
-                    Ok(message) => Reply::ProbePassed(message),
+                    Ok(message) => Reply::StreamEnded(message),
                     Err(error) => Reply::Error {
                         signed_in: session.is_some(),
                         message: error.to_string(),
@@ -169,7 +149,7 @@ impl Desktop {
             Ok(()) => {
                 self.busy = true;
                 self.error = None;
-                self.probe_result = None;
+                self.session_result = None;
             }
             Err(_) => self.error = Some("Account worker is unavailable.".into()),
         }
@@ -198,7 +178,7 @@ impl eframe::App for Desktop {
                     self.signed_in = false;
                     self.error = None;
                 }
-                Reply::ProbePassed(message) => self.probe_result = Some(message),
+                Reply::StreamEnded(message) => self.session_result = Some(message),
                 Reply::Error { signed_in, message } => {
                     self.signed_in = signed_in;
                     let message = video_timing
@@ -280,17 +260,13 @@ impl eframe::App for Desktop {
                                 self.send(Command::SignOut);
                             }
                         });
-                        let mut probe = None;
                         let mut stream = None;
                         for host in &self.hosts {
                             ui.horizontal(|ui| {
                                 ui.label(&host.name);
-                                for mode in [connection_probe::Mode::WebRtc, connection_probe::Mode::Bud] {
+                                for mode in [connection::Mode::WebRtc, connection::Mode::Bud] {
                                     if ui.add_enabled(self.video_context.is_some(), egui::Button::new(format!("Play {}", mode.label()))).clicked() {
                                         stream = Some((host.peer.clone(), mode));
-                                    }
-                                    if ui.button(format!("Test {}", mode.label())).clicked() {
-                                        probe = Some((host.peer.clone(), mode));
                                     }
                                 }
                             });
@@ -303,10 +279,7 @@ impl eframe::App for Desktop {
                                 self.send(Command::Stream(peer, mode, playback));
                             }
                         }
-                        if let Some((peer, mode)) = probe {
-                            self.send(Command::Probe(peer, mode));
-                        }
-                        if let Some(result) = &self.probe_result {
+                        if let Some(result) = &self.session_result {
                             ui.label(result);
                         }
                         if self.hosts.is_empty() {
@@ -426,7 +399,7 @@ fn main() -> anyhow::Result<()> {
                 signed_in: false,
                 busy: false,
                 error: None,
-                probe_result: None,
+                session_result: None,
                 show_video: false,
             }))
         }),

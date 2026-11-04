@@ -25,10 +25,6 @@ impl Output {
         })
     }
 
-    pub fn finish(mut self) -> Result<()> {
-        self.shutdown()
-    }
-
     fn shutdown(&mut self) -> Result<()> {
         let Some(worker) = self.worker.take() else {
             return Ok(());

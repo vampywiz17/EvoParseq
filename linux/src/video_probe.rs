@@ -74,7 +74,10 @@ unsafe fn adapters(entry: &Entry, instance: &ash::Instance) -> Result<Vec<String
             let mut codec = vk::VideoDecodeH264ProfileInfoKHR::default()
                 .std_profile_idc(vk::native::StdVideoH264ProfileIdc_STD_VIDEO_H264_PROFILE_IDC_HIGH)
                 .picture_layout(vk::VideoDecodeH264PictureLayoutFlagsKHR::PROGRESSIVE);
-            let profile = profile(h264, eight).push_next(&mut codec);
+            let mut usage = crate::video_profile::usage();
+            let profile = profile(h264, eight)
+                .push_next(&mut codec)
+                .push_next(&mut usage);
             let mut codec_caps = vk::VideoDecodeH264CapabilitiesKHR::default();
             unsafe {
                 query(
@@ -103,7 +106,10 @@ unsafe fn adapters(entry: &Entry, instance: &ash::Instance) -> Result<Vec<String
                 ),
             ] {
                 let mut codec = vk::VideoDecodeH265ProfileInfoKHR::default().std_profile_idc(id);
-                let profile = profile(h265, depth).push_next(&mut codec);
+                let mut usage = crate::video_profile::usage();
+                let profile = profile(h265, depth)
+                    .push_next(&mut codec)
+                    .push_next(&mut usage);
                 let mut codec_caps = vk::VideoDecodeH265CapabilitiesKHR::default();
                 unsafe { query(&video, gpu, label, &profile, &mut codec_caps, &mut lines) };
             }

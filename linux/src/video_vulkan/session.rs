@@ -150,12 +150,14 @@ impl Session {
         let mut codec = vk::VideoDecodeH264ProfileInfoKHR::default()
             .std_profile_idc(sps.profile_idc.into())
             .picture_layout(vk::VideoDecodeH264PictureLayoutFlagsKHR::PROGRESSIVE);
+        let mut usage = crate::video_profile::usage();
         let profile = vk::VideoProfileInfoKHR::default()
             .video_codec_operation(vk::VideoCodecOperationFlagsKHR::DECODE_H264)
             .chroma_subsampling(vk::VideoChromaSubsamplingFlagsKHR::TYPE_420)
             .luma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
             .chroma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
-            .push_next(&mut codec);
+            .push_next(&mut codec)
+            .push_next(&mut usage);
         // Entry is needed only to load instance-level Vulkan Video dispatch.
         let entry = unsafe { ash::Entry::load()? };
         let video = ash::khr::video_queue::Instance::new(&entry, &context.instance);

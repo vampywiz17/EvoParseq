@@ -4,9 +4,10 @@ The Wayland desktop uses egui on Vulkan. Authentication, 2FA, host discovery,
 BUD/WebRTC protocols, Opus decoding and H.264 parsing/reference management reuse
 the existing Rust implementations. Credentials remain in memory for this preview.
 
-Test WebRTC and Test BUD check connection, H.264 keyframe reception and an
-eight-second PipeWire audio sample. Play WebRTC and Play BUD start the native
-H.264 video preview with PipeWire sound. Disconnect remains available during playback.
+Play WebRTC and Play BUD start the native H.264 video preview with PipeWire
+sound. Disconnect remains available during playback. The former standalone
+eight-second connection/audio tests have been removed; Video capabilities and
+the --probe-video command remain available for driver diagnostics.
 
 The playback scope is progressive H.264, 8-bit 4:2:0, without frame reordering.
 The host remains unmodified. The decoder's original NV12 surfaces feed the
@@ -52,3 +53,11 @@ The Video capabilities page lists driver-reported profiles and sampleable output
 formats. A positive report establishes eligibility for a playback attempt.
 The backend additionally checks that NV12 decode output and reference surfaces
 can be shared with shader sampling, with sufficient DPB slots and reference capacity.
+
+The decode profile includes Vulkan's STREAMING usage hint consistently in
+capability queries, session creation and associated images/input resources.
+The progressive H.264 path rejects explicitly declared frame reordering and
+presents the latest completed output after decoding its bounded input batch.
+This is a low-latency policy, not a measured end-to-end latency guarantee.
+Conservative GPU completion waits, compositor presentation and PipeWire's
+negotiated quantum still affect latency. See VIDEO_PATH.md for the audit.

@@ -26,24 +26,11 @@ impl Mode {
     }
 }
 
-pub fn run(session: &account::Session, peer: &str, mode: Mode) -> Result<String> {
-    run_session(session, peer, mode, None)
-}
-
 pub fn run_stream(
     session: &account::Session,
     peer: &str,
     mode: Mode,
     playback: &Arc<crate::playback::Playback>,
-) -> Result<String> {
-    run_session(session, peer, mode, Some(playback))
-}
-
-fn run_session(
-    session: &account::Session,
-    peer: &str,
-    mode: Mode,
-    playback: Option<&Arc<crate::playback::Playback>>,
 ) -> Result<String> {
     let socket = Socket::open(session)?;
     let mut nonce = [0u8; 16];
@@ -63,18 +50,14 @@ fn create_webrtc_attempt(
     id: &str,
     output: Output,
     config: control::Config,
-    playback: Option<&Arc<crate::playback::Playback>>,
+    playback: &Arc<crate::playback::Playback>,
 ) -> Result<Attempt> {
     // Match the existing Windows/Android Parsec host compatibility policy.
     // This permits legacy RSA key sizes only; signature and SDP fingerprint
-    // checks remain enabled. Probe/playback must not select different policies.
+    // checks remain enabled; this policy is independent of rendering state.
     let attempt =
         Attempt::spawn_configured(id, output, Some(config), StunProvider::Parsec, true, None)?;
-    attempt.start_native_media(
-        playback
-            .cloned()
-            .map(|sink| sink as Arc<dyn crate::video_output::NativeSink>),
-    );
+    attempt.start_native_media(Some(playback.clone()));
     Ok(attempt)
 }
 
@@ -82,7 +65,7 @@ fn run_webrtc(
     socket: &Socket,
     peer: &str,
     id: &str,
-    playback: Option<&Arc<crate::playback::Playback>>,
+    playback: &Arc<crate::playback::Playback>,
 ) -> Result<String> {
     let writer = socket.writer.clone();
     let target = peer.to_owned();
@@ -141,12 +124,10 @@ fn run_webrtc(
         if let Some(code) = attempt.host_status() {
             bail!("The host refused or ended the connection (status {code})");
         }
-        if let Some(playback) = playback {
-            if let Some(generation) = playback.take_keyframe_request()? {
-                if let Err(error) = attempt.send_binary(0, config.keyframe_request()) {
-                    playback.keyframe_request_failed(generation);
-                    return Err(error);
-                }
+        if let Some(generation) = playback.take_keyframe_request()? {
+            if let Err(error) = attempt.send_binary(0, config.keyframe_request()) {
+                playback.keyframe_request_failed(generation);
+                return Err(error);
             }
         }
         for _ in 0..16 {
@@ -192,29 +173,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn linux_probe_and_play_use_the_same_host_certificate_policy() {
+    fn linux_playback_keeps_host_certificate_policy_and_native_media_delivery() {
         let playback = crate::playback::Playback::new(eframe::egui::Context::default());
-        for sink in [None, Some(&playback)] {
-            let output = Output::new(Arc::new(|_| Ok(true)));
-            let config = control::Config {
-                video_protocol: VideoProtocol {
-                    version: 1,
-                    message_size: 11,
-                    version_offset: 0,
-                    flag_offset: 4,
-                },
-                allow_hevc: false,
-                ten_bit: false,
-                chroma_444: false,
-            };
-            let mut attempt =
-                create_webrtc_attempt("linux-certificate-policy", output, config, sink).unwrap();
-            let report = attempt.snapshot();
-            assert_eq!(report["legacy_rsa_1024_enabled"], true);
-            assert_eq!(report["unavailable_media_bypasses_control_queue"], true);
-            attempt.cancel();
-            attempt.wait_finished(Duration::from_secs(12)).unwrap();
-        }
+        let output = Output::new(Arc::new(|_| Ok(true)));
+        let config = control::Config {
+            video_protocol: VideoProtocol {
+                version: 1,
+                message_size: 11,
+                version_offset: 0,
+                flag_offset: 4,
+            },
+            allow_hevc: false,
+            ten_bit: false,
+            chroma_444: false,
+        };
+        let mut attempt =
+            create_webrtc_attempt("linux-certificate-policy", output, config, &playback).unwrap();
+        let report = attempt.snapshot();
+        assert_eq!(report["legacy_rsa_1024_enabled"], true);
+        assert_eq!(report["unavailable_media_bypasses_control_queue"], true);
+        attempt.cancel();
+        attempt.wait_finished(Duration::from_secs(12)).unwrap();
+        assert!(
+            playback.stopped(),
+            "the real native sink must be bound to the connection"
+        );
     }
 }
 
@@ -222,7 +205,7 @@ fn run_bud(
     socket: &Socket,
     peer: &str,
     id: &str,
-    playback: Option<&Arc<crate::playback::Playback>>,
+    playback: &Arc<crate::playback::Playback>,
 ) -> Result<String> {
     use evoparseq_bud::{
         bud::{Event, Route},
@@ -306,16 +289,15 @@ fn run_bud(
                     _ => {}
                 }
             }
-            if let Some(playback) = playback {
-                if let Some(generation) = playback.take_keyframe_request()? {
-                    ingress.wait_for_keyframe();
-                    if !session.request_keyframe_format(false) {
-                        playback.keyframe_request_failed(generation);
-                        anyhow::bail!("BUD could not request a video resume keyframe");
-                    }
+            if let Some(generation) = playback.take_keyframe_request()? {
+                ingress.wait_for_keyframe();
+                if !session.request_keyframe_format(false) {
+                    playback.keyframe_request_failed(generation);
+                    anyhow::bail!("BUD could not request a video resume keyframe");
                 }
             }
-            let pumped = crate::bud_ingress::pump(&mut source, &mut ingress, &playback, &sender)?;
+            let pumped =
+                crate::bud_ingress::pump(&mut source, &mut ingress, playback.as_ref(), &sender)?;
             Ok((established, ingress.snapshot(), pumped.more_pending()))
         },
     );
@@ -326,42 +308,24 @@ fn run_bud(
 fn observe(
     mode: Mode,
     receiver: audio_stream::NativeReceiver,
-    playback: Option<&Arc<crate::playback::Playback>>,
+    playback: &Arc<crate::playback::Playback>,
     mut poll: impl FnMut(&mut bool) -> Result<(bool, crate::video_stream::Snapshot, bool)>,
 ) -> Result<String> {
-    let output = audio_pipewire::Output::start(&receiver);
+    let _output = audio_pipewire::Output::start(&receiver)?;
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut signaling_closed = false;
-    let mut keyframe = None;
+    let mut keyframe_received = false;
     let mut connected = false;
     let mode = mode.label();
     loop {
-        if playback.is_some_and(|playback| playback.stopped()) {
+        if playback.stopped() {
             return Ok(format!("{mode} stream disconnected"));
         }
         let (ready, video, more_pending) = poll(&mut signaling_closed)?;
         connected |= ready;
         let now = Instant::now();
-        if keyframe.is_none() && ready && video.parameter_sets_and_idr_observed {
-            let codec = video
-                .codec
-                .context("The host video format is unavailable")?;
-            keyframe = Some((codec, now + Duration::from_secs(8)));
-        }
-        if let Some((codec, until)) = keyframe {
-            if playback.is_none() && now >= until {
-                let frames = receiver.snapshot().pcm_frames_consumed;
-                let sound = match output.and_then(audio_pipewire::Output::finish) {
-                    Ok(()) if frames > 0 => format!("PipeWire played {frames} PCM frames."),
-                    Ok(()) => "No audio frames reached PipeWire during the test.".into(),
-                    Err(error) => format!("PipeWire output failed: {error:#}"),
-                };
-                return Ok(format!(
-                    "{mode} connected. Received {} video and a keyframe. {sound}",
-                    codec.name()
-                ));
-            }
-        } else if now >= deadline {
+        keyframe_received |= ready && video.parameter_sets_and_idr_observed;
+        if !keyframe_received && now >= deadline {
             if connected {
                 bail!("{mode} connected, but no complete video keyframe arrived within 20 seconds");
             }
@@ -373,12 +337,9 @@ fn observe(
     }
 }
 
-// The connection probe shares all framing/gating policy but has no decoder.
-impl crate::bud_ingress::VideoTarget for Option<&Arc<crate::playback::Playback>> {
+impl crate::bud_ingress::VideoTarget for crate::playback::Playback {
     fn encoder_rebuilt(&self) {
-        if let Some(playback) = self {
-            playback.encoder_rebuilt();
-        }
+        self.encoder_rebuilt();
     }
     fn submit_oriented(
         &self,
@@ -386,15 +347,10 @@ impl crate::bud_ingress::VideoTarget for Option<&Arc<crate::playback::Playback>>
         info: crate::video_stream::PacketInfo,
         rotation: u8,
     ) -> Result<bool> {
-        match self {
-            Some(playback) => {
-                ensure!(
-                    rotation == 0,
-                    "Rotated video is not supported in the Linux playback preview"
-                );
-                playback.submit_packet(bytes, info)
-            }
-            None => Ok(true),
-        }
+        ensure!(
+            rotation == 0,
+            "Rotated video is not supported in the Linux playback preview"
+        );
+        self.submit_packet(bytes, info)
     }
 }

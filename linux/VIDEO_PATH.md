@@ -48,8 +48,7 @@ composition and direct scanout have not been measured or established.
 
 `src/playback.rs` uses the existing shared Rust `video_output::Queue`, including
 its 32-packet / 8 MiB bounds, encoded-buffer recycling, timing counters and
-keyframe recovery policy. These modules and the Windows/Android paths
-are unchanged; Linux previously used its own eight-packet / 16 MiB limits. Each UI
+keyframe recovery policy. Linux previously used its own eight-packet / 16 MiB limits. Each UI
 update now decodes its initial bounded backlog, in order, then presents the
 latest output. Incoming packets during that batch belong to the next update.
 This removes the previous one-packet-per-refresh throughput limit without
@@ -117,7 +116,7 @@ binding in `src-native/src/attempt.rs` sends complete detached video messages
 directly to the existing Linux compressed queue, outside the connection lock.
 Audio continues through the shared audio pipeline. It adds no decoded-image
 copies or queues. Windows and Android retain their existing compiled adapters.
-Regression tests exercise the real probe/play constructor's compatibility flag
+Regression tests exercise the real playback constructor's compatibility flag
 and detached video delivery/cancellation without a host or GPU.
 
 The shared reader's Linux sink is a small UI-independent `NativeSink` trait;
@@ -128,3 +127,50 @@ signaling and BUD already do. The 16-message control bound, SCTP ordering,
 reliability, ICE/DTLS timers and cipher negotiation are unchanged. The Linux
 failure report includes the failed channel and bounded queue counters, without
 SDP, credentials or payload text.
+
+## Current cleanup and media boundaries (0.1.6)
+
+The legacy Test WebRTC/Test BUD UI actions, headless media sink and eight-second
+sample/deadline branch have been removed. Actual playback always binds its
+native video sink. The remaining capability page and --probe-video command are
+supported driver diagnostics. Synthetic H.264 fixtures and test sink/queue
+helpers are compiled only under tests; they are not a live fallback decoder.
+Failure timing counters remain bounded and useful for regression diagnosis.
+
+| Layer | Shared Rust | Required platform adapter / remaining difference |
+| --- | --- | --- |
+| WebRTC | attempt, protocol/control, detached media readers, inspector, audio decoder | Native video sink and OS presentation/output |
+| BUD | SDK/header parsing; Windows and Linux additionally share bud_ingress, bounded video-first pump and encoder/keyframe rules | Android still has its own pump/gating adapter; it is not identical to bud_ingress |
+| Video queue | video_output bounds, recovery, timing and buffer recycling; codec parameter cache | Vulkan session/interop, D3D11/MF/vendor decoders, MediaCodec/Surface |
+| Audio | audio_stream Opus/PCM validation, decode and budgets | Linux PipeWire and Android AAudio use the shared callback ring; Windows uses its WASAPI adapter |
+
+The Linux scope remains H.264 8-bit 4:2:0 and stereo audio. Windows' broader
+codec/depth/chroma and channel support has not been copied into Linux by
+advertising capabilities that the Linux backend cannot yet play. The Linux
+manifest retains only dependencies used by its own or imported common modules;
+shader validation (naga) is a dev-dependency. No new runtime dependency is added.
+
+The Vulkan profile now includes VkVideoDecodeUsageInfoKHR with STREAMING in
+both capability queries and all matching session/image/bitstream resource
+creation. Vulkan defines this as a use-case hint without latency guarantees:
+https://docs.vulkan.org/features/latest/features/proposals/VK_KHR_video_decode_queue.html
+A codec profile (such as H.264 High) describes decoding compatibility; it does
+not by itself select a low-latency mode. The profile follows the stream's SPS.
+
+Other active latency policies are progressive decode, rejection of explicitly
+declared H.264 reordering, immediate bounded backlog processing and selection
+of the latest completed output. The 32-packet/8 MiB queue is a ceiling, not an
+intentional prebuffer. DPB surfaces retain codec references; their allocation
+count is not a presentation queue length. The 100 ms fence timeout is a failure
+bound, not an inserted sleep. The shared 100 ms audio budget is also a ceiling,
+not a target fill or device latency. PipeWire requests the Game role and 48 kHz
+stereo S16; its quantum is negotiated by the server, with no explicit node.latency
+request currently. Vsync/presentation depth uses egui-wgpu defaults. Per-frame
+graphics/decode completion waits are still conservative. These are remaining
+latency optimization/measurement points, not unnecessary image-copy paths.
+
+Source audit confirms no application-side decoded image copy, blit, readback,
+intermediate RGBA video texture or cross-device transfer. NV12 plane sampling
+and conversion into the final render target remain necessary GPU work. Driver
+internal copies and compositor/scanout latency remain unverified. Windows and
+Android source files are unchanged by this Linux cleanup.
