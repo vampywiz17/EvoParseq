@@ -73,10 +73,10 @@ and buttons. Geometry, key framing, button mapping, fractional relative motion
 and the bounded input inbox reuse the existing shared Rust implementations.
 Host cursor flags request relative Wayland pointer locking. No HID devices or
 host HID mode are enabled, and no additional Flatpak device permission is used.
-The initial egui adapter supports its exposed physical key vocabulary: letters,
-numbers, navigation, function keys and punctuation. Egui aggregates modifiers
-and merges numpad/main keys; exact left/right modifiers, ISO-only keys and IME
-text are not exposed by this adapter. System/compositor shortcuts remain local.
+Physical keys are received through eframe's documented external winit event
+loop, preserving ISO keys, numpad keys and left/right modifiers. Host keyboard
+layout and IME handle the physical input; local text/IME payloads are not sent.
+System/compositor shortcuts remain local.
 Clipboard shortcuts target the host clipboard; local clipboard text is never
 synchronized. Pointer locking and physical input still require a live Wayland test.
 

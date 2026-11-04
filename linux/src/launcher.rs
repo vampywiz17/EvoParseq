@@ -45,7 +45,7 @@ impl Desktop {
                 self.output_format,
             ));
             let playback = crate::playback::Playback::new(ctx.clone());
-            self.desktop_input = Default::default();
+            self.desktop_input.video = None;
             self.playback = Some(playback.clone());
             self.send(Command::Stream(peer, self.transport, playback));
         }
@@ -143,5 +143,65 @@ impl Desktop {
             ui.small(concat!("EvoParseq Linux preview ",env!("CARGO_PKG_VERSION")));
         });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn linux_launcher_login_and_picker_fit_the_native_window_width() {
+        let ctx = egui::Context::default();
+        style(&ctx);
+        let logo = ctx.load_texture(
+            "fixture",
+            egui::ColorImage::new([1, 1], vec![Color32::WHITE]),
+            egui::TextureOptions::LINEAR,
+        );
+        let (commands, _incoming) = std::sync::mpsc::channel();
+        let (_outgoing, replies) = std::sync::mpsc::channel();
+        let mut app = Desktop {
+            commands,
+            replies,
+            email: String::new(),
+            password: Default::default(),
+            tfa: Default::default(),
+            picker: Default::default(),
+            peer: String::new(),
+            transport: connection::Mode::WebRtc,
+            logo,
+            desktop_input: Default::default(),
+            signed_in: false,
+            busy: false,
+            error: None,
+            session_result: None,
+            show_video: false,
+            video: Vec::new(),
+            renderer: "fixture".into(),
+            video_context: None,
+            video_error: None,
+            output_format: wgpu::TextureFormat::Bgra8Unorm,
+            decoder: None,
+            playback: None,
+        };
+        for signed_in in [false, true] {
+            app.signed_in = signed_in;
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(780., 600.),
+                )),
+                ..Default::default()
+            };
+            let _ = ctx.run(raw, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    app.launcher(ui, ctx);
+                    assert!(
+                        ui.min_rect().right() <= 780.,
+                        "launcher must not overflow horizontally"
+                    );
+                });
+            });
+        }
     }
 }

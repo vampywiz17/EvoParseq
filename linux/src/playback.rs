@@ -59,6 +59,9 @@ impl Playback {
             capture: AtomicBool::new(false),
         })
     }
+    pub fn repaint(&self) {
+        self.ui.request_repaint();
+    }
     pub fn stopped(&self) -> bool {
         self.stopped.load(Ordering::Acquire)
     }

@@ -192,7 +192,7 @@ is atomically published for the shared coordinate mapping. The presentation
 callback now returns its existing rectangle/extent, with unchanged GPU resources.
 Focus loss, the local release shortcut, disconnect and overflow send the normal
 release command. Host cursor flags drive the supported Wayland lock request.
-The initial adapter's physical key/modifier/IME limits are documented in README.
+Physical key events use the documented eframe create_native/winit ApplicationHandler integration, preserving ISO/numpad and side-specific modifiers. No private framework hooks or new event queue are used.
 
 Flatpak includes ANV_DEBUG=video-decode by default, without modifying the host
 Mesa installation or the non-Intel path. No HID enablement or input-device

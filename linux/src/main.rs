@@ -32,6 +32,7 @@ pub mod input_handoff;
 mod launcher;
 #[path = "../../src-native/src/media_ingress.rs"]
 pub mod media_ingress;
+mod native_loop;
 #[path = "../../src-native/src/native_wire.rs"]
 pub mod native_wire;
 #[path = "../../src-native/src/native_core/picker.rs"]
@@ -329,65 +330,76 @@ fn main() -> anyhow::Result<()> {
         ..Default::default()
     };
     let mut worker = None;
-    let result = eframe::run_native(
-        "io.github.vampywiz17.EvoParseq",
-        options,
-        Box::new(|cc| {
-            launcher::style(&cc.egui_ctx);
-            let icon =
-                eframe::icon_data::from_png_bytes(include_bytes!("../../assets/evoparseq.png"))?;
-            let image = egui::ColorImage::from_rgba_unmultiplied(
-                [icon.width as usize, icon.height as usize],
-                &icon.rgba,
-            );
-            let logo =
-                cc.egui_ctx
-                    .load_texture("EvoParseq logo", image, egui::TextureOptions::LINEAR);
+    let keyboard = Arc::new(native_loop::KeyboardBridge::default());
+    let event_loop =
+        winit::event_loop::EventLoop::<eframe::UserEvent>::with_user_event().build()?;
+    let result = {
+        let app = eframe::create_native(
+            "io.github.vampywiz17.EvoParseq",
+            options,
+            Box::new(|cc| {
+                launcher::style(&cc.egui_ctx);
+                let icon = eframe::icon_data::from_png_bytes(include_bytes!(
+                    "../../assets/evoparseq.png"
+                ))?;
+                let image = egui::ColorImage::from_rgba_unmultiplied(
+                    [icon.width as usize, icon.height as usize],
+                    &icon.rgba,
+                );
+                let logo =
+                    cc.egui_ctx
+                        .load_texture("EvoParseq logo", image, egui::TextureOptions::LINEAR);
 
-            let (commands, incoming) = mpsc::channel();
-            let (outgoing, replies) = mpsc::channel();
-            let context = cc.egui_ctx.clone();
-            worker = Some(
-                std::thread::Builder::new()
-                    .name("account".into())
-                    .spawn(move || account_worker(incoming, outgoing, context))?,
-            );
-            let renderer = cc
-                .wgpu_render_state
-                .as_ref()
-                .map(|state| state.adapter.get_info().name)
-                .unwrap_or_else(|| "Unknown".into());
-            let output_format = cc
-                .wgpu_render_state
-                .as_ref()
-                .map(|state| state.target_format)
-                .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
-            Ok(Box::new(Desktop {
-                video_context,
-                video_error,
-                output_format,
-                decoder: None,
-                playback: None,
-                commands,
-                replies,
-                renderer,
-                video,
-                email: String::new(),
-                password: Zeroizing::default(),
-                tfa: Zeroizing::default(),
-                picker: Default::default(),
-                peer: String::new(),
-                transport: connection::Mode::WebRtc,
-                logo,
-                desktop_input: Default::default(),
-                signed_in: false,
-                busy: false,
-                error: None,
-                session_result: None,
-                show_video: false,
-            }))
-        }),
-    );
+                let (commands, incoming) = mpsc::channel();
+                let (outgoing, replies) = mpsc::channel();
+                let context = cc.egui_ctx.clone();
+                worker = Some(
+                    std::thread::Builder::new()
+                        .name("account".into())
+                        .spawn(move || account_worker(incoming, outgoing, context))?,
+                );
+                let renderer = cc
+                    .wgpu_render_state
+                    .as_ref()
+                    .map(|state| state.adapter.get_info().name)
+                    .unwrap_or_else(|| "Unknown".into());
+                let output_format = cc
+                    .wgpu_render_state
+                    .as_ref()
+                    .map(|state| state.target_format)
+                    .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
+                Ok(Box::new(Desktop {
+                    video_context,
+                    video_error,
+                    output_format,
+                    decoder: None,
+                    playback: None,
+                    commands,
+                    replies,
+                    renderer,
+                    video,
+                    email: String::new(),
+                    password: Zeroizing::default(),
+                    tfa: Zeroizing::default(),
+                    picker: Default::default(),
+                    peer: String::new(),
+                    transport: connection::Mode::WebRtc,
+                    logo,
+                    desktop_input: desktop_linux::DesktopInput::new(keyboard.clone()),
+                    signed_in: false,
+                    busy: false,
+                    error: None,
+                    session_result: None,
+                    show_video: false,
+                }))
+            }),
+            &event_loop,
+        );
+        let mut app = native_loop::Application::new(app, keyboard.clone());
+        let result = event_loop.run_app(&mut app);
+        drop(app);
+        result
+    };
     // The window has closed, so revoking the short-lived session cannot block the UI.
     if let Some(worker) = worker {
         worker
