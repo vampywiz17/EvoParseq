@@ -476,12 +476,13 @@ impl View {
         drop(host);
         self.sample = Some(sample);
         let sample = self.sample.as_ref().unwrap();
-        let base = stats_view::Presentation::new(
+        let base = stats_view::Presentation::with_missing_values(
             sample,
             &self.values,
             (self.resources.cpu, None, None),
             None,
             &self.timing,
+            true,
         );
         self.details = (0..5)
             .map(|tab| self.build_from(tab, base.clone()))
@@ -495,12 +496,13 @@ impl View {
         let sample = self.sample.as_ref().unwrap();
         self.build_from(
             tab,
-            stats_view::Presentation::new(
+            stats_view::Presentation::with_missing_values(
                 sample,
                 &self.values,
                 (self.resources.cpu, None, None),
                 None,
                 &self.timing,
+                true,
             ),
         )
     }

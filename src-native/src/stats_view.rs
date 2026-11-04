@@ -99,6 +99,18 @@ impl<'a> Presentation<'a> {
         memory: Option<MemoryUsage>,
         timing: &crate::frame_timing::Snapshot,
     ) -> Self {
+        Self::with_missing_values(sample, values, usage, memory, timing, false)
+    }
+    /// A view can retain unavailable metrics without inventing values or
+    /// changing the established compact BUD presentation on other surfaces.
+    pub fn with_missing_values(
+        sample: &'a Sample,
+        values: &Values,
+        usage: (Option<f64>, Option<f64>, Option<f64>),
+        memory: Option<MemoryUsage>,
+        timing: &crate::frame_timing::Snapshot,
+        keep_missing: bool,
+    ) -> Self {
         let stale = sample.at.elapsed().as_secs() > 4 && sample.state == "connected";
         let status = if stale {
             "Waiting for fresh telemetry"
@@ -111,8 +123,8 @@ impl<'a> Presentation<'a> {
             ("Incoming traffic", number(values.incoming, "Mbps")),
             ("Outgoing traffic", number(values.outgoing, "Mbps")),
         ];
-        #[cfg(all(feature = "bud", not(target_os = "linux")))]
-        let mut cards: Vec<_> = if sample.bud.is_some() {
+        #[cfg(feature = "bud")]
+        let mut cards: Vec<_> = if sample.bud.is_some() && !keep_missing {
             cards
                 .into_iter()
                 .filter(|(_, value)| value != "—")
@@ -120,7 +132,7 @@ impl<'a> Presentation<'a> {
         } else {
             cards.into()
         };
-        #[cfg(any(not(feature = "bud"), target_os = "linux"))]
+        #[cfg(not(feature = "bud"))]
         let mut cards: Vec<_> = cards.into();
         // Keep the existing policy: BUD hides unavailable cards, then stale
         // telemetry replaces values in the remaining cards with an em dash.
@@ -130,7 +142,7 @@ impl<'a> Presentation<'a> {
                 value.push('—');
             }
         }
-        let mut rows = rows(sample, values, usage);
+        let mut rows = rows_with_missing(sample, values, usage, keep_missing);
         if let Some(memory) = memory {
             for (label, bytes) in [
                 (
@@ -359,6 +371,14 @@ fn rows(
     s: &Sample,
     v: &Values,
     cpu: (Option<f64>, Option<f64>, Option<f64>),
+) -> Vec<(String, String)> {
+    rows_with_missing(s, v, cpu, false)
+}
+fn rows_with_missing(
+    s: &Sample,
+    v: &Values,
+    cpu: (Option<f64>, Option<f64>, Option<f64>),
+    keep_missing: bool,
 ) -> Vec<(String, String)> {
     let values = v;
     let recent_fresh = s.at.elapsed() <= crate::stats_recent::WINDOW;
@@ -814,8 +834,8 @@ fn rows(
         crate::app_style::forms::STAT_GPU_BUSIEST_ENGINE,
         number(cpu.1, "%"),
     );
-    #[cfg(all(feature = "bud", not(target_os = "linux")))]
-    if s.bud.is_some() {
+    #[cfg(feature = "bud")]
+    if s.bud.is_some() && !keep_missing {
         rows.retain(|(_, value)| value != "Not reported" && value != "—");
     }
     rows
