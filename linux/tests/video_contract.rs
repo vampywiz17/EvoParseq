@@ -11,25 +11,25 @@ fn overflow_diagnostics_distinguish_active_decode_from_waiting_for_ui() {
     playback.submit(&[0]).unwrap();
     playback
         .decode_pending(|_| {
-            for _ in 0..8 {
+            for _ in 0..MAX_FRAMES {
                 playback.submit(&[0]).unwrap();
             }
             let error = playback.submit(&[0]).unwrap_err().to_string();
             assert!(error.contains("packet limit"));
-            assert!(error.contains("received 9, decoded 0"));
+            assert!(error.contains(&format!("received {}, decoded 0", MAX_FRAMES + 1)));
             assert!(!error.contains("active none"));
             Ok(())
         })
         .unwrap();
     let error = playback.submit(&[0]).unwrap_err().to_string();
-    assert!(error.contains("received 9, decoded 1"));
+    assert!(error.contains(&format!("received {}, decoded 1", MAX_FRAMES + 1)));
     assert!(error.contains("active none"));
 }
 
 #[test]
 fn failed_decode_clears_active_diagnostics_and_does_not_count_as_decoded() {
     let playback = playback::Playback::new(eframe::egui::Context::default());
-    for _ in 0..8 {
+    for _ in 0..MAX_FRAMES {
         playback.submit(&[0]).unwrap();
     }
     assert!(
@@ -86,7 +86,8 @@ fn decode_handoff_handles_60_fps_on_a_59_94_hz_display_without_losing_references
 #[test]
 fn decode_batch_preserves_bursts_and_is_bounded_despite_new_arrivals() {
     let playback = playback::Playback::new(eframe::egui::Context::default());
-    for id in 0..8u8 {
+    let limit = MAX_FRAMES as u8;
+    for id in 0..limit {
         playback.submit(&[id]).unwrap();
     }
     assert!(playback.submit(&[99]).is_err());
@@ -97,13 +98,13 @@ fn decode_batch_preserves_bursts_and_is_bounded_despite_new_arrivals() {
                 ids.push(bytes[0]);
                 // The producer can use the queue while the native callback runs.
                 // These arrivals must not turn this UI update into an unbounded loop.
-                playback.submit(&[bytes[0] + 8])?;
+                playback.submit(&[bytes[0] + limit])?;
                 Ok(())
             })
             .unwrap(),
-        8
+        MAX_FRAMES
     );
-    assert_eq!(ids, (0..8u8).collect::<Vec<_>>());
+    assert_eq!(ids, (0..limit).collect::<Vec<_>>());
     assert_eq!(
         playback
             .decode_pending(|bytes| {
@@ -111,9 +112,9 @@ fn decode_batch_preserves_bursts_and_is_bounded_despite_new_arrivals() {
                 Ok(())
             })
             .unwrap(),
-        8
+        MAX_FRAMES
     );
-    assert_eq!(ids, (0..16u8).collect::<Vec<_>>());
+    assert_eq!(ids, (0..limit * 2).collect::<Vec<_>>());
     assert_eq!(
         playback
             .decode_pending(|_| panic!("Queue must be empty"))
@@ -221,4 +222,50 @@ fn scaling_lists_convert_raster_to_bitstream_scan_order() {
     assert_eq!(output.ScalingList4x4[0][2], 4);
     assert_eq!(output.ScalingList8x8[0][2], 8);
     assert_eq!(output.ScalingList8x8[1], [16; 64]);
+}
+#[path = "../../src-native/src/control.rs"]
+mod control;
+#[path = "../../src-native/src/event_log.rs"]
+mod event_log;
+#[path = "../../src-native/src/video_output.rs"]
+mod video_output;
+#[path = "../../src-native/src/video_stream.rs"]
+mod video_stream;
+
+use video_output::MAX_FRAMES;
+
+#[test]
+fn observed_nine_packet_burst_is_preserved_without_waiting_for_a_repaint() {
+    let playback = playback::Playback::new(eframe::egui::Context::default());
+    // Live report: 8 queued packets / 69 KiB arrived within 7.6 ms, with a
+    // ninth packet rejected. No elapsed-time simulation proves GPU throughput;
+    // this reproduces the complete burst before the UI next consumes input.
+    for _ in 0..100 {
+        for id in 0..9u8 {
+            playback.submit(&vec![id; 8 * 1024]).unwrap();
+        }
+        let mut expected = 0u8;
+        assert_eq!(
+            playback
+                .decode_pending(|bytes| {
+                    assert_eq!(bytes, vec![expected; 8 * 1024]);
+                    expected += 1;
+                    Ok(())
+                })
+                .unwrap(),
+            9
+        );
+        assert_eq!(expected, 9);
+    }
+}
+
+#[test]
+fn shared_byte_limit_still_bounds_memory_and_consumption_releases_it() {
+    let playback = playback::Playback::new(eframe::egui::Context::default());
+    playback.submit(&vec![0; video_output::MAX_BYTES]).unwrap();
+    let error = playback.submit(&[1]).unwrap_err().to_string();
+    assert!(error.contains("byte limit"));
+    assert_eq!(playback.decode_pending(|_| Ok(())).unwrap(), 1);
+    playback.submit(&vec![0; video_output::MAX_BYTES]).unwrap();
+    assert_eq!(playback.decode_pending(|_| Ok(())).unwrap(), 1);
 }

@@ -46,7 +46,9 @@ composition and direct scanout have not been measured or established.
 
 ## Queue scheduling
 
-`src/playback.rs` retains the existing eight-packet and byte limits. Each UI
+`src/playback.rs` uses the existing shared Rust `video_output::MAX_FRAMES` (32)
+and `MAX_BYTES` (8 MiB) limits. These constants and the Windows/Android paths
+are unchanged; Linux previously used its own eight-packet / 16 MiB limits. Each UI
 update now decodes its initial bounded backlog, in order, then presents the
 latest output. Incoming packets during that batch belong to the next update.
 This removes the previous one-packet-per-refresh throughput limit without
@@ -64,3 +66,15 @@ These are CPU wall-clock observations, not GPU execution/scanout measurements.
 They contain no payloads or credentials and are printed only on failure.
 Buffer limits, synchronization, transport behavior and GPU surface handling
 remain unchanged by this diagnostic step.
+
+The 0.1.1 live report isolated the packet limit: eight queued packets occupied
+only 69 KiB and arrived within 7.6 ms (oldest 7.9 ms). The active decode was
+2.5 ms old; completion fence wait averaged 3.7 ms, graphics wait 0.1 ms.
+This supports a short input burst rather than sustained decode starvation at
+that failure. It does not establish where the network/host burst originated.
+Preview 0.1.2 therefore removes the Linux-only eight-packet cap in favor of the
+existing common limits. It reduces the byte ceiling from 16 MiB to 8 MiB;
+it does not reserve a full queue or intentionally wait to fill it. Each update
+drains its initial backlog and renders its latest output, preserving references.
+A repeated nine-packet burst regression and byte-budget/release test cover the
+observed failure pattern. Native throughput still requires live verification.

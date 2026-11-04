@@ -1,4 +1,5 @@
 //! Bounded compressed-input handoff for the Linux video adapter.
+use crate::video_output::{MAX_BYTES, MAX_FRAMES};
 use anyhow::{Result, ensure};
 use std::{
     collections::VecDeque,
@@ -48,7 +49,7 @@ impl Pending {
     fn failure(&self, incoming: usize, now: Instant) -> String {
         let reason = if incoming > 8 * 1024 * 1024 {
             "input size"
-        } else if self.bytes + incoming > 16 * 1024 * 1024 {
+        } else if self.bytes + incoming > MAX_BYTES {
             "byte limit"
         } else {
             "packet limit"
@@ -115,9 +116,9 @@ impl Playback {
     pub fn submit(&self, bytes: &[u8]) -> Result<()> {
         let mut packets = self.packets.lock().unwrap_or_else(|e| e.into_inner());
         ensure!(
-            packets.packets.len() < 8
+            packets.packets.len() < MAX_FRAMES
                 && bytes.len() <= 8 * 1024 * 1024
-                && packets.bytes + bytes.len() <= 16 * 1024 * 1024,
+                && packets.bytes + bytes.len() <= MAX_BYTES,
             "{}",
             packets.failure(bytes.len(), Instant::now())
         );
