@@ -207,7 +207,7 @@ impl Manager {
     }
 }
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", target_os = "linux", test))]
 mod events {
     use super::*;
     #[derive(Clone, Copy, Debug)]
@@ -269,7 +269,7 @@ mod events {
         }
     }
 }
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", target_os = "linux", test))]
 pub use events::Event;
 
 #[cfg(any(windows, test))]
