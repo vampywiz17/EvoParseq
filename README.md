@@ -13,7 +13,7 @@ requires no browser, WebView or helper executable.
 Parsec, Unity or lowlat.** A Parsec account and a compatible host are required.
 
 **This is the Linux Flatpak development branch (`codex/linux-flatpak`).**
-The current Linux preview is **0.1.13**, alongside the existing Windows and
+The current Linux preview is **0.1.14**, alongside the existing Windows and
 Android TV clients. Linux support is experimental and is not a stable release.
 Download `EvoParseq-Linux-Flatpak` from a successful
 [Linux Flatpak CI run](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Acodex%2Flinux-flatpak).
@@ -32,7 +32,7 @@ numbers are separate from those releases.
   WebRTC/BUD, media ingress, normal input and diagnostic models are reused.
   Linux adapters provide Vulkan Video/Vulkan, PipeWire, Wayland input and
   Secret portal credential protection.
-- **Playback:** WebRTC and explicit BUD selection, progressive H.264 8-bit 4:2:0
+- **Playback:** WebRTC and explicit BUD selection, progressive H.264 or capability-gated HEVC Main 8-bit 4:2:0
   and stereo Opus. Original NV12 decoder surfaces feed the same-device Vulkan
   presentation shader; no application-side decoded-image copy or CPU readback.
   Shader conversion still costs GPU work: this is GPU-resident rendering,
@@ -52,11 +52,11 @@ numbers are separate from those releases.
 Linux currently requires a working Wayland desktop, PipeWire and a driver
 exposing the necessary Vulkan Video H.264 decode and sampleable NV12 surfaces.
 A Flatpak runtime cannot add missing GPU/kernel capabilities. Intel HD 520
-playback has been tested on the maintainer's HP EliteBook 840 G3; that does not
+H.264 playback has been tested on the maintainer's HP EliteBook 840 G3; that does not
 establish support on every Skylake system or driver. The package defaults to
 `ANV_DEBUG=video-decode` for Mesa Intel's experimental video path.
 
-**Not yet integrated on Linux:** HEVC/10-bit/4:4:4 playback, the application's
+**Not yet integrated on Linux:** 10-bit/4:4:4 playback, the application's
 Zero copy mode, AI upscaling, HID, controllers, clipboard synchronization,
 rotation, explicit immersive-mode selection and TURN configuration controls.
 The full Settings layout is present; unimplemented controls remain disabled.

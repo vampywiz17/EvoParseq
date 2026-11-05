@@ -1,6 +1,6 @@
 # EvoParseq Linux Flatpak preview
 
-Current preview: **0.1.13**, developed on `codex/linux-flatpak`. This is an
+Current preview: **0.1.14**, developed on `codex/linux-flatpak`. This is an
 experimental Linux client for unmodified Parsec hosts, not a stable release.
 Windows and Android TV feature availability differs; see the [root README](../README.md).
 
@@ -11,14 +11,14 @@ Windows and Android TV feature availability differs; see the [root README](../RE
 | Desktop | Wayland, egui with a Vulkan renderer; shared Windows application layout and native window decorations |
 | Account | Sign-in, 2FA, computer discovery, manual peer ID and encrypted remembered sessions |
 | Transport | WebRTC and explicitly selected BUD; no silent transport fallback |
-| Video | Vulkan Video; progressive H.264, 8-bit 4:2:0, without frame reordering |
+| Video | Vulkan Video; progressive H.264 or HEVC Main, 8-bit 4:2:0, without frame reordering |
 | Audio | Stereo Opus through PipeWire, with local mute and volume controls |
 | Input | Normal Parsec mouse/keyboard and host-requested relative pointer capture |
 | Session controls | Host display selection, resolution, bandwidth, FPS, frame pacing, fullscreen and Disconnect |
 | Diagnostics | Live overlay, native Connection stats window, shared Rust statistics and host-timing models |
 | Distribution | Flatpak, Freedesktop Platform/SDK 25.08 and matching graphics driver extensions |
 
-HEVC playback, 10-bit/4:4:4, application Zero copy mode, AI upscaling, controllers,
+10-bit/4:4:4 playback, application Zero copy mode, AI upscaling, controllers,
 HID, clipboard synchronization, rotated video and explicit immersive-mode
 selection are **not integrated on Linux**. TURN provider/credential/Force TURN
 controls are also not integrated into the Linux Settings UI. Existing saved
@@ -42,7 +42,7 @@ select a computer and connect. Settings > Network selects WebRTC or BUD;
 standalone connection/audio test buttons have been removed.
 
 The host system must provide Wayland, PipeWire, the kernel and a compatible GPU.
-The driver must expose Vulkan Video H.264 decode with sampleable NV12 output,
+The default H.264 path requires Vulkan Video H.264 decode with sampleable NV12 output,
 sufficient reference/DPB capacity and compatible same-device rendering. Vulkan
 rendering support alone does not establish Vulkan Video decode support.
 Flatpak packages the runtime and uses its matching graphics driver extensions;
@@ -138,7 +138,7 @@ WebRTC retains the shared host-certificate compatibility policy, SDP fingerprint
 and signature verification; it feeds the bounded Linux queue from the detached
 reader. No Linux-specific cipher negotiation is introduced.
 
-Original Vulkan Video NV12 decoder surfaces are sampled directly on the same
+Original H.264/HEVC Vulkan Video NV12 decoder surfaces are sampled directly on the same
 Vulkan device used by the UI. A presentation shader performs range expansion,
 cropping, scaling and YUV-to-RGB conversion while writing the output target.
 There is no application-side decoded-image copy, intermediate RGBA video
@@ -146,7 +146,7 @@ texture or CPU pixel readback. This is **GPU-resident rendering**, not the
 project's strict **Zero copy mode**; driver/compositor copies and direct scanout
 are not independently verified. See the [video-path audit](VIDEO_PATH.md).
 
-The H.264 profile uses Vulkan's STREAMING usage hint. Ordered bounded decoding
+Both decode profiles use Vulkan's STREAMING usage hint. Ordered bounded decoding
 preserves references and presents the latest completed picture. Conservative
 completion waits synchronize Vulkan Video and wgpu. If the UI stops consuming
 video, a full backlog suspends video rather than ending the connection/audio;
@@ -192,13 +192,15 @@ flatpak run io.github.vampywiz17.EvoParseq --probe-video
 
 The probe reports driver capabilities and sampleable output formats. A positive
 report permits a playback attempt; it does not establish sustained throughput
-or independently verified hardware execution. A reported HEVC capability does
-not enable HEVC playback in this H.264-only backend.
+or independently verified hardware execution. HEVC is advertised only after checking Main/8-bit capabilities, the selected
+decode queue and shared decode/reference/sampleable NV12 support. Session
+creation additionally validates the received dimensions, level and DPB needs.
 
 The [CI workflow](../.github/workflows/linux-flatpak.yml) vendors locked sources,
 installs Freedesktop 25.08 plus Rust/LLVM SDK extensions, runs the regression
 suites and builds the offline Flatpak using the [manifest](flatpak/io.github.vampywiz17.EvoParseq.yml).
-The 0.1.13 build passed 143 tests across its Linux/shared regression suites.
+The 0.1.14 regression suites include HEVC parameter/reference, unsupported-format
+and queue-codec tests alongside the existing H.264, transport and input checks.
 Hardware, compositor, host permissions and sustained playback still need live
 validation. Report the preview version, GPU/driver, transport and reproduction
 steps; do not publish `settings.json`, passwords or tokens.
@@ -209,3 +211,35 @@ References: [Secret portal](https://flatpak.github.io/xdg-desktop-portal/docs/do
 [Flatpak desktop integration](https://docs.flatpak.org/en/latest/desktop-integration.html#icons).
 Bundled Adwaita artwork is by the GNOME Project, under its upstream dual
 LGPLv3 / CC-BY-SA 3.0 license; license copies ship in the Flatpak.
+
+
+## HEVC Main 8-bit (0.1.14)
+
+In Settings > Video > Video format, choose **H.265 / HEVC (8-bit)**, save and
+reconnect. H.264 remains the default. The HEVC choice is enabled only when the
+selected Vulkan device/queue reports Main 8-bit decode, sufficient reference
+capacity and original NV12 surfaces usable by decode, DPB and sampling together.
+The host may still choose H.264; Connection stats reports the received codec.
+Existing dormant 10-bit/4:4:4 preferences never enable those Linux formats.
+
+WebRTC/BUD negotiation reuses the common control flags and inspector. Encoded
+queue entries carry the already identified codec into the decoder without a
+second per-picture framing scan. The pinned shared HEVC parser owns picture
+parsing, reference lists and DPB lifecycle. The Vulkan adapter only translates
+these into H.265 standard structures and reads missing VPS/PTL/ordering and PPS
+presence metadata on parameter-set arrival. H.264/HEVC share native resource
+allocation, bounded completion waits, command recording and presentation.
+There is no new decoded-image copy, intermediate image, render pass, worker or
+software-decoding fallback.
+
+This step supports progressive Main, 8-bit 4:2:0 with zero declared reordering.
+Main10, 4:4:4, range extensions, multilayer coding and VPS HRD parameters are
+explicitly rejected. Optional non-decoding SPS VUI metadata is not supplied to
+the Vulkan session; the shared parser's range/crop data still drives presentation.
+Offline fixtures include synthetic streaming and NVIDIA low-latency sequences;
+physical HEVC playback and sustained performance still require the TV/laptop
+owner's hardware validation. The previous HD 520 live result was H.264.
+
+The Vulkan contracts are documented by Khronos under
+[H.265 decode](https://docs.vulkan.org/features/latest/features/proposals/VK_KHR_video_decode_h265.html)
+and [video coding](https://docs.vulkan.org/spec/latest/chapters/videocoding.html).

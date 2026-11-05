@@ -379,11 +379,7 @@ impl Session {
             .context("Vulkan device unavailable")?
             .queue_family_index();
         let families = [context.decode_family, graphics_family];
-        for _ in 0..if hevc {
-            lowlat_decode::hevc::dpb::MAX_PICTURES
-        } else {
-            MAX_FRAMES
-        } {
+        for _ in 0..MAX_FRAMES {
             let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
             let mut info = vk::ImageCreateInfo::default()
                 .push_next(&mut list)
@@ -849,13 +845,6 @@ impl Session {
             size > 0 && size <= MAX_INPUT,
             "HEVC access unit exceeds the bounded input buffer"
         );
-        let first = job
-            .slices
-            .as_slice()
-            .first()
-            .copied()
-            .flatten()
-            .context("Missing HEVC slice")?;
         let offsets: Vec<_> = job
             .slices
             .as_slice()

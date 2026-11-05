@@ -420,7 +420,11 @@ pub fn sequence(
         pProfileTierLevel: ptl,
         pDecPicBufMgr: buffers,
         pScalingLists: scaling,
-        pShortTermRefPicSet: sets.as_ptr(),
+        pShortTermRefPicSet: if sets.is_empty() {
+            std::ptr::null()
+        } else {
+            sets.as_ptr()
+        },
         pLongTermRefPicsSps: long,
         bit_depth_luma_minus8: source.bit_depth_luma_minus8,
         bit_depth_chroma_minus8: source.bit_depth_chroma_minus8,

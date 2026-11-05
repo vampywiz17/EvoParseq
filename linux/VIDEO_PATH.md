@@ -1,4 +1,4 @@
-# Linux H.264 video path audit
+# Linux H.264 / HEVC 8-bit video path audit
 
 Source review, 2026-11-04. Applies to the Linux Flatpak playback preview only.
 This establishes application behavior, not driver/compositor/scanout behavior.
@@ -238,3 +238,28 @@ A full ingress batch is drained before the Android consumer parks; input/control
 processing still runs between bounded batches. Rotation remains explicitly
 unsupported on Android, matching the previous adapter. Raw audio and 4:4:4 are
 not advertised by this change. Normal Parsec input/controller paths are unchanged.
+
+
+## HEVC Main 8-bit extension (0.1.14)
+
+HEVC uses the same original NV12 images, same-device plane sampling and output
+shader. `session.rs` shares resource allocation and command submission between
+H.264 and H.265; only profile/parameter/reference picture structures differ.
+No decoded-image copy, blit, readback, intermediate texture, additional render
+pass, decoder thread or GPU timestamp/performance query is added. Existing
+result-status queries and bounded completion waits remain in place.
+
+The shared pinned `lowlat_decode::hevc::Stream` owns references and output order.
+The Vulkan metadata adapter reads only required fields missing from that parser's
+public model. Supported scope is progressive Main 8-bit 4:2:0, with no reordering;
+unsupported formats and VPS HRD/multilayer syntax fail explicitly. Optional VUI
+metadata not used by decode is omitted from native parameters; presentation uses
+the shared parser's crop/range. Parameter-set and format changes retire the old
+session through its existing decode/graphics completion lifetime rules.
+
+The Vulkan device and selected queue are checked for H.265/Main/8-bit and NV12
+combined decode/DPB/sampling before advertising HEVC. The session rechecks the
+received level, dimensions, reference requirements and output format. Encoded
+queue entries retain their existing codec tag; no second per-frame inspector
+or additional media queue is introduced. This remains GPU-resident conversion,
+not the application's Zero copy mode or verified direct scanout.
