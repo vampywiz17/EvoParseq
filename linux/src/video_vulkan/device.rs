@@ -28,8 +28,12 @@ pub fn create() -> Result<(WgpuSetupExisting, Arc<Context>)> {
         backends: wgpu::Backends::VULKAN,
         ..Default::default()
     });
+    let requested = requested_adapter(std::env::args().skip(1))?;
     let mut reasons = Vec::new();
     for adapter in instance.enumerate_adapters(wgpu::Backends::VULKAN) {
+        if !matches_adapter(&adapter.get_info().name, requested.as_deref()) {
+            continue;
+        }
         match unsafe { create_on(&instance, &adapter) } {
             Ok(context) => {
                 let setup = WgpuSetupExisting {
@@ -43,7 +47,43 @@ pub fn create() -> Result<(WgpuSetupExisting, Arc<Context>)> {
             Err(error) => reasons.push(format!("{}: {error:#}", adapter.get_info().name)),
         }
     }
+    if reasons.is_empty() && requested.is_some() {
+        bail!("No Vulkan adapter matches --video-adapter");
+    }
     bail!("H.264 Vulkan Video unavailable. {}", reasons.join("; "))
+}
+
+fn requested_adapter(mut args: impl Iterator<Item = String>) -> Result<Option<String>> {
+    let mut requested = None;
+    while let Some(arg) = args.next() {
+        if arg == "--video-adapter" {
+            let name = args
+                .next()
+                .context("--video-adapter requires an adapter name")?;
+            ensure!(
+                !name.trim().is_empty() && requested.is_none(),
+                "Specify --video-adapter once, with a nonempty name"
+            );
+            requested = Some(name.to_ascii_lowercase());
+        }
+    }
+    Ok(requested)
+}
+fn matches_adapter(name: &str, requested: Option<&str>) -> bool {
+    requested.is_none_or(|needle| name.to_ascii_lowercase().contains(needle))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn linux_adapter_selection_never_falls_back_to_a_different_vendor() {
+        let selected =
+            requested_adapter(["--video-adapter".into(), "NVIDIA".into()].into_iter()).unwrap();
+        assert!(matches_adapter("NVIDIA GeForce", selected.as_deref()));
+        assert!(!matches_adapter("Intel HD", selected.as_deref()));
+        assert!(matches_adapter("AMD Radeon", Some("amd")));
+        assert!(requested_adapter(["--video-adapter".into()].into_iter()).is_err());
+    }
 }
 
 unsafe fn create_on(instance: &wgpu::Instance, adapter: &wgpu::Adapter) -> Result<Context> {
@@ -119,8 +159,10 @@ unsafe fn create_on(instance: &wgpu::Instance, adapter: &wgpu::Adapter) -> Resul
         })
         .or_else(|| (0..families.len()).find(|&i| h264_queue(i)))
         .context("H.264 decode queue unavailable")? as u32;
+    codec_available(raw_instance, physical, false)
+        .context("H.264 original-surface path unavailable")?;
     let hevc = available(ash::khr::video_decode_h265::NAME)
-        && hevc_main_available(raw_instance, physical).unwrap_or(false)
+        && codec_available(raw_instance, physical, true).is_ok()
         && operations[decode_family as usize]
             .video_codec_operations
             .contains(vk::VideoCodecOperationFlagsKHR::DECODE_H265);
@@ -219,69 +261,56 @@ impl Context {
     }
 }
 
-fn hevc_main_available(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Result<bool> {
+fn codec_available(
+    instance: &ash::Instance,
+    physical: vk::PhysicalDevice,
+    hevc: bool,
+) -> Result<()> {
     let entry = unsafe { ash::Entry::load()? };
     let video = ash::khr::video_queue::Instance::new(&entry, instance);
-    let mut codec = vk::VideoDecodeH265ProfileInfoKHR::default().std_profile_idc(1);
+    let mut h264 = vk::VideoDecodeH264ProfileInfoKHR::default()
+        .std_profile_idc(vk::native::StdVideoH264ProfileIdc_STD_VIDEO_H264_PROFILE_IDC_HIGH)
+        .picture_layout(vk::VideoDecodeH264PictureLayoutFlagsKHR::PROGRESSIVE);
+    let mut h265 = vk::VideoDecodeH265ProfileInfoKHR::default().std_profile_idc(1);
     let mut usage = crate::video_profile::usage();
     let profile = vk::VideoProfileInfoKHR::default()
-        .video_codec_operation(vk::VideoCodecOperationFlagsKHR::DECODE_H265)
+        .video_codec_operation(if hevc {
+            vk::VideoCodecOperationFlagsKHR::DECODE_H265
+        } else {
+            vk::VideoCodecOperationFlagsKHR::DECODE_H264
+        })
         .chroma_subsampling(vk::VideoChromaSubsamplingFlagsKHR::TYPE_420)
         .luma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
         .chroma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
-        .push_next(&mut codec)
         .push_next(&mut usage);
-    let mut codec_caps = vk::VideoDecodeH265CapabilitiesKHR::default();
+    let profile = if hevc {
+        profile.push_next(&mut h265)
+    } else {
+        profile.push_next(&mut h264)
+    };
+    let mut h264_caps = vk::VideoDecodeH264CapabilitiesKHR::default();
+    let mut h265_caps = vk::VideoDecodeH265CapabilitiesKHR::default();
     let mut decode = vk::VideoDecodeCapabilitiesKHR::default();
-    let mut caps = vk::VideoCapabilitiesKHR::default()
-        .push_next(&mut codec_caps)
-        .push_next(&mut decode);
+    let caps = vk::VideoCapabilitiesKHR::default().push_next(&mut decode);
+    let mut caps = if hevc {
+        caps.push_next(&mut h265_caps)
+    } else {
+        caps.push_next(&mut h264_caps)
+    };
     unsafe {
         (video.fp().get_physical_device_video_capabilities_khr)(physical, &profile, &mut caps)
             .result()?;
     }
-    let eligible = caps.max_dpb_slots >= 2
-        && caps.max_active_reference_pictures >= 1
-        && caps
-            .flags
-            .contains(vk::VideoCapabilityFlagsKHR::SEPARATE_REFERENCE_IMAGES);
-    if !eligible
-        || !decode
-            .flags
-            .contains(vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE)
-    {
-        return Ok(false);
-    }
-    let profiles = [profile];
-    let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
-    let query = vk::PhysicalDeviceVideoFormatInfoKHR::default()
-        .image_usage(
-            vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
-                | vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR
-                | vk::ImageUsageFlags::SAMPLED,
-        )
-        .push_next(&mut list);
-    let mut count = 0;
-    unsafe {
-        (video.fp().get_physical_device_video_format_properties_khr)(
-            physical,
-            &query,
-            &mut count,
-            std::ptr::null_mut(),
-        )
-        .result()?;
-    }
-    let mut formats = vec![vk::VideoFormatPropertiesKHR::default(); count as usize];
-    unsafe {
-        (video.fp().get_physical_device_video_format_properties_khr)(
-            physical,
-            &query,
-            &mut count,
-            formats.as_mut_ptr(),
-        )
-        .result()?;
-    }
-    Ok(formats[..count as usize]
-        .iter()
-        .any(|v| v.format == vk::Format::G8_B8R8_2PLANE_420_UNORM))
+    let (flags, dpb, references) = (
+        caps.flags,
+        caps.max_dpb_slots,
+        caps.max_active_reference_pictures,
+    );
+    crate::video_profile::original_surfaces(flags, dpb, references, decode.flags)?;
+    let formats = unsafe { crate::video_profile::formats(&video, physical, &profile)? };
+    ensure!(
+        formats.iter().any(crate::video_profile::original_nv12),
+        "Original NV12 surfaces require sampleable mutable 2D optimal-tiling output"
+    );
+    Ok(())
 }

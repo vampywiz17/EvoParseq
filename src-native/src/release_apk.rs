@@ -1,12 +1,12 @@
 //! Platform-neutral GitHub APK discovery, version policy and bounded download.
 //! Android owns package/signature checks and the system installation UI.
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use std::{
     io::{Read, Write},
     path::Path,
-    time::Duration,
 };
 const REPO: &str = "https://github.com/vampywiz17/EvoParseq";
 const API: &str = "https://api.github.com/repos/vampywiz17/EvoParseq/releases?per_page=100";
@@ -63,16 +63,8 @@ type VersionKey = ([u64; 3], bool, u64);
 fn key(v: ([u64; 3], Option<u64>)) -> VersionKey {
     (v.0, v.1.is_none(), v.1.unwrap_or(0))
 }
-fn hash(s: &str) -> Result<&str> {
-    let s = s
-        .strip_prefix("sha256:")
-        .context("Release APK has no SHA-256 digest")?;
-    ensure!(
-        s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()),
-        "Invalid APK digest"
-    );
-    Ok(s)
-}
+use crate::release_http::hash;
+
 fn select(bytes: &[u8], installed: &str, pre: bool) -> Result<Option<Candidate>> {
     let installed = key(version(installed)?);
     let releases: Vec<Release> = serde_json::from_slice(bytes)?;
@@ -125,46 +117,15 @@ fn select(bytes: &[u8], installed: &str, pre: bool) -> Result<Option<Candidate>>
     }
     Ok(best.map(|(_, v)| v))
 }
-fn client() -> Result<reqwest::blocking::Client> {
-    Ok(reqwest::blocking::Client::builder()
-        .user_agent("EvoParseq-Android-Updater")
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(180))
-        .redirect(reqwest::redirect::Policy::custom(|a| {
-            if a.previous().len() >= 5 {
-                return a.error("Too many redirects");
-            }
-            let allowed = matches!(
-                a.url().host_str(),
-                Some(
-                    "api.github.com"
-                        | "github.com"
-                        | "release-assets.githubusercontent.com"
-                        | "objects.githubusercontent.com"
-                )
-            );
-            if a.url().scheme() == "https" && allowed {
-                a.follow()
-            } else {
-                a.error("Untrusted release redirect")
-            }
-        }))
-        .build()?)
-}
 pub fn check(installed: &str, pre: bool) -> Result<Option<Candidate>> {
-    let response = client()?
-        .get(API)
-        .header("Accept", "application/vnd.github+json")
-        .send()?
-        .error_for_status()?;
-    let mut data = Vec::new();
-    response.take(1024 * 1024 + 1).read_to_end(&mut data)?;
-    ensure!(data.len() <= 1024 * 1024, "Release metadata too large");
-    select(&data, installed, pre)
+    select(&crate::release_http::metadata(API)?, installed, pre)
 }
 pub fn download(candidate: &Candidate, destination: &Path) -> Result<()> {
     let result = (|| -> Result<()> {
-        let response = client()?.get(&candidate.url).send()?.error_for_status()?;
+        let response = crate::release_http::client()?
+            .get(&candidate.url)
+            .send()?
+            .error_for_status()?;
         if let Some(size) = response.content_length() {
             ensure!(size == candidate.size, "APK size changed");
         }
@@ -179,26 +140,7 @@ pub fn download(candidate: &Candidate, destination: &Path) -> Result<()> {
     result
 }
 fn copy_verified(reader: impl Read, writer: &mut impl Write, candidate: &Candidate) -> Result<()> {
-    let mut reader = reader.take(candidate.size + 1);
-    let mut digest = Sha256::new();
-    let mut count = 0;
-    let mut buffer = [0u8; 65536];
-    loop {
-        let n = reader.read(&mut buffer)?;
-        if n == 0 {
-            break;
-        }
-        count += n as u64;
-        ensure!(count <= candidate.size, "APK exceeds release size");
-        digest.update(&buffer[..n]);
-        writer.write_all(&buffer[..n])?;
-    }
-    ensure!(count == candidate.size, "Truncated APK download");
-    let actual = format!("{:x}", digest.finalize());
-    if !actual.eq_ignore_ascii_case(hash(&candidate.digest)?) {
-        bail!("APK integrity verification failed");
-    }
-    Ok(())
+    crate::release_http::copy_verified(reader, writer, candidate.size, &candidate.digest)
 }
 
 #[cfg(test)]

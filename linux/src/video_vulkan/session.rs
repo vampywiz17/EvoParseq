@@ -240,23 +240,21 @@ impl Session {
                 self.size.1.div_ceil(granularity.height.max(1)) * granularity.height.max(1),
             );
         }
-        let separate_images = caps
-            .flags
-            .contains(vk::VideoCapabilityFlagsKHR::SEPARATE_REFERENCE_IMAGES);
         let max_coded_extent = caps.max_coded_extent;
         let max_dpb_slots = caps.max_dpb_slots;
         let max_active_reference_pictures = caps.max_active_reference_pictures;
         let min_bitstream_buffer_size_alignment = caps.min_bitstream_buffer_size_alignment;
         let std_header_version = caps.std_header_version;
+        let flags = caps.flags;
+        crate::video_profile::original_surfaces(
+            flags,
+            max_dpb_slots,
+            max_active_reference_pictures,
+            decode_caps.flags,
+        )?;
         ensure!(
             max_coded_extent.width >= self.size.0 && max_coded_extent.height >= self.size.1,
             "Stream exceeds Vulkan decoder dimensions"
-        );
-        ensure!(
-            decode_caps
-                .flags
-                .contains(vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE),
-            "Decoder cannot share its original DPB surfaces with presentation"
         );
         ensure!(
             max_dpb_slots >= references + 1 && max_active_reference_pictures >= references,
@@ -269,10 +267,6 @@ impl Session {
                 codec_caps.max_level_idc
             }) >= level,
             "Stream level exceeds the Vulkan decoder limit"
-        );
-        ensure!(
-            separate_images,
-            "This driver requires a layered DPB; separate reference surfaces are unavailable"
         );
         self.slot_count = max_dpb_slots.min(MAX_FRAMES as u32);
         self.alignment = min_bitstream_buffer_size_alignment.max(1);
@@ -343,36 +337,10 @@ impl Session {
         }
         let profiles = [profile];
         let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
-        let usage = vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
-            | vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR
-            | vk::ImageUsageFlags::SAMPLED;
-        let query = vk::PhysicalDeviceVideoFormatInfoKHR::default()
-            .image_usage(usage)
-            .push_next(&mut list);
-        let mut count = 0;
-        unsafe {
-            (video.fp().get_physical_device_video_format_properties_khr)(
-                context.physical,
-                &query,
-                &mut count,
-                std::ptr::null_mut(),
-            )
-            .result()?
-        };
-        let mut formats = vec![vk::VideoFormatPropertiesKHR::default(); count as usize];
-        unsafe {
-            (video.fp().get_physical_device_video_format_properties_khr)(
-                context.physical,
-                &query,
-                &mut count,
-                formats.as_mut_ptr(),
-            )
-            .result()?
-        };
+        let usage = crate::video_profile::surface_usage();
+        let formats = unsafe { crate::video_profile::formats(&video, context.physical, &profile)? };
         ensure!(
-            formats
-                .iter()
-                .any(|format| format.format == vk::Format::G8_B8R8_2PLANE_420_UNORM),
+            formats.iter().any(crate::video_profile::original_nv12),
             "The original NV12 decoder surfaces cannot be sampled on this driver"
         );
         let graphics_family = unsafe { context.device.as_hal::<wgpu::hal::api::Vulkan>() }

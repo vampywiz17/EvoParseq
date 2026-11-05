@@ -9,6 +9,7 @@ use crate::{
 use eframe::egui::{self, Color32, RichText};
 #[derive(Default)]
 pub struct State {
+    pub information: crate::information_linux::State,
     pub tab: usize,
     pub provider: usize,
     pub stats: bool,
@@ -502,8 +503,18 @@ impl Desktop {
                         }
                     }
                     ui.menu_button(f::MENU_HELP, |ui| {
-                        ui.add_enabled(false, egui::Button::new(f::MENU_ABOUT));
-                        ui.add_enabled(false, egui::Button::new(f::MENU_UPDATES));
+                        for (label, mode) in [
+                            (f::MENU_ABOUT, crate::information_linux::Mode::About),
+                            (f::MENU_UPDATES, crate::information_linux::Mode::Updates),
+                        ] {
+                            if ui.button(label).clicked() {
+                                if let Some(playback) = &self.playback {
+                                    self.desktop_input.release(ctx, playback);
+                                }
+                                self.ui_state.information.open(ctx, mode);
+                                ui.close();
+                            }
+                        }
                     });
                 });
             });
@@ -517,10 +528,15 @@ impl Desktop {
             egui::ViewportBuilder::default()
                 .with_title(f::MENU_STATS)
                 .with_decorations(true)
-                .with_resizable(true)
+                .with_resizable(false)
+                .with_maximize_button(false)
                 .with_inner_size([744., 781.])
-                .with_min_inner_size([480., 360.]),
+                .with_min_inner_size([744., 781.])
+                .with_max_inner_size([744., 781.]),
             |child, class| {
+                if child.input(|i| i.viewport().maximized.unwrap_or(false)) {
+                    child.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                }
                 if child.input(|i| i.viewport().close_requested()) {
                     self.ui_state.stats = false;
                     ctx.request_repaint();

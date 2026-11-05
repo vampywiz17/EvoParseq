@@ -29,7 +29,22 @@ unsafe fn adapters(entry: &Entry, instance: &ash::Instance) -> Result<Vec<String
                 .iter()
                 .any(|ext| (unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) }) == name)
         };
-        lines.push(name.into_owned());
+        lines.push(format!(
+            "{name} [vendor {:04x}, device {:04x}, API {}.{}.{}]",
+            properties.vendor_id,
+            properties.device_id,
+            vk::api_version_major(properties.api_version),
+            vk::api_version_minor(properties.api_version),
+            vk::api_version_patch(properties.api_version)
+        ));
+        let mut driver = vk::PhysicalDeviceDriverProperties::default();
+        let mut properties2 = vk::PhysicalDeviceProperties2::default().push_next(&mut driver);
+        unsafe {
+            instance.get_physical_device_properties2(gpu, &mut properties2);
+        }
+        let driver_name = unsafe { CStr::from_ptr(driver.driver_name.as_ptr()) }.to_string_lossy();
+        let driver_info = unsafe { CStr::from_ptr(driver.driver_info.as_ptr()) }.to_string_lossy();
+        lines.push(format!("Driver: {driver_name} · {driver_info}"));
         if properties.api_version < vk::API_VERSION_1_3
             || !has(ash::khr::video_queue::NAME)
             || !has(ash::khr::video_decode_queue::NAME)
@@ -138,27 +153,33 @@ unsafe fn query(
         lines.push(format!("{label}: {status:?}"));
         return;
     }
-    let profiles = [*profile];
-    let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
-    let info = vk::PhysicalDeviceVideoFormatInfoKHR::default()
-        .image_usage(vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR | vk::ImageUsageFlags::SAMPLED)
-        .push_next(&mut list);
-    let mut count = 0;
-    let status = unsafe {
-        (video.fp().get_physical_device_video_format_properties_khr)(
-            gpu,
-            &info,
-            &mut count,
-            std::ptr::null_mut(),
-        )
-    };
-    let sampling = match (status, count) {
-        (vk::Result::SUCCESS, 0) => "no sampleable output format".into(),
-        (vk::Result::SUCCESS, count) => format!("{count} sampleable output formats"),
-        (status, _) => format!("output format query: {status:?}"),
-    };
-    lines.push(format!(
-        "{label}: up to {} × {} · {sampling}",
-        caps.max_coded_extent.width, caps.max_coded_extent.height
-    ));
+    let flags = caps.flags;
+    let (width, height, dpb, references) = (
+        caps.max_coded_extent.width,
+        caps.max_coded_extent.height,
+        caps.max_dpb_slots,
+        caps.max_active_reference_pictures,
+    );
+    let decode_flags = decode.flags;
+    lines.push(format!("{label}: up to {width} × {height} · DPB {dpb} / references {references} · {flags:?} · {decode_flags:?}"));
+    if profile.luma_bit_depth != vk::VideoComponentBitDepthFlagsKHR::TYPE_8 {
+        lines.push("10-bit playback is not integrated on Linux".into());
+        return;
+    }
+    let result = (|| -> anyhow::Result<()> {
+        crate::video_profile::original_surfaces(flags, dpb, references, decode_flags)?;
+        let formats = unsafe { crate::video_profile::formats(video, gpu, profile)? };
+        anyhow::ensure!(
+            formats.iter().any(crate::video_profile::original_nv12),
+            "Original NV12 surfaces require sampleable mutable 2D optimal-tiling output"
+        );
+        Ok(())
+    })();
+    lines.push(match result {
+        Ok(()) => {
+            "Original-surface path: driver-reported eligible; playback validation still required"
+                .into()
+        }
+        Err(error) => format!("Original-surface path unavailable: {error:#}"),
+    });
 }

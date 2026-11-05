@@ -84,3 +84,5 @@ pub mod viewport;
 
 #[path = "../../../src-native/src/release_apk.rs"]
 pub mod release_apk;
+#[path = "../../../src-native/src/release_http.rs"]
+mod release_http;

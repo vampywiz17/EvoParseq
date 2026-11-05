@@ -184,8 +184,12 @@ unsafe fn open_page(parent: HWND, pages: Arc<Pages>, mode: Mode) -> HWND {
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        740,
-        if about { 640 } else { 720 },
+        crate::about::SIZE[0] as i32,
+        if about {
+            crate::about::SIZE[1] as i32
+        } else {
+            720
+        },
         parent,
         null_mut(),
         instance,
@@ -252,18 +256,10 @@ unsafe fn open_page(parent: HWND, pages: Arc<Pages>, mode: Mode) -> HWND {
 unsafe fn layout(hwnd: HWND) {
     let mut rect: RECT = std::mem::zeroed();
     GetClientRect(hwnd, &mut rect);
-    let width = (rect.right - 48).max(1);
-    let bottom = rect.bottom - 62;
-    for (id, x, y, w, h) in [
-        (6, 24, 25, 40, 40),
-        (1, 80, 20, width - 56, 48),
-        (VERSION, 24, 76, width, 42),
-        (STATUS, 24, 126, width, 78),
-        (NOTES, 24, 214, width, (bottom - 234).max(1)),
-        (CHECK, 24, bottom, 142, 36),
-        (DOWNLOAD, 178, bottom, 150, 36),
-        (CLOSE, rect.right - 132, bottom, 108, 36),
-    ] {
+    for (id, [x, y, w, h]) in [6, 1, VERSION, STATUS, NOTES, CHECK, DOWNLOAD, CLOSE]
+        .into_iter()
+        .zip(crate::about::rectangles(rect.right, rect.bottom))
+    {
         SetWindowPos(
             GetDlgItem(hwnd, id as i32),
             null_mut(),

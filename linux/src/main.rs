@@ -1,3 +1,5 @@
+#[path = "../../src-native/src/about.rs"]
+mod about;
 #[path = "../../src-native/src/native_core/account.rs"]
 pub(crate) mod account;
 #[path = "../../src-native/src/native_core/signaling.rs"]
@@ -29,10 +31,15 @@ mod display_timing;
 mod host_displays;
 #[path = "../../src-native/src/native_core/host_video.rs"]
 mod host_video;
+mod information_linux;
 #[path = "../../src-native/src/network_settings.rs"]
 mod network_settings;
 #[path = "../../src-native/src/native_core/profile.rs"]
 pub(crate) mod profile;
+#[path = "../../src-native/src/release_flatpak.rs"]
+mod release_flatpak;
+#[path = "../../src-native/src/release_http.rs"]
+mod release_http;
 mod resources_linux;
 mod secure_storage;
 #[path = "../../src-native/src/session_controls.rs"]
@@ -158,7 +165,6 @@ struct Desktop {
     ui_state: desktop_ui::State,
     badge: session_overlay::Badge,
     fitted_stream: Option<(u32, u32)>,
-    launcher_size: Option<egui::Vec2>,
     video_context: Option<Arc<video_vulkan::Context>>,
     video_error: Option<String>,
     output_format: wgpu::TextureFormat,
@@ -303,11 +309,6 @@ impl eframe::App for Desktop {
     }
 
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        window_mode::apply(
-            ctx,
-            self.playback.is_some() && !self.show_video,
-            self.show_video,
-        );
         while let Ok(reply) = self.replies.try_recv() {
             let video_timing = self
                 .decoder
@@ -320,9 +321,6 @@ impl eframe::App for Desktop {
                 self.fitted_stream = None;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
 
-                if let Some(size) = self.launcher_size.take() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-                }
                 playback.stop();
             }
             self.decoder = None;
@@ -383,6 +381,11 @@ impl eframe::App for Desktop {
             }
         }
 
+        window_mode::apply(
+            ctx,
+            self.playback.is_some() && !self.show_video,
+            self.show_video,
+        );
         if let (Some(playback), Some(decoder)) = (&self.playback, &mut self.decoder) {
             match playback
                 .resume_if_ready(ctx.input(|input| input.focused))
@@ -441,6 +444,7 @@ impl eframe::App for Desktop {
         }
         self.menu_bar(ctx);
         self.statistics(ctx);
+        self.information(ctx);
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new().fill(if self.playback.is_some() && !self.show_video {
@@ -486,6 +490,11 @@ impl eframe::App for Desktop {
                     self.launcher(ui, ctx);
                 }
             });
+        window_mode::apply(
+            ctx,
+            self.playback.is_some() && !self.show_video,
+            self.show_video,
+        );
         if let Some(playback) = &self.playback {
             playback.finish_clipboard(
                 self.desktop_input.enabled
@@ -509,8 +518,8 @@ impl Drop for Desktop {
 fn main() -> anyhow::Result<()> {
     cursor_theme::prepare();
     if std::env::args_os()
-        .nth(1)
-        .is_some_and(|arg| arg == "--probe-video")
+        .skip(1)
+        .any(|arg| arg == "--probe-video")
     {
         for line in video_probe::report()? {
             println!("{line}");
@@ -538,6 +547,7 @@ fn main() -> anyhow::Result<()> {
             .with_title("EvoParseq")
             .with_decorations(true)
             .with_resizable(false)
+            .with_maximize_button(false)
             .with_app_id("io.github.vampywiz17.EvoParseq")
             .with_icon(eframe::icon_data::from_png_bytes(include_bytes!(
                 "../../assets/evoparseq.png"
@@ -634,7 +644,6 @@ fn main() -> anyhow::Result<()> {
                         },
                         badge: Default::default(),
                         fitted_stream: None,
-                        launcher_size: None,
                     }))
                 }),
                 &event_loop,

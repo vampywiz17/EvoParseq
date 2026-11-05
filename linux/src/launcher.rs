@@ -79,8 +79,6 @@ impl Desktop {
             self.badge = Default::default();
             self.badge
                 .set_hidden(self.settings.native_session_button_hidden());
-            self.launcher_size =
-                ctx.input(|input| input.viewport().inner_rect.map(|rect| rect.size()));
             self.fitted_stream = None;
             self.playback = Some(playback.clone());
             let telemetry = crate::telemetry::Session::new(self.transport);
@@ -318,7 +316,6 @@ mod tests {
             ui_state: Default::default(),
             badge: Default::default(),
             fitted_stream: None,
-            launcher_size: None,
             video_context: None,
             video_error: None,
             output_format: wgpu::TextureFormat::Bgra8Unorm,
