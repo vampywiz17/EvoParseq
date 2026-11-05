@@ -15,7 +15,7 @@ desktop-telemetry = ["bud"]
 libc = "0.2"
 anyhow = "1"
 xcursor = "=0.3.11"
-ashpd = { version = "=0.13.13", default-features = false, features = ["tokio", "secret"] }
+ashpd = { version = "=0.13.13", default-features = false, features = ["tokio", "secret", "open_uri"] }
 ring = "=0.17.14"
 base64 = "0.22"
 sha2 = "0.10"
