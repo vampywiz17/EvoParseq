@@ -30,6 +30,27 @@ const SUBSYSTEM: u32 = 0x2000;
 struct Pad {
     raw: NonNull<c_void>,
     id: i32,
+    motors: (u8, u8),
+    renew: Instant,
+}
+impl Pad {
+    fn rumble(&mut self, low: u8, high: u8, renew: bool) {
+        if !renew && self.motors == (low, high) {
+            return;
+        }
+        self.motors = (low, high);
+        self.renew = Instant::now() + Duration::from_secs(30);
+        // SDL caps effects at roughly 65 seconds. Renew a latched host level
+        // through the existing poller, without another timer/thread.
+        unsafe {
+            SDL_GameControllerRumble(
+                self.raw.as_ptr(),
+                u16::from(low) * 257,
+                u16::from(high) * 257,
+                if low == 0 && high == 0 { 0 } else { 60_000 },
+            );
+        }
+    }
 }
 impl Drop for Pad {
     fn drop(&mut self) {
@@ -67,6 +88,11 @@ impl Devices {
         let now = Instant::now();
         if now >= self.updated {
             unsafe { SDL_GameControllerUpdate() };
+            for pad in self.pads.iter_mut().flatten() {
+                if pad.motors != (0, 0) && now >= pad.renew {
+                    pad.rumble(pad.motors.0, pad.motors.1, true);
+                }
+            }
             self.updated = now + gamepad::POLL;
         }
         if now < self.discovery {
@@ -88,7 +114,12 @@ impl Devices {
             if let Some(raw) = NonNull::new(unsafe { SDL_GameControllerOpen(index) }) {
                 let id =
                     unsafe { SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(raw.as_ptr())) };
-                *slot = Some(Pad { raw, id });
+                *slot = Some(Pad {
+                    raw,
+                    id,
+                    motors: (0, 0),
+                    renew: now,
+                });
             }
         }
     }
@@ -153,17 +184,10 @@ impl Motors for Devices {
     fn rumble(&mut self, id: i32, low: u8, high: u8) {
         if let Some(pad) = usize::try_from(id)
             .ok()
-            .and_then(|id| self.pads.get(id))
-            .and_then(Option::as_ref)
+            .and_then(|id| self.pads.get_mut(id))
+            .and_then(Option::as_mut)
         {
-            unsafe {
-                SDL_GameControllerRumble(
-                    pad.raw.as_ptr(),
-                    u16::from(low) * 257,
-                    u16::from(high) * 257,
-                    if low == 0 && high == 0 { 0 } else { u32::MAX },
-                );
-            }
+            pad.rumble(low, high, false);
         }
     }
 }
