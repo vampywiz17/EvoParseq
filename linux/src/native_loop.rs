@@ -88,15 +88,22 @@ impl<'a> Application<'a> {
             self.keyboard.release();
             return true;
         }
-        if code==KeyCode::KeyV {
-            if down && self.modifiers.control_key() && !self.modifiers.alt_key() && !self.modifiers.super_key() {
-                self.pasting=true;
-                self.keyboard.paste.store(true,Ordering::Release);
+        if code == KeyCode::KeyV {
+            if down
+                && self.modifiers.control_key()
+                && !self.modifiers.alt_key()
+                && !self.modifiers.super_key()
+            {
+                self.pasting = true;
+                self.keyboard.paste.store(true, Ordering::Release);
                 // Existing egui-winit clipboard code reads the focused seat and
                 // supplies Event::Paste. Clipboard text must precede host Ctrl+V.
                 return false;
             }
-            if !down && self.pasting {self.pasting=false;return true;}
+            if !down && self.pasting {
+                self.pasting = false;
+                return true;
+            }
         }
         if let Some(usage) = usage(code) {
             let mods = if (224..=231).contains(&usage) {
