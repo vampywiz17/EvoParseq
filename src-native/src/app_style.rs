@@ -78,12 +78,9 @@ pub mod settings {
     pub const BACK: [i32; 4] = [550, 142, 110, 40];
     pub const SAVE: [i32; 4] = [676, 142, 144, 40];
     pub const BACK_TEXT: &str = "Back";
-    pub const NETWORK: &str = "NETWORK";
     pub const NETWORK_RECT: [i32; 4] = [0, 204, 820, 25];
     pub const TRANSPORT_Y: i32 = 844;
-    pub const TRANSPORT: &str = "Transport";
     pub const TRANSPORT_CHOICES: [&str; 2] = ["WebRTC", "BUD"];
-    pub const TRANSPORT_HELP: &str = "WebRTC or BUD: direct UDP or TURN over UDP/TLS/TCP.\nUses the TURN URLs above. Reconnect after changing.";
     pub const fn label(y: i32) -> [i32; 4] {
         [0, y + 2, 392, 24]
     }

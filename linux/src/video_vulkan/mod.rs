@@ -149,10 +149,6 @@ impl Decoder {
         }
     }
 
-    #[cfg(test)]
-    pub fn submit(&mut self, bytes: &[u8], codec: crate::video_stream::Codec) -> Result<()> {
-        self.submit_oriented(bytes, codec, 0)
-    }
     pub fn submit_oriented(
         &mut self,
         bytes: &[u8],

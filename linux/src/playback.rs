@@ -296,6 +296,7 @@ impl Playback {
             .queue
             .request_failed(generation);
     }
+    #[cfg(test)]
     pub fn status(&self) -> Option<&'static str> {
         let state = self.packets.lock().unwrap_or_else(|e| e.into_inner());
         if state.suspended {

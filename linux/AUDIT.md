@@ -8,7 +8,10 @@ not a claim of hardware validation on every platform.
 
 - Removed saved arbitrary launcher geometry. Fixed canonical constraints now
   survive asynchronous fullscreen/unmaximize acknowledgments after Disconnect.
-- Restricted the unused-in-production codec test adapter to `cfg(test)`.
+- Restricted the codec/status fixture adapters to `cfg(test)` and removed a
+  decoder test convenience method with no remaining callers.
+- Removed retired Settings labels/help duplicated by the active form descriptors;
+  Windows-consumed layout constants remain shared.
 - Removed unused Linux imports, a retired format-query variable and unused
   profile constant reexports; retained the Windows-only Resolution alias.
   Declared shared Windows cfg names without enabling their features on Linux.

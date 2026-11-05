@@ -203,6 +203,8 @@ impl State {
         );
         label(ui, r(3), &status, 16., color(crate::app_style::TEXT));
         let notes_rect = r(4);
+        ui.painter()
+            .rect_filled(notes_rect, 0., color(crate::app_style::SETTINGS_FIELD));
         ui.scope_builder(egui::UiBuilder::new().max_rect(notes_rect), |ui| {
             ui.set_clip_rect(notes_rect);
             egui::ScrollArea::vertical()

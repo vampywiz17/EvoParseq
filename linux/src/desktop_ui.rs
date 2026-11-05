@@ -107,7 +107,7 @@ impl Desktop {
                 origin + egui::vec2(0., 147.),
                 origin + egui::vec2(820., 147.),
             ],
-            egui::Stroke::new(1., color(app_style::FIELD)),
+            egui::Stroke::new(1_f32, color(app_style::FIELD)),
         );
         label(
             ui,
