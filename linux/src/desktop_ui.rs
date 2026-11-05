@@ -36,8 +36,9 @@ impl Desktop {
                     self.ui_state.feedback = "Settings worker is unavailable.".into();
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    ui.label("Saving settings...");
-                    return;
+                    // Keep the canonical form visible while the platform keyring
+                    // is waiting for approval; do not accept a second transaction.
+                    ui.disable();
                 }
             }
         }
@@ -321,6 +322,14 @@ impl Desktop {
                 crate::connection_settings::VideoFormat::H264
             }
             .apply(&mut draft.values);
+            // Retain public/encrypted form values for disabled painting only.
+            // Plaintext replacement secrets move exclusively to the save worker.
+            let mut pending = crate::network_settings::Draft::new(draft.values.clone());
+            pending.stun_urls = draft.stun_urls.clone();
+            pending.turn_urls = draft.turn_urls.clone();
+            pending.ttl = draft.ttl.clone();
+            self.ui_state.network = Some(pending);
+            self.ui_state.feedback = crate::network_settings::SAVING.into();
             let settings = self.settings.clone();
             let context = ui.ctx().clone();
             let (sender, receiver) = std::sync::mpsc::channel();

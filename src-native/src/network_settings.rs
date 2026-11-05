@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use zeroize::Zeroizing;
 
 pub const NOTICE: &str = "ICE chooses the route automatically unless Force TURN relay is enabled.\nChanges apply to your next connection.";
+pub const SAVING: &str = "Saving settings...";
 pub const SAVED: &str = "Settings saved. They apply on your next connection.";
 
 pub struct Draft {
