@@ -47,6 +47,7 @@ pub struct Playback {
     capture: AtomicBool,
     pub(crate) pad_focus: AtomicBool,
     pub(crate) clipboard_allowed: AtomicBool,
+    clipboard_output: Mutex<Option<String>>,
     pub(crate) immersive: std::sync::atomic::AtomicU8,
     cursor_restore: Mutex<Option<(i32, i32)>>,
 }
@@ -65,6 +66,7 @@ impl Playback {
             capture: AtomicBool::new(false),
             pad_focus: AtomicBool::new(false),
             clipboard_allowed: AtomicBool::new(false),
+            clipboard_output: Mutex::new(None),
             immersive: std::sync::atomic::AtomicU8::new(0),
             cursor_restore: Mutex::new(None),
         })
@@ -90,9 +92,24 @@ impl Playback {
         if !self.clipboard_allowed.load(Ordering::Acquire) || self.stopped() {
             return false;
         }
-        self.ui.copy_text(text.to_owned());
+        *self
+            .clipboard_output
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(text.to_owned());
         self.ui.request_repaint();
-        true // Accepted by the existing eframe Wayland clipboard adapter.
+        true // One pending native output; latest value supersedes stale text.
+    }
+    pub fn finish_clipboard(&self, focused: bool) {
+        let text = self
+            .clipboard_output
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if focused && self.clipboard_allowed.load(Ordering::Acquire) && !self.stopped() {
+            if let Some(text) = text {
+                self.ui.copy_text(text);
+            }
+        }
     }
     pub fn clipboard_read(&self) {
         self.ui
@@ -389,5 +406,27 @@ impl crate::video_output::NativeSink for Playback {
 impl Drop for Playback {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+#[cfg(test)]
+mod rotation_tests {
+    #[test]
+    fn linux_rotation_stays_attached_to_its_encoded_packet() {
+        let p = super::Playback::new(eframe::egui::Context::default());
+        let info = crate::video_stream::PacketInfo {
+            picture: true,
+            codec: crate::video_stream::Codec::H264,
+            idr: true,
+            parameters: false,
+        };
+        p.submit_oriented(&[0, 0, 1, 0x65, 1], info, 3).unwrap();
+        let mut rotations = Vec::new();
+        p.decode_pending_oriented(|_, _, rotation| {
+            rotations.push(rotation);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(rotations, [3]);
     }
 }

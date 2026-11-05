@@ -57,6 +57,8 @@ modules:
       - install -Dm644 LICENSE /app/share/licenses/evoparseq/LICENSE
       - install -Dm644 linux/vendor/egui-winit/LICENSE-MIT /app/share/licenses/evoparseq/egui-winit-MIT
       - install -Dm644 linux/vendor/egui-winit/LICENSE-APACHE /app/share/licenses/evoparseq/egui-winit-APACHE
+      - install -Dm644 linux/vendor/egui-wgpu/LICENSE-MIT /app/share/licenses/evoparseq/egui-wgpu-MIT
+      - install -Dm644 linux/vendor/egui-wgpu/LICENSE-APACHE /app/share/licenses/evoparseq/egui-wgpu-APACHE
       - install -Dm644 src-native/crates/bud/vendor/lowlat-client/LICENSE /app/share/licenses/evoparseq/LOWLAT-LICENSE
     sources:
       - type: dir

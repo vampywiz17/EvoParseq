@@ -579,11 +579,33 @@ impl View {
                 if label == crate::app_style::forms::STAT_AUDIO_OUTPUT {
                     *value = if self.audio.ready {
                         "PipeWire / streaming"
+                    } else if self.audio.recovering {
+                        "PipeWire / recovering"
                     } else {
                         "PipeWire / not streaming"
                     }
                     .into();
                 }
+            }
+            for (label, value) in &mut result.rows {
+                if label == crate::app_style::forms::STAT_BUFFER_LIMITS {
+                    if let Some((min, max, custom)) = self.audio.limits {
+                        *value = format!(
+                            "{min} / {max} ms{} (decoded PCM; device latency additional)",
+                            if custom { " (custom)" } else { " (automatic)" }
+                        );
+                    }
+                }
+            }
+            if let Some(layout) = self
+                .audio
+                .layout
+                .filter(|layout| Some(*layout) != sample.audio_layout)
+            {
+                result.rows.push((
+                    crate::app_style::forms::STAT_PLAYBACK_CHANNELS.into(),
+                    layout.channels.to_string(),
+                ));
             }
             result.rows.push((
                 crate::app_style::forms::STAT_AUDIO_UNDERRUNS.into(),

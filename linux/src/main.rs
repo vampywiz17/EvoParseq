@@ -370,6 +370,11 @@ impl eframe::App for Desktop {
                     self.signed_in = signed_in;
                     let message = video_timing
                         .map_or_else(|| message.clone(), |timing| format!("{message}\n{timing}"));
+                    event_log::record(
+                        "ERROR",
+                        "video_backend_failed",
+                        serde_json::json!({"backend":"Vulkan Video","decoded_pictures":decoder.decoded}),
+                    );
                     eprintln!("{message}");
                     self.error = Some(message);
                     if !signed_in {
@@ -478,6 +483,15 @@ impl eframe::App for Desktop {
                     self.launcher(ui, ctx);
                 }
             });
+        if let Some(playback) = &self.playback {
+            playback.finish_clipboard(
+                self.desktop_input.enabled
+                    && ctx.input(|i| i.focused)
+                    && !self.show_video
+                    && !self.badge.open
+                    && !self.ui_state.stats,
+            );
+        }
     }
 }
 
@@ -531,6 +545,9 @@ fn main() -> anyhow::Result<()> {
             ]),
         wgpu_options: egui_wgpu::WgpuConfiguration {
             wgpu_setup,
+            runtime_frame_latency: video_context
+                .as_ref()
+                .map(|context| context.frame_latency.clone()),
             ..Default::default()
         },
         ..Default::default()

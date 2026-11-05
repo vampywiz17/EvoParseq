@@ -268,3 +268,11 @@ HEVC image allocations are padded to the driver's picture-access granularity;
 the decode/reference `codedExtent` remains the actual SPS width/height. The
 presentation shader uses allocation dimensions for texture coordinates and the
 parsed conformance window for the visible picture. Padding adds no copy.
+
+### 0.1.16 orientation and presentation preference
+
+Rotation changes UV coordinates inside the existing NV12 conversion shader and
+uses rotated aspect-fit extents. It adds no decoded-image copy or render pass.
+The Linux-only egui-wgpu patch can reconfigure the existing swapchain before
+acquiring its next image when a new connection selects its latency preference.
+A requested frame-latency limit is not proof of actual queue depth or scanout.

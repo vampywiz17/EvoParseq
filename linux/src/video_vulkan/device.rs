@@ -6,6 +6,7 @@ use std::{ffi::CStr, sync::Arc};
 
 pub struct Context {
     pub adapter_name: String,
+    pub frame_latency: Arc<std::sync::atomic::AtomicU32>,
     pub instance: ash::Instance,
     pub raw: ash::Device,
     pub physical: vk::PhysicalDevice,
@@ -179,6 +180,7 @@ unsafe fn create_on(instance: &wgpu::Instance, adapter: &wgpu::Adapter) -> Resul
     }?;
     Ok(Context {
         adapter_name: adapter.get_info().name,
+        frame_latency: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         instance: raw_instance.clone(),
         physical,
         decode_family,

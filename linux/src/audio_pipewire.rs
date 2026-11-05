@@ -153,6 +153,10 @@ fn playback(
     config: Config,
     cancel: Arc<AtomicBool>,
 ) -> Result<()> {
+    let mut restore_levels = {
+        let old = state.lock().unwrap_or_else(|e| e.into_inner());
+        old.recovering.then_some((old.muted, old.volume))
+    };
     pw::init();
     let mainloop = pw::main_loop::MainLoop::new(None)?;
     let context = pw::context::Context::new(&mainloop)?;
@@ -200,7 +204,7 @@ fn playback(
                 state.volume = Some(values.iter().sum::<f32>() / values.len() as f32);
             }
         })
-        .state_changed(move |_, _, _, stream_state| {
+        .state_changed(move |stream, _, _, stream_state| {
             let mut output = state.lock().unwrap_or_else(|e| e.into_inner());
             output.ready = matches!(stream_state, pw::stream::StreamState::Streaming);
             if output.ready {
@@ -212,7 +216,31 @@ fn playback(
                 output.layout = Some(config.layout);
                 output.limits = Some((config.minimum_ms, config.maximum_ms, config.custom));
             }
+            let ready = output.ready;
             drop(output);
+            if ready {
+                if let Some((mute, volume)) = restore_levels.take() {
+                    if let Some(muted) = mute {
+                        let _ = set_control(
+                            stream,
+                            spa::sys::SPA_PROP_mute,
+                            &mut [if muted { 1. } else { 0. }],
+                        );
+                    }
+                    if let Some(gain) = volume {
+                        let _ = set_control(
+                            stream,
+                            spa::sys::SPA_PROP_channelVolumes,
+                            &mut [gain; 8][..usize::from(config.layout.channels)],
+                        );
+                    }
+                    crate::event_log::record(
+                        "INFO",
+                        "audio_output_recovered",
+                        serde_json::json!({"backend":"PipeWire"}),
+                    );
+                }
+            }
             let state = stream_state;
             if matches!(
                 state,

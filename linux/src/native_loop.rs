@@ -18,7 +18,7 @@ pub struct KeyboardBridge {
     target: Mutex<Option<Arc<Playback>>>,
     released: AtomicBool,
     pub refresh_millihertz: AtomicU32,
-    pub paste: AtomicBool,
+    paste: Mutex<Option<std::time::Instant>>,
 }
 impl KeyboardBridge {
     pub fn bind(&self, playback: Option<Arc<Playback>>) {
@@ -33,8 +33,18 @@ impl KeyboardBridge {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
+    pub fn take_paste(&self) -> bool {
+        self.paste
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(1))
+    }
     pub fn release(&self) {
+        *self.paste.lock().unwrap_or_else(|e| e.into_inner()) = None;
         if let Some(playback) = self.target() {
+            playback.clipboard_allowed.store(false, Ordering::Release);
+            playback.controller_focus(false);
             playback.push_input(Input::Focus(false));
             playback.repaint();
         }
@@ -95,10 +105,16 @@ impl<'a> Application<'a> {
                 && !self.modifiers.super_key()
             {
                 self.pasting = true;
-                self.keyboard.paste.store(true, Ordering::Release);
-                // Existing egui-winit clipboard code reads the focused seat and
-                // supplies Event::Paste. Clipboard text must precede host Ctrl+V.
-                return false;
+                *self
+                    .keyboard
+                    .paste
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+                playback.clipboard_read();
+                // Public RequestPaste uses the existing clipboard adapter and
+                // is independent of the local keyboard layout. Forward Ctrl+V
+                // only after its text arrives through the existing UI handoff.
+                return true;
             }
             if !down && self.pasting {
                 self.pasting = false;

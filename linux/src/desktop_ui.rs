@@ -89,6 +89,13 @@ impl Desktop {
             self.show_video = false;
             self.fitted_stream = None;
             self.ui_state.network = None;
+            let saved = self.settings.view().0;
+            self.transport = if saved.bud {
+                connection::Mode::Bud
+            } else {
+                connection::Mode::WebRtc
+            };
+            self.ui_state.prefer_hevc = saved.prefer_hevc;
             return;
         }
         let save = ui
@@ -170,6 +177,45 @@ impl Desktop {
                                 );
                             });
                         });
+                });
+            } else if row.label == f::DISPLAY_TIMING.label {
+                use crate::connection_settings::PresentationMode;
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    egui::ComboBox::from_id_salt(row.label)
+                        .width(400.)
+                        .selected_text(draft.values.presentation_mode.label())
+                        .show_ui(ui, |ui| {
+                            for mode in PresentationMode::ALL {
+                                ui.add_enabled_ui(mode != PresentationMode::Vrr, |ui| {
+                                    ui.selectable_value(
+                                        &mut draft.values.presentation_mode,
+                                        mode,
+                                        mode.label(),
+                                    );
+                                });
+                            }
+                        });
+                });
+            } else if row.label == f::VIDEO_PRESENTATION.label
+                || row.label == f::CHROMA.label
+                || row.label == f::VIDEO_GPU.label
+            {
+                let value = if row.label == f::VIDEO_GPU.label {
+                    self.video_context
+                        .as_ref()
+                        .map_or("N/A", |c| c.adapter_name.as_str())
+                } else if row.label == f::CHROMA.label {
+                    crate::connection_settings::BinaryChoice::Chroma.labels()[0]
+                } else {
+                    crate::connection_settings::BinaryChoice::Rendering.labels()[0]
+                };
+                ui.add_enabled_ui(false, |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                        egui::ComboBox::from_id_salt(row.label)
+                            .width(400.)
+                            .selected_text(value)
+                            .show_ui(ui, |_| {});
+                    });
                 });
             } else if row.label == f::INPUT_MODE.label {
                 use crate::connection_settings::InputMode;
@@ -391,12 +437,14 @@ impl Desktop {
                 .take()
                 .expect("network form initialized");
             draft.values.bud = self.transport == connection::Mode::Bud;
-            if self.ui_state.prefer_hevc {
-                crate::connection_settings::VideoFormat::Hevc8
-            } else {
-                crate::connection_settings::VideoFormat::H264
+            if self.ui_state.prefer_hevc != draft.values.prefer_hevc {
+                if self.ui_state.prefer_hevc {
+                    crate::connection_settings::VideoFormat::Hevc8
+                } else {
+                    crate::connection_settings::VideoFormat::H264
+                }
+                .apply(&mut draft.values);
             }
-            .apply(&mut draft.values);
             // Retain public/encrypted form values for disabled painting only.
             // Plaintext replacement secrets move exclusively to the save worker.
             let mut pending = crate::network_settings::Draft::new(draft.values.clone());

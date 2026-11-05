@@ -790,12 +790,12 @@ fn rows_with_missing(
             crate::app_style::forms::STAT_PLAYBACK_BUFFER,
             format!(
                 "{:.1} ms (application queue; excludes device latency)",
-                audio.queued_samples as f64 / 96.
+                audio.queued_frames as f64 / 48.
             ),
         );
         row(
             crate::app_style::forms::STAT_BUFFER_LIMITS,
-            "100 ms maximum (automatic)".into(),
+            "Not reported by output backend".into(),
         );
         row(
             "Audio discarded packets",

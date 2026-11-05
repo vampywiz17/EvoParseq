@@ -382,7 +382,21 @@ impl Decoder {
         report.display_rgb_bit_depth = self.output_depth;
         report.codec = Some(self.codec);
         report.adapter = Some(self.context.adapter_name.clone());
-        report.presentation_mode = Some("Vulkan / compositor-managed (vsync requested)");
+        report.presentation_mode = Some(
+            match self
+                .context
+                .frame_latency
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                1 => {
+                    "Vulkan / vsync; requested maximum frame latency 1 (driver/compositor controlled)"
+                }
+                2 => {
+                    "Vulkan / vsync; requested maximum frame latency 2 (driver/compositor controlled)"
+                }
+                _ => "Vulkan / compositor-managed (vsync requested)",
+            },
+        );
         report.vsr_status = Some("Not enabled on Linux");
         if let Some(frame) = &self.frame {
             report.width = Some(frame.size.0);

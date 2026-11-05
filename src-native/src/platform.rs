@@ -4,6 +4,8 @@ use std::sync::Mutex;
 
 use crate::clipboard_sync::remote_text;
 pub use crate::clipboard_sync::MAX_TEXT;
+#[cfg(test)]
+use crate::clipboard_sync::REMOTE_TEXT;
 
 pub trait Desktop: Send + Sync {
     fn read_text(&self) -> Option<String>;

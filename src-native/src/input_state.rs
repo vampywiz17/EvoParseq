@@ -29,3 +29,13 @@ pub fn immersive_value(index: usize) -> u8 {
         _ => 0,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn immersive_choices_preserve_windows_mapping() {
+        for value in 0..=3 {
+            assert_eq!(super::immersive_value(super::immersive_index(value)), value);
+        }
+    }
+}

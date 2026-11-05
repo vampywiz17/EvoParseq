@@ -54,7 +54,16 @@ impl Desktop {
             }
         };
         if let Some(context) = self.video_context.clone() {
-            let hevc = self.settings.view().0.prefer_hevc && context.hevc;
+            let saved = self.settings.view().0;
+            context.frame_latency.store(
+                match saved.presentation_mode {
+                    crate::connection_settings::PresentationMode::LowLatency => 1,
+                    crate::connection_settings::PresentationMode::Vsync => 2,
+                    _ => 0,
+                },
+                std::sync::atomic::Ordering::Release,
+            );
+            let hevc = saved.prefer_hevc && context.hevc;
             self.decoder = Some(crate::video_vulkan::Decoder::new(
                 context,
                 self.output_format,

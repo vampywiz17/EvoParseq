@@ -1,6 +1,6 @@
 # EvoParseq Linux Flatpak preview
 
-Current preview: **0.1.15**, developed on `codex/linux-flatpak`. This is an
+Current preview: **0.1.16**, developed on `codex/linux-flatpak`. This is an
 experimental Linux client for unmodified Parsec hosts, not a stable release.
 Windows and Android TV feature availability differs; see the [root README](../README.md).
 
@@ -12,17 +12,16 @@ Windows and Android TV feature availability differs; see the [root README](../RE
 | Account | Sign-in, 2FA, computer discovery, manual peer ID and encrypted remembered sessions |
 | Transport | WebRTC and explicitly selected BUD; direct/STUN, custom TURN UDP/TLS/TCP, Cloudflare TURN, direct-only and Force TURN; no silent transport fallback |
 | Video | Vulkan Video; progressive H.264 or HEVC Main, 8-bit 4:2:0, without frame reordering |
-| Audio | Stereo Opus through PipeWire, with local mute and volume controls |
-| Input | Normal Parsec mouse/keyboard and host-requested relative pointer capture |
-| Session controls | Host display selection, resolution, bandwidth, FPS, frame pacing, fullscreen and Disconnect |
+| Audio | Stereo WebRTC Opus; BUD Opus/raw PCM, stereo or verified default-output 5.1/7.1; PipeWire mute/volume and automatic output reopening |
+| Input | Normal Parsec or opt-in BUD USB HID mouse/keyboard; shared controller lifecycle and rumble; focused text clipboard |
+| Session controls | Host display selection, resolution, bandwidth, FPS, frame pacing, orientation, immersive mouse/keyboard, fullscreen and Disconnect |
 | Diagnostics | Live overlay, native Connection stats window, shared Rust statistics and host-timing models |
 | Distribution | Flatpak, Freedesktop Platform/SDK 25.08 and matching graphics driver extensions |
 
-10-bit/4:4:4 playback, application Zero copy mode, AI upscaling, controllers,
-HID, clipboard synchronization, rotated video and explicit immersive-mode
-selection are **not integrated on Linux**. Existing saved fields for these
-unsupported features do not enable them. Unsupported controls in the
-shared Settings/session layout remain disabled.
+10-bit/4:4:4 playback, application Zero copy mode, AI upscaling, runtime GPU
+switching, verified VRR control and simultaneous multi-display windows are
+**not integrated on Linux**. Unsupported controls remain disabled. Selecting a
+single host display is supported; HID mouse pins the verified primary output.
 
 ## Install and run
 
@@ -265,3 +264,54 @@ WebRTC relay policy, BUD carrier ordering and direct-only credential isolation.
 Live relay interoperability still needs validation with your TURN provider and
 network; successful offline fixtures do not establish that every firewall route
 is reachable.
+
+## Audio, input and presentation integration (0.1.16)
+
+- Settings → Audio reuses Windows' shared fields, validation and JSON schema.
+  WebRTC remains stereo Opus. BUD may advertise PCM only when explicitly enabled;
+  the host must also enable RAW (`network_raw_audio=1`). PCM is not compression
+  and uses more bandwidth. Actual received codec/channels remain visible in stats.
+- Match output layout probes the default PipeWire sink once before BUD negotiation.
+  Only explicit supported 5.1/7.1 positions are advertised. Unknown/unsupported
+  layouts use stereo. Channel order is declared explicitly to PipeWire; a stereo
+  host fallback fills FL/FR and silence in the other stream channels.
+- The existing lock-free callback supports multichannel PCM without allocation or
+  locking in its render path. Minimum buffering governs startup/refill; maximum
+  bounds the decoded PCM queue. PipeWire device/graph latency is additional and
+  is not falsely included in that budget or claimed as measured.
+- Output/daemon disconnections reopen on the existing PipeWire worker, using the
+  common Windows recovery backoff. Old queued PCM is retired. Mute/volume are
+  restored after recovery; the video transport is not restarted for audio loss.
+- BUD USB HID reuses native framing, normalization and the shared host-primary
+  verification gate. The host needs the matching Parsec USB driver. Unavailable
+  drivers/unknown primary output do not silently fall back to normal mouse input.
+  Releases remain allowed; host display switching is disabled with HID mouse.
+- Controllers use the runtime's SDL2 controller API (SDL2-compat/SDL3 on 25.08)
+  only for devices/motors. Activation, dead zones, focus release, hotplug and wire
+  reports reuse the Windows Rust core; no additional polling worker is created.
+  Press a face button to join. Device support and rumble depend on the controller
+  driver. Flatpak **1.15.6+** is required for the scoped `input` device permission;
+  no `--device=all`, root access or external controller helper is requested.
+- Text clipboard uses the existing eframe Wayland clipboard adapter, synchronizing
+  on stream activation and paste. Remote copies are accepted only in the active,
+  focused stream. Common size/UTF-8 bounds, echo suppression and focus revocation
+  apply. No background clipboard monitor or content logging is added.
+- Orientation uses the existing presentation shader and original decoder surfaces;
+  there is no intermediate image or additional render pass. Immersive mouse uses
+  native confinement; immersive keyboard requests Wayland shortcut inhibition.
+  Keyboard choices are disabled if that protocol is unavailable. The compositor
+  retains authority over reserved shortcuts. Ctrl+Shift+M releases input.
+- Settings → Video wires supported H.264/HEVC-8, session-button visibility and
+  Automatic/Low latency/VSync preferences. Low latency requests one queued surface
+  presentation; this is a driver/compositor hint, not a measured scanout guarantee.
+  It applies on the next connection through a narrow Linux-only egui-wgpu patch
+  using public `wgpu::Surface::configure`. Unsupported VRR/10-bit/4:4:4/AI/Zero copy
+  choices remain disabled; the current adapter is displayed read-only.
+- Event logging is initialized and guarded at Linux startup. The Network checkbox
+  controls the shared bounded JSONL log beside settings.json, with rotation and
+  shutdown flush. No clipboard text, credential, media payload or arbitrary host
+  error body is logged.
+
+Automated fixtures validate the common policy and adapter contracts. Live PCM,
+multichannel, HID, clipboard, controller/rumble and compositor behavior still need
+validation on the user's hardware; successful compilation is not hardware proof.

@@ -212,7 +212,12 @@ fn run_webrtc(
                     Ok(())
                 },
             )?;
-            Ok((attempt.control_ready(), attempt.video_snapshot(), false))
+            Ok((
+                attempt.control_ready(),
+                attempt.video_snapshot(),
+                false,
+                input.wait,
+            ))
         },
     );
     let result = result.map_err(|error| {
@@ -427,7 +432,7 @@ fn run_bud(
                     })?);
                 }
                 if playback.stopped() {
-                    return Ok((false, ingress.snapshot(), false));
+                    return Ok((false, ingress.snapshot(), false, Duration::from_millis(10)));
                 }
                 let route = relays
                     .as_mut()
@@ -467,7 +472,7 @@ fn run_bud(
                 retries += 1;
                 answered_at = None;
                 deadline = Instant::now() + Duration::from_secs(30);
-                return Ok((false, ingress.snapshot(), true));
+                return Ok((false, ingress.snapshot(), true, Duration::from_millis(10)));
             }
             if let Some(generation) = playback.take_keyframe_request()? {
                 ingress.wait_for_keyframe();
@@ -531,7 +536,12 @@ fn run_bud(
             )?;
             let pumped =
                 crate::bud_ingress::pump(&mut source, &mut ingress, playback.as_ref(), &sender)?;
-            Ok((established, ingress.snapshot(), pumped.more_pending()))
+            Ok((
+                established,
+                ingress.snapshot(),
+                pumped.more_pending(),
+                input.wait,
+            ))
         },
     );
     input.release(playback, |bytes| session.send_frame(bytes));
@@ -549,7 +559,7 @@ fn observe(
     playback: &Arc<crate::playback::Playback>,
     telemetry: &Arc<crate::telemetry::Session>,
     audio_config: audio_pipewire::Config,
-    mut poll: impl FnMut(&mut bool) -> Result<(bool, crate::video_stream::Snapshot, bool)>,
+    mut poll: impl FnMut(&mut bool) -> Result<(bool, crate::video_stream::Snapshot, bool, Duration)>,
 ) -> Result<String> {
     let _output = audio_pipewire::Output::start(&receiver, telemetry.output.clone(), audio_config)?;
     telemetry.set_audio(receiver);
@@ -564,7 +574,7 @@ fn observe(
         if playback.stopped() {
             return Ok(format!("{mode} stream disconnected"));
         }
-        let (ready, video, more_pending) = poll(&mut signaling_closed)?;
+        let (ready, video, more_pending, wait) = poll(&mut signaling_closed)?;
         connected |= ready;
         let now = Instant::now();
         if ready {
@@ -584,7 +594,7 @@ fn observe(
             bail!("{mode} connection timed out");
         }
         if !more_pending {
-            std::thread::park_timeout(crate::gamepad::POLL);
+            std::thread::park_timeout(wait.min(Duration::from_millis(10)));
         }
     }
 }
@@ -610,11 +620,15 @@ struct Input {
     clipboard: crate::clipboard_sync::State,
     poller: crate::gamepad::polling::Poller,
     devices: Option<crate::gamepad_linux::Devices>,
+    wait: Duration,
     events: std::collections::VecDeque<crate::input_handoff::Event>,
 }
 impl Default for Input {
     fn default() -> Self {
+        #[cfg(not(test))]
         let devices = crate::gamepad_linux::Devices::new().ok();
+        #[cfg(test)]
+        let devices = None; // Isolated protocol tests never open real controllers.
         if devices.is_none() {
             crate::event_log::record(
                 "WARN",
@@ -628,6 +642,7 @@ impl Default for Input {
             clipboard: Default::default(),
             poller: Default::default(),
             devices,
+            wait: crate::gamepad::DISCOVERY,
             events: Default::default(),
         }
     }
@@ -735,7 +750,7 @@ impl Input {
             }
         }
         if let Some(devices) = &mut self.devices {
-            self.poller.tick(
+            self.wait = self.poller.tick(
                 &mut self.pads,
                 devices,
                 ready
@@ -877,5 +892,55 @@ mod input_tests {
                 .is_err()
         );
         assert_eq!(frames, vec![control::header(24, 0, 0, 0).to_vec()]);
+    }
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::*;
+    #[test]
+    fn linux_clipboard_text_precedes_paste_and_focus_loss_blocks_transfer() {
+        let playback = crate::playback::Playback::new(eframe::egui::Context::default());
+        playback
+            .clipboard_allowed
+            .store(true, std::sync::atomic::Ordering::Release);
+        playback.push_input(crate::desktop_input::Event::Focus(true));
+        playback.push_session(crate::session_controls::Command::Clipboard {
+            text: "fixture á 🦀".into(),
+            paste: true,
+        });
+        let mut input = Input::default();
+        let mut frames = Vec::new();
+        input
+            .pump(
+                &playback,
+                true,
+                |frame| {
+                    frames.push(frame.to_vec());
+                    Ok(())
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames[0][12], 17);
+        assert_eq!(frames[1][12], 0);
+        assert_eq!(frames[2][12], 0);
+        assert_eq!(&frames[1][..4], &25i32.to_be_bytes());
+        playback
+            .clipboard_allowed
+            .store(false, std::sync::atomic::Ordering::Release);
+        playback.push_session(crate::session_controls::Command::Clipboard {
+            text: "private-local".into(),
+            paste: true,
+        });
+        input
+            .pump(
+                &playback,
+                true,
+                |_| panic!("unfocused clipboard"),
+                |_| Ok(()),
+            )
+            .unwrap();
     }
 }

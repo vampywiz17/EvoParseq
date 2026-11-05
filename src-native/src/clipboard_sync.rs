@@ -2,7 +2,7 @@
 //! clipboard APIs, focus/visibility permission and notification delivery.
 use std::time::{Duration, Instant};
 pub const MAX_TEXT: usize = 1024 * 1024;
-const REMOTE_TEXT: usize = 102399;
+pub(crate) const REMOTE_TEXT: usize = 102399;
 pub fn remote_text(mut text: String) -> String {
     if text.len() > REMOTE_TEXT {
         let mut end = REMOTE_TEXT;

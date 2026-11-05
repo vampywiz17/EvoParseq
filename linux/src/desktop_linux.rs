@@ -184,10 +184,11 @@ impl DesktopInput {
             }
             return;
         }
-        let paste = self
-            .keyboard
-            .paste
-            .swap(false, std::sync::atomic::Ordering::AcqRel);
+        let paste = raw
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::Paste(_)))
+            && self.keyboard.take_paste();
         raw.events.retain(|event| {
             if let Event::PointerButton {
                 pos, pressed: true, ..
@@ -485,6 +486,34 @@ mod drag_restore_tests {
                 .commands
                 .iter()
                 .any(|cmd| matches!(cmd, egui::ViewportCommand::CursorPosition(_)))
+        );
+    }
+}
+
+#[cfg(test)]
+mod immersive_tests {
+    use super::*;
+    #[test]
+    fn linux_mouse_immersive_confines_without_inventing_relative_camera_deltas() {
+        let ctx = egui::Context::default();
+        let playback = Playback::new(ctx.clone());
+        playback
+            .immersive
+            .store(3, std::sync::atomic::Ordering::Release);
+        let mut input = DesktopInput::default();
+        input.enabled = true;
+        let mut raw = egui::RawInput::default();
+        raw.focused = true;
+        let out = ctx.run(raw, |ctx| input.cursor(ctx, &playback));
+        assert!(!input.grabbed);
+        assert!(
+            out.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|c| matches!(
+                    c,
+                    egui::ViewportCommand::CursorGrab(egui::CursorGrab::Confined)
+                ))
         );
     }
 }
