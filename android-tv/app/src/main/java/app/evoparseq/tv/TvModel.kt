@@ -38,6 +38,57 @@ internal class TvModel(application: Application) : AndroidViewModel(application)
     private var streamGeneration = 0
     var lastStreamStopReason by mutableStateOf("")
         private set
+    var updateRelease by mutableStateOf<JSONObject?>(null)
+        private set
+    var updateMessage by mutableStateOf("")
+        private set
+    var updateSession by mutableStateOf<Int?>(null)
+        private set
+    val installedVersion: String get() = AppUpdater.version(getApplication())
+
+    fun checkUpdates(prerelease: Boolean) = request {
+        AppUpdater.clearPrepared(getApplication())
+        val reply = JSONObject(NativeCore.checkUpdate(installedVersion, prerelease))
+        val candidate = reply.optJSONObject("release")
+        return@request {
+            updateSession = null
+            updateRelease = candidate
+            updateMessage = if (!reply.optBoolean("ok")) reply.optString("error")
+                else if (candidate == null) "No newer compatible APK was found in this release channel."
+                else "Update available. Download it to continue."
+        }
+    }
+    fun downloadUpdate() = request {
+        val context = getApplication<Application>()
+        val file = java.io.File(context.cacheDir, "evoparseq-update.apk")
+        val prepared = try {
+            val reply = JSONObject(NativeCore.downloadUpdate(file.absolutePath))
+            check(reply.optBoolean("ok")) { reply.optString("error") }
+            AppUpdater.prepare(context, file, reply.getString("version"))
+        } catch (error: Exception) {
+            val detail = if (error is IllegalStateException) error.message ?: "The APK could not be prepared."
+                else "Android could not prepare the update. Check available storage and retry."
+            return@request { updateMessage = detail }
+        } finally { file.delete() }
+        return@request { updateSession = prepared; updateMessage = "APK verified. Choose Install update, then confirm in Android." }
+    }
+    fun installUpdate(activity: android.app.Activity) {
+        try {
+            if (!AppUpdater.canInstall(activity)) {
+                AppUpdater.permission(activity)
+                updateMessage = "Allow EvoParseq to install apps, then return and choose Install update again."
+                return
+            }
+            val id = updateSession ?: return
+            AppUpdater.install(activity, id)
+            updateSession = null
+            updateMessage = "Waiting for Android installation confirmation."
+        } catch (_: Exception) { updateMessage = "Could not start the Android installer. Please retry." }
+    }
+    fun readUpdateResult() {
+        val prefs = getApplication<Application>().getSharedPreferences("app-updates", Context.MODE_PRIVATE)
+        prefs.getString("result", null)?.let { updateMessage = it; prefs.edit().remove("result").apply() }
+    }
     private val preferences = application.getSharedPreferences("tv-requests", Context.MODE_PRIVATE)
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
@@ -47,6 +98,7 @@ internal class TvModel(application: Application) : AndroidViewModel(application)
     private val networkVault = SessionVault(application, "network")
     init {
         request {
+            AppUpdater.clearPrepared(application)
             val previousCrash = recentAppFailure(application)
             val saved = preferences.getString("requests", "") ?: ""
             val reply = JSONObject(NativeCore.settings(saved, "", 0))

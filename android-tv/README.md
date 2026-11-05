@@ -159,3 +159,51 @@ Android only translates OS events/capture and draws a small cursor overlay.
 The MediaCodec-to-Surface video path is unchanged. Remote D-pad mouse navigation,
 clicks and long-press right click have been live-tested. Continue device-specific
 checks for physical input, relative camera control and focus transitions.
+
+
+## In-app updates (0.9.6-dev.2)
+
+Settings > Updates checks published EvoParseq GitHub releases. Stable is the
+initial channel; Include prereleases also accepts `-dev.N` releases. The check
+selects the newest supported version with an Android APK, so a Windows-only
+release does not hide an available Android update. Updates are manual checks,
+not a streaming/background poll. Download and release policy run in shared Rust
+on the existing account worker; Android owns package inspection and installation.
+
+Choose Download update, then Install update. Android may first ask you to allow
+EvoParseq to install apps; return and select Install update again. The system
+installer asks for confirmation. Cancelling retains the installed client.
+Successful in-place updates retain settings and remembered sign-in. No root,
+ADB, broad storage access or browser is required.
+
+Downloads are bounded to 128 MiB, HTTPS-only from the fixed repository and
+approved GitHub asset redirect hosts. The GitHub asset SHA-256 digest and size
+are checked before Android receives the file. The adapter requires the same
+package ID and current signing certificate, a higher Android versionCode, a
+matching versionName/release tag and a compatible minimum SDK. Android's system
+installer performs final package/signature verification. No downgrade or
+cross-certificate update is offered. Prepared downloads stay in private app
+storage and are removed after staging; stale uncommitted sessions are cleaned
+on startup. No credentials enter the update requests.
+
+CI now produces **EvoParseq-TV.apk**, signed with the persistent distribution
+key from `ANDROID_TV_KEYSTORE_BASE64` and `ANDROID_TV_KEYSTORE_PASSWORD` repository
+secrets. The key is not committed, included in artifacts or printed in logs.
+Missing signing secrets fail the release build; an ephemeral debug key is never
+substituted. Local debug builds remain available for development.
+
+Existing debug-signed preview installations generally cannot update in place
+to this distribution key. Install the signed build once after removing the old
+one; removal clears that installation's private data, so sign in and configure
+it again. Do not uninstall an already distribution-signed installation for a
+normal update.
+
+For each published update, increment versionCode and set versionName to the
+release tag without its leading `v`. Upload the signed **EvoParseq-TV.apk** as
+a release asset (not just an Actions artifact), with GitHub's `sha256:` asset
+digest available. Publish the matching stable tag or mark a `-dev.N` release as
+a prerelease. The updater does not publish releases or install Actions artifacts.
+Keep the signing key/password backed up securely; losing it prevents ordinary
+updates of existing installations. The Android APIs used are documented under
+[PackageInstaller](https://developer.android.com/reference/android/content/pm/PackageInstaller)
+and [application signing](https://developer.android.com/studio/publish/app-signing).

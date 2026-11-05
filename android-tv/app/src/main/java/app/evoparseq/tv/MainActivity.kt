@@ -74,6 +74,7 @@ class MainActivity : ComponentActivity() {
             TvTheme { TvApp(model) }
         }
     }
+    override fun onResume() { super.onResume(); model.readUpdateResult() }
     override fun onStop() { controllerInput.enabled = false; model.closeLocalSetup(); model.stopStream("Android stopped the streaming activity."); super.onStop() }
 }
 
@@ -252,7 +253,7 @@ private fun TvSettings(model: TvModel, first: FocusRequester, back: () -> Unit) 
             Button(onClick = back, scale = steadyScale,
                 modifier = Modifier.focusRequester(first).fillMaxWidth()) { Text("Back") }
             Text("SETTINGS", style = MaterialTheme.typography.titleMedium, color = Color(0xFF71BCFF))
-            listOf("Network", "Video", "Device").forEach { name ->
+            listOf("Network", "Video", "Device", "Updates").forEach { name ->
                 val active = category == name
                 Button(onClick = {
                     category = name; choosing = null; restoreKey = ""
@@ -268,7 +269,9 @@ private fun TvSettings(model: TvModel, first: FocusRequester, back: () -> Unit) 
         }
         // Focus decoration and scrolling remain inside the content pane.
         Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()) {
-            if (category == "Device") {
+            if (category == "Updates") {
+                UpdateSettings(model)
+            } else if (category == "Device") {
                 val blocks = remember(model.inventory) {
                     model.inventory.ifEmpty { "Reading decoder capabilities…" }
                         .split("\n\n").filter { it.isNotBlank() }
@@ -341,5 +344,34 @@ private fun CapabilityBlock(text: String) {
         .border(1.dp,if(focused) Color(0xFF71BCFF) else Color.Transparent,RoundedCornerShape(8.dp))
         .background(Color(0xFF202936),RoundedCornerShape(8.dp)).padding(12.dp)) {
         Text(text,fontSize=14.sp,lineHeight=20.sp)
+    }
+}
+
+@Composable
+private fun UpdateSettings(model: TvModel) {
+    var prerelease by rememberSaveable { mutableStateOf(false) }
+    val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text("Updates", style = MaterialTheme.typography.headlineSmall)
+        Text("Installed: ${model.installedVersion}")
+        Button(onClick = { prerelease = !prerelease }, enabled = !model.busy) {
+            Text(if (prerelease) "Release channel: Include prereleases" else "Release channel: Stable")
+        }
+        Button(onClick = { model.checkUpdates(prerelease) }, enabled = !model.busy) {
+            Text(if (model.busy) "Working…" else "Check for updates")
+        }
+        model.updateRelease?.let { release ->
+            Text("Available: ${release.optString("version")}", style = MaterialTheme.typography.titleLarge)
+            if (model.updateSession == null) {
+                Button(onClick = model::downloadUpdate, enabled = !model.busy) { Text("Download update") }
+            } else {
+                Button(onClick = { activity?.let(model::installUpdate) }, enabled = !model.busy && activity != null) { Text("Install update") }
+            }
+            Text(release.optString("notes"))
+        }
+        Text(model.updateMessage)
+        Text("Updates come from EvoParseq GitHub releases. Android asks you to approve installation. Your settings and saved sign-in are retained.",
+            color = Color(0xFFA8BED7))
     }
 }

@@ -58,18 +58,34 @@ jobs:
             cargo ndk -t "$abi" --platform 29 -o ../app/src/main/jniLibs build --locked --release
             cargo ndk -t "$abi" --platform 29 clippy --locked -- -D warnings
           done
+      - name: Restore protected release signing key
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_TV_KEYSTORE_BASE64 }}
+          PASSWORD: ${{ secrets.ANDROID_TV_KEYSTORE_PASSWORD }}
+        shell: bash
+        run: |
+          test -n "$KEYSTORE" && test -n "$PASSWORD" || { echo 'Android release signing secrets are required'; exit 1; }
+          umask 077
+          printf '%s' "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/evoparseq-tv.p12"
+          keytool -list -keystore "$RUNNER_TEMP/evoparseq-tv.p12" -storetype PKCS12 -storepass:env PASSWORD -alias evoparseq-tv > /dev/null
       - name: Build and lint TV application
         working-directory: android-tv
-        run: gradle --no-daemon assembleDebug lintDebug
+        env:
+          ANDROID_TV_KEYSTORE: ${{ runner.temp }}/evoparseq-tv.p12
+          ANDROID_TV_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_TV_KEYSTORE_PASSWORD }}
+        run: gradle --no-daemon assembleRelease lintRelease
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/evoparseq-tv.p12"
       - name: Describe preview artifact
         run: |
           mkdir -p dist/android-tv
-          cp android-tv/app/build/outputs/apk/debug/app-debug.apk dist/android-tv/EvoParseq-TV-preview.apk
+          cp android-tv/app/build/outputs/apk/release/app-release.apk dist/android-tv/EvoParseq-TV.apk
           cp android-tv/README.md LICENSE dist/android-tv/
           cp src-native/crates/bud/vendor/lowlat-client/LICENSE dist/android-tv/LOWLAT-LICENSE.txt
           git rev-parse HEAD > dist/android-tv/SOURCE.txt
-          sha256sum dist/android-tv/EvoParseq-TV-preview.apk > dist/android-tv/SHA256.txt
-          cp android-tv/app/build/reports/lint-results-debug.html dist/android-tv/
+          sha256sum dist/android-tv/EvoParseq-TV.apk > dist/android-tv/SHA256.txt
+          cp android-tv/app/build/reports/lint-results-release.html dist/android-tv/
       - uses: actions/upload-artifact@v4
         with:
           name: EvoParseq-Android-TV-preview

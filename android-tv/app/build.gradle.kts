@@ -11,9 +11,24 @@ android {
         applicationId = "app.evoparseq.tv"
         minSdk = 29
         targetSdk = 36
-        versionCode = 25
-        versionName = "0.9.6-dev.1"
+        versionCode = 26
+        versionName = "0.9.6-dev.2"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+    }
+    signingConfigs {
+        create("distribution") {
+            val path = System.getenv("ANDROID_TV_KEYSTORE")
+            if (!path.isNullOrBlank()) {
+                storeFile = file(path)
+                storeType = "PKCS12"
+                storePassword = System.getenv("ANDROID_TV_KEYSTORE_PASSWORD")
+                keyAlias = "evoparseq-tv"
+                keyPassword = System.getenv("ANDROID_TV_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        getByName("release") { signingConfig = signingConfigs.getByName("distribution") }
     }
     buildFeatures { compose = true }
     compileOptions {
@@ -47,3 +62,14 @@ tasks.register("verifyNativeLibraries") {
     }
 }
 tasks.named("preBuild") { dependsOn("verifyNativeLibraries") }
+
+// Never publish an unsigned APK or silently substitute an ephemeral debug key.
+val verifyReleaseSigning = tasks.register("verifyReleaseSigning") {
+    doLast {
+        check(!System.getenv("ANDROID_TV_KEYSTORE").isNullOrBlank() &&
+            !System.getenv("ANDROID_TV_KEYSTORE_PASSWORD").isNullOrBlank()) {
+            "Release signing requires the protected Android TV distribution keystore."
+        }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach { dependsOn(verifyReleaseSigning) }

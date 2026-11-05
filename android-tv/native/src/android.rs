@@ -583,3 +583,47 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_desktopPointer(
         },
     ));
 }
+
+// Runs only on the existing TV account worker; never on a media callback.
+static UPDATE: Mutex<Option<crate::release_apk::Candidate>> = Mutex::new(None);
+#[no_mangle]
+pub extern "system" fn Java_app_evoparseq_tv_NativeCore_checkUpdate(
+    mut env: JNIEnv,
+    _object: JObject,
+    installed: JString,
+    prerelease: jni::sys::jboolean,
+) -> jstring {
+    let result = (|| -> anyhow::Result<Value> {
+        *UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let candidate = crate::release_apk::check(&text(&mut env, &installed)?, prerelease != 0)?;
+        let value = json!({"ok":true,"release":candidate});
+        *UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = candidate;
+        Ok(value)
+    })();
+    reply(
+        &mut env,
+        result.unwrap_or_else(
+            |_| json!({"ok":false,"error":"Could not check GitHub releases. Try again later."}),
+        ),
+    )
+}
+#[no_mangle]
+pub extern "system" fn Java_app_evoparseq_tv_NativeCore_downloadUpdate(
+    mut env: JNIEnv,
+    _object: JObject,
+    destination: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<Value> {
+        let candidate = UPDATE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Check for updates first"))?;
+        crate::release_apk::download(
+            &candidate,
+            std::path::Path::new(&text(&mut env, &destination)?),
+        )?;
+        Ok(json!({"ok":true,"version":candidate.version}))
+    })();
+    reply(&mut env,result.unwrap_or_else(|_|json!({"ok":false,"error":"APK download or integrity check failed. Check for updates and retry."})))
+}

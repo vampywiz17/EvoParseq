@@ -81,3 +81,6 @@ pub mod input_handoff;
 pub mod keyboard;
 #[path = "../../../src-native/src/viewport.rs"]
 pub mod viewport;
+
+#[path = "../../../src-native/src/release_apk.rs"]
+pub mod release_apk;

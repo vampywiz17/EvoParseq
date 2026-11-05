@@ -3,6 +3,8 @@ package app.evoparseq.tv
 /** Control/lifecycle commands only. Decoded pixels never cross JNI. */
 internal object NativeCore {
     init { System.loadLibrary("evoparseq_tv") }
+    external fun checkUpdate(installed: String, prerelease: Boolean): String
+    external fun downloadUpdate(destination: String): String
     external fun signIn(email: String, password: String, tfa: String): String
     external fun rememberSession(vault: SessionVault): String
     external fun restoreSession(token: ByteArray): String
