@@ -263,3 +263,8 @@ received level, dimensions, reference requirements and output format. Encoded
 queue entries retain their existing codec tag; no second per-frame inspector
 or additional media queue is introduced. This remains GPU-resident conversion,
 not the application's Zero copy mode or verified direct scanout.
+
+HEVC image allocations are padded to the driver's picture-access granularity;
+the decode/reference `codedExtent` remains the actual SPS width/height. The
+presentation shader uses allocation dimensions for texture coordinates and the
+parsed conformance window for the visible picture. Padding adds no copy.

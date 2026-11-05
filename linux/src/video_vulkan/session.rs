@@ -862,8 +862,9 @@ impl Session {
                         .view,
                 )
                 .coded_extent(vk::Extent2D {
-                    width: self.size.0,
-                    height: self.size.1,
+                    // Preserve the SPS picture extent; self.size includes image padding.
+                    width: job.sps.width,
+                    height: job.sps.height,
                 }))
         };
         let references: Vec<_> = job.references.as_slice().iter().flatten().collect();
