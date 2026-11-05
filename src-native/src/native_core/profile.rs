@@ -16,7 +16,6 @@ pub struct Profile {
 }
 
 impl Video {
-    #[cfg(windows)]
     pub fn mode(&self) -> crate::input_state::Mode {
         crate::input_state::Mode {
             mouse: matches!(self.immersive, 1 | 3),

@@ -54,6 +54,8 @@ mod turn_configuration;
 mod native_core {
     pub(crate) use crate::{account, profile, sign_in};
 }
+#[path = "../../src-native/src/clipboard_sync.rs"]
+mod clipboard_sync;
 #[path = "../../src-native/src/control.rs"]
 pub mod control;
 mod cursor_theme;
@@ -67,8 +69,13 @@ mod event_log;
 pub mod frame_timing;
 #[path = "../../src-native/src/gamepad.rs"]
 pub mod gamepad;
+mod gamepad_linux;
+#[path = "../../src-native/src/hid_policy.rs"]
+mod hid_policy;
 #[path = "../../src-native/src/input_handoff.rs"]
 pub mod input_handoff;
+#[path = "../../src-native/src/input_state.rs"]
+mod input_state;
 mod launcher;
 #[path = "../../src-native/src/media_ingress.rs"]
 pub mod media_ingress;
@@ -96,6 +103,7 @@ pub mod video_stream;
 mod video_vulkan;
 #[path = "../../src-native/src/viewport.rs"]
 pub mod viewport;
+mod wayland_keys;
 mod window_mode;
 
 use eframe::{egui, egui_wgpu};
@@ -141,6 +149,7 @@ struct Desktop {
     transport: connection::Mode,
     logo: egui::TextureHandle,
     desktop_input: desktop_linux::DesktopInput,
+    shortcuts: Option<wayland_keys::Shortcuts>,
     signed_in: bool,
     busy: bool,
     status_text: &'static str,
@@ -266,6 +275,11 @@ impl eframe::App for Desktop {
         if raw.viewport_id != egui::ViewportId::ROOT {
             return;
         }
+        if let Some(playback) = &self.playback {
+            playback.controller_focus(
+                raw.focused && !self.show_video && !self.badge.open && !self.ui_state.stats,
+            );
+        }
         if raw.events.iter().any(|event| matches!(event, egui::Event::PointerButton {pos,pressed:true,..} if pos.y < 24.)) {
             if let Some(playback) = &self.playback {
                 if self.desktop_input.enabled { self.desktop_input.release(ctx, playback); }
@@ -370,7 +384,9 @@ impl eframe::App for Desktop {
             match playback
                 .resume_if_ready(ctx.input(|input| input.focused))
                 .and_then(|_| {
-                    playback.decode_pending_codec(|bytes, codec| decoder.submit(bytes, codec))
+                    playback.decode_pending_oriented(|bytes, codec, rotation| {
+                        decoder.submit_oriented(bytes, codec, rotation)
+                    })
                 }) {
                 Err(error) => {
                     playback.stop();
@@ -384,6 +400,19 @@ impl eframe::App for Desktop {
                 Ok(consumed) if consumed > 0 => ctx.request_repaint(),
                 Ok(_) => {}
             }
+        }
+        if let Some(shortcuts) = &mut self.shortcuts {
+            let requested = self.playback.as_ref().is_some_and(|playback| {
+                self.desktop_input.enabled
+                    && ctx.input(|i| i.focused)
+                    && matches!(
+                        playback
+                            .immersive
+                            .load(std::sync::atomic::Ordering::Acquire),
+                        1 | 2
+                    )
+            });
+            shortcuts.update(requested);
         }
         if let (Some(telemetry), Some(playback)) = (&self.telemetry, &self.playback) {
             telemetry
@@ -569,6 +598,7 @@ fn main() -> anyhow::Result<()> {
                         },
                         logo,
                         desktop_input: desktop_linux::DesktopInput::new(keyboard.clone()),
+                        shortcuts: wayland_keys::Shortcuts::new(cc).ok(),
                         signed_in: false,
                         busy: restore,
                         status_text: if restore {

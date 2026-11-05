@@ -15,6 +15,7 @@ pub struct DesktopInput {
     keyboard: std::sync::Arc<crate::native_loop::KeyboardBridge>,
     wheel: Vec2,
     grabbed: bool,
+    confined: bool,
     unlock_after_present: bool,
     last_absolute: Option<Pos2>,
     capture_anchor: Option<Pos2>,
@@ -35,12 +36,17 @@ impl DesktopInput {
         (mhz > 0).then_some(f64::from(mhz) / 1000.)
     }
     pub fn release(&mut self, ctx: &egui::Context, playback: &Playback) {
+        playback
+            .clipboard_allowed
+            .store(false, std::sync::atomic::Ordering::Release);
+        playback.controller_focus(false);
         playback.push_input(Input::Focus(false));
         self.enabled = false;
         self.buttons = 0;
         self.keyboard.bind(None);
         self.wheel = Vec2::ZERO;
         self.grabbed = false;
+        self.confined = false;
         self.unlock_after_present = false;
         self.capture_anchor = None;
         self.restored_position = None;
@@ -52,6 +58,10 @@ impl DesktopInput {
     pub fn enable(&mut self, playback: &std::sync::Arc<Playback>) {
         if !self.enabled && playback.input_ready() && self.video.is_some() {
             self.enabled = true;
+            playback
+                .clipboard_allowed
+                .store(true, std::sync::atomic::Ordering::Release);
+            playback.clipboard_read();
             self.keyboard.bind(Some(playback.clone()));
             playback.push_input(Input::Focus(true));
         }
@@ -100,6 +110,25 @@ impl DesktopInput {
             } else {
                 egui::CursorGrab::None
             }));
+        }
+        let confined = self.enabled
+            && !grab
+            && ctx.input(|i| i.focused)
+            && matches!(
+                playback
+                    .immersive
+                    .load(std::sync::atomic::Ordering::Acquire),
+                1 | 3
+            );
+        if self.confined != confined {
+            self.confined = confined;
+            if !grab {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(if confined {
+                    egui::CursorGrab::Confined
+                } else {
+                    egui::CursorGrab::None
+                }));
+            }
         }
         // Keep None while locked, but let ordinary UI hover choose its cursor.
         // Repeated native visibility commands would overwrite Wayland CSD resize
@@ -155,6 +184,10 @@ impl DesktopInput {
             }
             return;
         }
+        let paste = self
+            .keyboard
+            .paste
+            .swap(false, std::sync::atomic::Ordering::AcqRel);
         raw.events.retain(|event| {
             if let Event::PointerButton {
                 pos, pressed: true, ..
@@ -169,10 +202,15 @@ impl DesktopInput {
             }
             if !self.enabled { return true; }
             match event {
+                Event::Paste(text) => {
+                    if text.len()<=crate::clipboard_sync::MAX_TEXT && !text.contains('\0') {
+                        playback.push_session(crate::session_controls::Command::Clipboard{text:text.clone(),paste});
+                    }
+                    false
+                }
                 Event::Key { .. }
                 | Event::Copy
                 | Event::Cut
-                | Event::Paste(_)
                 | Event::Text(_)
                 | Event::Ime(_) => false,
                 Event::PointerMoved(pos)

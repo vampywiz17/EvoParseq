@@ -22,7 +22,7 @@ pub struct Decoder {
     sampler: wgpu::Sampler,
     frame: Option<Arc<Frame>>,
     frames: Vec<Arc<Frame>>,
-    presentation: Option<((u32, u32), [u32; 4], bool)>,
+    presentation: Option<((u32, u32), [u32; 4], bool, u8)>,
     srgb: bool,
     pub decoded: u64,
     presented: std::cell::Cell<u64>,
@@ -149,7 +149,17 @@ impl Decoder {
         }
     }
 
+    #[cfg(test)]
     pub fn submit(&mut self, bytes: &[u8], codec: crate::video_stream::Codec) -> Result<()> {
+        self.submit_oriented(bytes, codec, 0)
+    }
+    pub fn submit_oriented(
+        &mut self,
+        bytes: &[u8],
+        codec: crate::video_stream::Codec,
+        rotation: u8,
+    ) -> Result<()> {
+        ensure!(rotation <= 3, "Invalid video rotation");
         use crate::video_stream::Codec;
         ensure!(
             self.decoded == 0 || self.codec == codec,
@@ -255,7 +265,7 @@ impl Decoder {
             }
         };
         let session = self.session.as_ref().unwrap();
-        let key = (visible, crop, full_range);
+        let key = (visible, crop, full_range, rotation);
         if self.presentation != Some(key) {
             self.frames.clear();
             for texture in &session.textures {
@@ -278,7 +288,7 @@ impl Decoder {
                     (crop[2] * 2) as f32 / session.size.1 as f32,
                     if full_range { 1.0 } else { 0.0 },
                     if self.srgb { 1.0 } else { 0.0 },
-                    0.0,
+                    f32::from(rotation),
                     0.0,
                 ];
                 use wgpu::util::DeviceExt;
@@ -322,7 +332,11 @@ impl Decoder {
                 self.frames.push(Arc::new(Frame {
                     pipeline: self.pipeline.clone(),
                     bindings,
-                    size: visible,
+                    size: if rotation & 1 != 0 {
+                        (visible.1, visible.0)
+                    } else {
+                        visible
+                    },
                 }));
             }
             self.presentation = Some(key);

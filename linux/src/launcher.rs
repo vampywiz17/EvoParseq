@@ -61,6 +61,10 @@ impl Desktop {
             ));
             let playback = crate::playback::Playback::new(ctx.clone());
             playback.set_hevc(hevc);
+            playback.immersive.store(
+                self.settings.native_video().immersive,
+                std::sync::atomic::Ordering::Release,
+            );
             self.desktop_input.video = None;
             self.badge = Default::default();
             self.badge
@@ -295,6 +299,7 @@ mod tests {
             transport: connection::Mode::WebRtc,
             logo,
             desktop_input: Default::default(),
+            shortcuts: None,
             signed_in: false,
             busy: false,
             status_text: app_style::LOGIN_NOTICE,

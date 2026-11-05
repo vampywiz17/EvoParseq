@@ -1131,3 +1131,52 @@ impl BinaryChoice {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputMode {
+    Standard,
+    HidMouse,
+    HidKeyboard,
+    HidBoth,
+}
+impl InputMode {
+    pub const ALL: [Self; 4] = [
+        Self::Standard,
+        Self::HidMouse,
+        Self::HidKeyboard,
+        Self::HidBoth,
+    ];
+    pub const LABELS: [&'static str; 4] = [
+        "Standard input",
+        "USB HID mouse (experimental)",
+        "USB HID keyboard (experimental)",
+        "USB HID mouse + keyboard (experimental)",
+    ];
+    pub fn current(s: &Settings) -> Self {
+        #[cfg(feature = "bud")]
+        {
+            match (s.experimental_hid_mouse, s.experimental_hid_keyboard) {
+                (false, false) => Self::Standard,
+                (true, false) => Self::HidMouse,
+                (false, true) => Self::HidKeyboard,
+                (true, true) => Self::HidBoth,
+            }
+        }
+        #[cfg(not(feature = "bud"))]
+        {
+            let _ = s;
+            Self::Standard
+        }
+    }
+    pub fn apply(self, s: &mut Settings) {
+        #[cfg(feature = "bud")]
+        {
+            s.experimental_hid_mouse = matches!(self, Self::HidMouse | Self::HidBoth);
+            s.experimental_hid_keyboard = matches!(self, Self::HidKeyboard | Self::HidBoth);
+        }
+        #[cfg(not(feature = "bud"))]
+        {
+            let _ = (self, s);
+        }
+    }
+}

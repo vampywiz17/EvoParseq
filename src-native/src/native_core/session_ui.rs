@@ -840,7 +840,7 @@ pub unsafe fn toggle(
         p,
         25,
         470,
-        &["Disabled", "Mouse", "Keyboard", "Mouse + keyboard"],
+        &crate::input_state::IMMERSIVE_LABELS,
         match video.immersive {
             1 => "Mouse + keyboard",
             2 => "Keyboard",

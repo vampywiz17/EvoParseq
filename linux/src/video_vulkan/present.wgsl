@@ -12,7 +12,12 @@ struct Settings { crop: vec4<f32>, range: vec4<f32> }
 @group(0) @binding(2) var filtering: sampler;
 @group(0) @binding(3) var<uniform> settings: Settings;
 @fragment fn fragment(input: Output) -> @location(0) vec4<f32> {
-    let coordinates = input.uv * settings.crop.xy + settings.crop.zw;
+    var uv_position = input.uv;
+    let rotation = u32(settings.range.z);
+    if rotation == 1u { uv_position = vec2<f32>(input.uv.y, 1.0 - input.uv.x); }
+    if rotation == 2u { uv_position = vec2<f32>(1.0 - input.uv.x, 1.0 - input.uv.y); }
+    if rotation == 3u { uv_position = vec2<f32>(1.0 - input.uv.y, input.uv.x); }
+    let coordinates = uv_position * settings.crop.xy + settings.crop.zw;
     var y = textureSample(y_plane, filtering, coordinates).r;
     var uv = textureSample(uv_plane, filtering, coordinates).rg - vec2<f32>(128.0 / 255.0);
     if settings.range.x < 0.5 {

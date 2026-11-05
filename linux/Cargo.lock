@@ -1336,6 +1336,8 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "webrtc",
+ "wayland-client",
+ "wayland-protocols",
  "wgpu",
  "winit",
  "xcursor",

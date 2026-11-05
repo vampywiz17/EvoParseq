@@ -171,6 +171,26 @@ impl Desktop {
                             });
                         });
                 });
+            } else if row.label == f::INPUT_MODE.label {
+                use crate::connection_settings::InputMode;
+                let mut mode = InputMode::current(&draft.values);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    egui::ComboBox::from_id_salt(row.label)
+                        .width(400.)
+                        .selected_text(InputMode::LABELS[mode as usize])
+                        .show_ui(ui, |ui| {
+                            for (item, text) in InputMode::ALL.into_iter().zip(InputMode::LABELS) {
+                                ui.add_enabled_ui(
+                                    item == InputMode::Standard
+                                        || self.transport == connection::Mode::Bud,
+                                    |ui| {
+                                        ui.selectable_value(&mut mode, item, text);
+                                    },
+                                );
+                            }
+                        });
+                });
+                mode.apply(&mut draft.values);
             } else if tab == 2 {
                 use crate::connection_settings::BinaryChoice;
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {

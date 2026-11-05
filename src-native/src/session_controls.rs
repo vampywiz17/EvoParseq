@@ -8,6 +8,11 @@ pub enum Command {
     Disconnect,
     HideButton,
     SecureAttention,
+    #[cfg(target_os = "linux")]
+    Clipboard {
+        text: String,
+        paste: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

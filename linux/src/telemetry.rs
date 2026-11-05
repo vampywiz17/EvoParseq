@@ -16,6 +16,8 @@ pub struct Host {
     pub revision: u64,
     pub outputs_revision: u64,
     pub windows: bool,
+    pub hid_mouse: bool,
+    pub primary_ready: bool,
 }
 pub struct Session {
     pub bus: Arc<stats::Shared>,
@@ -47,6 +49,19 @@ impl Session {
     pub fn set_audio(&self, audio: crate::audio_stream::NativeReceiver) {
         *self.audio.lock().unwrap_or_else(|e| e.into_inner()) = Some(audio);
     }
+    pub fn sync_input(&self, playback: &crate::playback::Playback) {
+        if let Some(settings) = self
+            .settings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            playback.immersive.store(
+                settings.native_video().immersive,
+                std::sync::atomic::Ordering::Release,
+            );
+        }
+    }
     pub fn sample_due(&self) -> bool {
         if !self.bus.sample_requested() {
             return false;
@@ -64,6 +79,8 @@ impl Session {
 pub struct Control {
     timing: crate::frame_timing::Requests,
     queried: bool,
+    primary_attempted: Option<String>,
+    primary_revision: Option<(u64, u64)>,
     confirmation: Option<crate::host_video::Confirmation>,
     selection: Option<(String, u64, u64, Instant)>,
 }
@@ -128,6 +145,7 @@ impl Control {
         let result = (|| -> Result<()> {
             match command {
                 Command::RefreshDisplays => {
+                    self.primary_attempted = None;
                     send(crate::host_displays::query()?)?;
                     send(crate::host_video::query()?)?;
                 }
@@ -188,6 +206,10 @@ impl Control {
                         "Waiting for the previous host request"
                     );
                     let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
+                    anyhow::ensure!(
+                        !host.hid_mouse,
+                        "Display switching is unavailable with HID mouse input"
+                    );
                     anyhow::ensure!(
                         host.outputs.iter().any(|output| output.id == id),
                         "Host display is unavailable; refresh the list"
@@ -289,8 +311,46 @@ impl Control {
             return Ok(());
         }
         self.confirm(session, &mut send);
+        {
+            let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
+            if host.hid_mouse
+                && self.primary_revision != Some((host.revision, host.outputs_revision))
+            {
+                self.primary_revision = Some((host.revision, host.outputs_revision));
+                let displays = crate::host_displays::Displays {
+                    outputs: host.outputs.clone(),
+                    ..Default::default()
+                };
+                host.primary_ready = matches!(
+                    displays.primary(host.windows, host.config.output_id()),
+                    crate::host_displays::Primary::Ready
+                );
+                if let crate::host_displays::Primary::Select(id) =
+                    displays.primary(host.windows, host.config.output_id())
+                {
+                    if self.primary_attempted.as_deref() != Some(id)
+                        && self.confirmation.is_none()
+                        && self.selection.is_none()
+                    {
+                        self.primary_attempted = Some(id.to_owned());
+                        let frame = host.config.select_output(id)?;
+                        send(frame)?;
+                        self.confirmation =
+                            Some(crate::host_video::Confirmation::output(id, Instant::now()));
+                        host.pending = true;
+                    }
+                }
+            }
+        }
         let desired = session.bus.sample_requested();
-        if desired && !self.queried {
+        if (desired
+            || session
+                .host
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .hid_mouse)
+            && !self.queried
+        {
             // Stock-host read-only queries, once per connection, on explicit diagnostics visibility.
             self.queried = true;
             let _ = send(crate::host_video::query()?);
@@ -342,6 +402,7 @@ pub struct View {
     pub displays: Vec<crate::host_displays::Output>,
     pub current_output: Option<String>,
     pub windows: bool,
+    pub hid_mouse: bool,
     pub host_revision: u64,
     pub config_ready: bool,
 }
@@ -419,6 +480,7 @@ impl View {
         self.displays = host.outputs.clone();
         self.current_output = host.config.output_id().map(str::to_owned);
         self.windows = host.windows;
+        self.hid_mouse = host.hid_mouse;
         self.host_revision = host.revision;
         self.config_ready = host.config.ready();
         self.display = host

@@ -181,6 +181,7 @@ fn run_webrtc(
                     break;
                 };
                 if channel == 0 && !text {
+                    input.clipboard_frame(&payload, playback);
                     diagnostics.receive(&payload, telemetry);
                     if let Ok(message) = control::decode(&payload) {
                         if let control::Message::Status(code) = &message {
@@ -201,9 +202,14 @@ fn run_webrtc(
                 attempt.control_ready(),
                 |bytes| attempt.send_binary(0, bytes::Bytes::copy_from_slice(bytes)),
                 |command| {
-                    diagnostics.command(command, telemetry, playback.input_geometry(), |bytes| {
-                        attempt.send_binary(0, bytes)
-                    })
+                    diagnostics.command(
+                        command,
+                        telemetry,
+                        playback.input_geometry(),
+                        |bytes| attempt.send_binary(0, bytes),
+                    )?;
+                    telemetry.sync_input(playback);
+                    Ok(())
                 },
             )?;
             Ok((attempt.control_ready(), attempt.video_snapshot(), false))
@@ -308,6 +314,16 @@ fn run_bud(
     let mut deadline = Instant::now() + Duration::from_secs(30);
     let mut direct = matches!(&route, Route::Direct { .. });
     let mut retries = 0;
+    let mut hid = crate::hid_policy::Router {
+        mouse: preferences.hid_mouse_enabled(),
+        keyboard: preferences.hid_keyboard_enabled(),
+        ..Default::default()
+    };
+    telemetry
+        .host
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .hid_mouse = hid.mouse;
     let mut session = crate::bud_ingress::session(
         playback.hevc(),
         false,
@@ -315,6 +331,7 @@ fn run_bud(
         preferences.allow_raw_audio,
         layout,
     )?;
+    session.enable_hid_input(hid.mouse, hid.keyboard);
     session.wake_consumer(std::thread::current());
     let credentials = session.offer(&wire_id, route)?;
     let mut source = session.take_media()?;
@@ -369,6 +386,7 @@ fn run_bud(
                 match event {
                     Event::Established { .. } => established = true,
                     Event::ExternalControl { bytes } => {
+                        input.clipboard_frame(&bytes, playback);
                         diagnostics.receive(&bytes, telemetry);
                         if let Ok(message) = control::decode(&bytes) {
                             if let control::Message::Status(code) = &message {
@@ -436,6 +454,7 @@ fn run_bud(
                     preferences.allow_raw_audio,
                     layout,
                 )?;
+                session.enable_hid_input(hid.mouse, hid.keyboard);
                 session.wake_consumer(std::thread::current());
                 let credentials = session.offer(&wire_id, route)?;
                 source = session.take_media()?;
@@ -481,14 +500,33 @@ fn run_bud(
                 telemetry.bus.publish(telemetry.generation, sample);
             }
             let session_ref = std::cell::RefCell::new(&mut session);
+            let hid_active = session_ref.borrow().hid_input_state();
+            let primary = telemetry
+                .host
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .primary_ready;
             input.pump(
                 playback,
                 established,
-                |bytes| session_ref.borrow_mut().send_frame(bytes),
+                |bytes| {
+                    hid.send(
+                        bytes,
+                        playback.input_geometry(),
+                        primary,
+                        hid_active,
+                        |bytes| session_ref.borrow_mut().send_frame(bytes),
+                    )
+                },
                 |command| {
-                    diagnostics.command(command, telemetry, playback.input_geometry(), |bytes| {
-                        session_ref.borrow_mut().send_frame(&bytes)
-                    })
+                    diagnostics.command(
+                        command,
+                        telemetry,
+                        playback.input_geometry(),
+                        |bytes| session_ref.borrow_mut().send_frame(&bytes),
+                    )?;
+                    telemetry.sync_input(playback);
+                    Ok(())
                 },
             )?;
             let pumped =
@@ -546,7 +584,7 @@ fn observe(
             bail!("{mode} connection timed out");
         }
         if !more_pending {
-            std::thread::park_timeout(Duration::from_millis(10));
+            std::thread::park_timeout(crate::gamepad::POLL);
         }
     }
 }
@@ -561,22 +599,64 @@ impl crate::bud_ingress::VideoTarget for crate::playback::Playback {
         info: crate::video_stream::PacketInfo,
         rotation: u8,
     ) -> Result<bool> {
-        ensure!(
-            rotation == 0,
-            "Rotated video is not supported in the Linux playback preview"
-        );
-        self.submit_packet(bytes, info)
+        self.submit_oriented(bytes, info, rotation)
     }
 }
 
 /// Transport binding only: state, framing, release policy and geometry are shared.
-#[derive(Default)]
 struct Input {
     engine: crate::desktop_input::Engine,
+    pads: crate::gamepad::Manager,
+    clipboard: crate::clipboard_sync::State,
+    poller: crate::gamepad::polling::Poller,
+    devices: Option<crate::gamepad_linux::Devices>,
     events: std::collections::VecDeque<crate::input_handoff::Event>,
 }
+impl Default for Input {
+    fn default() -> Self {
+        let devices = crate::gamepad_linux::Devices::new().ok();
+        if devices.is_none() {
+            crate::event_log::record(
+                "WARN",
+                "controller_backend_unavailable",
+                serde_json::json!({}),
+            );
+        }
+        Self {
+            engine: Default::default(),
+            pads: Default::default(),
+            clipboard: Default::default(),
+            poller: Default::default(),
+            devices,
+            events: Default::default(),
+        }
+    }
+}
 impl Input {
+    fn clipboard_frame(&mut self, bytes: &[u8], playback: &crate::playback::Playback) {
+        if let Ok(control::Message::Buffer {
+            event,
+            payload: Some(range),
+        }) = control::decode(bytes)
+        {
+            if event["type"] == 3 && event["id"] == 7 {
+                let bytes = &bytes[range];
+                if let Ok(text) = std::str::from_utf8(bytes.strip_suffix(&[0]).unwrap_or(bytes)) {
+                    let allowed = playback
+                        .clipboard_allowed
+                        .load(std::sync::atomic::Ordering::Acquire);
+                    self.clipboard
+                        .receive(text, allowed, |text| playback.clipboard_write(text));
+                }
+            }
+        }
+    }
     fn host_control(&mut self, message: &control::Message, playback: &crate::playback::Playback) {
+        if let control::Message::Rumble { pad, low, high } = message {
+            if let Some(devices) = &mut self.devices {
+                self.pads.feedback(*pad, *low, *high, devices);
+            }
+        }
         if let control::Message::Buffer { event, .. } = message {
             let cursor = &event["cursor"];
             if cursor.is_object() {
@@ -619,19 +699,64 @@ impl Input {
         while let Some(event) = self.events.pop_front() {
             match event {
                 crate::input_handoff::Event::Desktop(event) => {
+                    if matches!(
+                        event,
+                        crate::desktop_input::Event::Focus(false)
+                            | crate::desktop_input::Event::Release
+                    ) {
+                        self.clipboard.revoke();
+                    }
                     self.engine.event(event, Instant::now(), &mut send)?
+                }
+                crate::input_handoff::Event::Session(
+                    crate::session_controls::Command::Clipboard { text, paste },
+                ) => {
+                    let allowed = ready
+                        && playback
+                            .clipboard_allowed
+                            .load(std::sync::atomic::Ordering::Acquire);
+                    self.clipboard.local(text, allowed, &mut send)?;
+                    if allowed && paste {
+                        for down in [true, false] {
+                            self.engine.event(
+                                crate::desktop_input::Event::Key {
+                                    usage: 25,
+                                    mods: 2,
+                                    down,
+                                },
+                                Instant::now(),
+                                &mut send,
+                            )?;
+                        }
+                    }
                 }
                 crate::input_handoff::Event::Session(command) => session_command(command)?,
                 _ => {}
             }
+        }
+        if let Some(devices) = &mut self.devices {
+            self.poller.tick(
+                &mut self.pads,
+                devices,
+                ready
+                    && playback
+                        .pad_focus
+                        .load(std::sync::atomic::Ordering::Acquire),
+                Instant::now(),
+                &mut send,
+            )?;
         }
         Ok(())
     }
     fn release(
         &mut self,
         playback: &crate::playback::Playback,
-        send: impl FnMut(&[u8]) -> Result<()>,
+        mut send: impl FnMut(&[u8]) -> Result<()>,
     ) {
+        if let Some(devices) = &mut self.devices {
+            let _ = self.pads.disconnect(devices, &mut send);
+        }
+        playback.controller_focus(false);
         playback.set_input_ready(false);
         playback.set_capture(false);
         let _ = self

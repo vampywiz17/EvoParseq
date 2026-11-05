@@ -156,7 +156,7 @@ impl Desktop {
                                         fg,
                                     );
                                     let mut selected=self.metrics.current_output.clone().unwrap_or_default();
-                                    let available=!self.metrics.pending&&!self.metrics.displays.is_empty();
+                                    let available=!self.metrics.pending&&!self.metrics.hid_mouse&&!self.metrics.displays.is_empty();
                                     ui.add_enabled_ui(available,|ui|{
                                         ui.scope_builder(egui::UiBuilder::new().max_rect(r([24,164,280,28])),|ui|{
                                             egui::ComboBox::from_id_salt("host-display").width(260.).selected_text(if self.metrics.display.is_empty(){"Waiting for host"}else{&self.metrics.display}).show_ui(ui,|ui|{
@@ -177,16 +177,16 @@ impl Desktop {
                                     for (i,text) in f::SESSION_LABELS.iter().enumerate(){
                                         label(ui,r([24,254+i as i32*44,150,24]),text,16.,fg);
                                         let draft=self.badge.draft.as_mut().unwrap();
-                                        let mut value=match i {0=>crate::session_preferences::resolution_text(draft.resolution),1=>draft.bandwidth_mbps.unwrap_or(10).to_string(),2=>draft.fps.unwrap_or(60).to_string(),3=>if draft.constant_fps.unwrap_or(false){"Fixed"}else{"Dynamic"}.into(),4=>if draft.rotated.unwrap_or(false){"Rotated"}else{"Normal"}.into(),_=>"Off".into()};
-                                        let options:&[&str]=match i {0=>crate::session_preferences::RESOLUTION_CHOICES,1=>crate::session_preferences::BANDWIDTH_CHOICES,2=>crate::session_preferences::FPS_CHOICES,3=>&["Dynamic","Fixed"],4=>&["Normal","Rotated"],_=>&["Off"]};
+                                        let mut value=match i {0=>crate::session_preferences::resolution_text(draft.resolution),1=>draft.bandwidth_mbps.unwrap_or(10).to_string(),2=>draft.fps.unwrap_or(60).to_string(),3=>if draft.constant_fps.unwrap_or(false){"Fixed"}else{"Dynamic"}.into(),4=>if draft.rotated.unwrap_or(false){"Rotated"}else{"Default"}.into(),_=>crate::input_state::IMMERSIVE_LABELS[crate::input_state::immersive_index(draft.immersive)].into()};
+                                        let options:&[&str]=match i {0=>crate::session_preferences::RESOLUTION_CHOICES,1=>crate::session_preferences::BANDWIDTH_CHOICES,2=>crate::session_preferences::FPS_CHOICES,3=>&["Dynamic","Fixed"],4=>&["Default","Rotated"],_=>&crate::input_state::IMMERSIVE_LABELS};
                                         let before=value.clone();
-                                        ui.add_enabled_ui(self.metrics.config_ready&&!self.metrics.pending&&i!=5&&i!=4,|ui|{
+                                        ui.add_enabled_ui(self.metrics.config_ready&&!self.metrics.pending,|ui|{
                                             ui.scope_builder(egui::UiBuilder::new().max_rect(r([174,250+i as i32*44,218,28])),|ui|{
-                                                egui::ComboBox::from_id_salt(("session-field",i)).width(208.).selected_text(if self.metrics.config_ready{value.as_str()}else{"Waiting for host"}).show_ui(ui,|ui|{for &option in options{ui.selectable_value(&mut value,option.to_owned(),option);}});
+                                                egui::ComboBox::from_id_salt(("session-field",i)).width(208.).selected_text(if self.metrics.config_ready{value.as_str()}else{"Waiting for host"}).show_ui(ui,|ui|{for &option in options{let supported=i!=5||!option.contains("Keyboard")&&!option.contains("keyboard")||self.shortcuts.as_ref().is_some_and(|s|s.available());ui.add_enabled_ui(supported,|ui|{ui.selectable_value(&mut value,option.to_owned(),option);});}});
                                             });
                                         });
                                         if before!=value{self.badge.draft_dirty=true;}
-                                        match i {0=>if let Ok(parsed)=crate::session_preferences::resolution(&value){draft.resolution=parsed;},1=>draft.bandwidth_mbps=value.parse().ok(),2=>draft.fps=value.parse().ok(),3=>draft.constant_fps=Some(value=="Fixed"),4=>draft.rotated=Some(value=="Rotated"),_=>{}}
+                                        match i {0=>if let Ok(parsed)=crate::session_preferences::resolution(&value){draft.resolution=parsed;},1=>draft.bandwidth_mbps=value.parse().ok(),2=>draft.fps=value.parse().ok(),3=>draft.constant_fps=Some(value=="Fixed"),4=>draft.rotated=Some(value=="Rotated"),_=>draft.immersive=crate::input_state::immersive_value(crate::input_state::IMMERSIVE_LABELS.iter().position(|s|*s==value).unwrap_or(0))}
                                     }
                                     let mut fullscreen =
                                         ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));

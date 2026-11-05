@@ -26,6 +26,7 @@ mod bud_ingress;
 mod bud_media;
 #[cfg(feature = "bud")]
 mod bud_routes;
+mod clipboard_sync;
 mod connection_settings;
 #[cfg(windows)]
 mod connection_settings_ui;
@@ -46,6 +47,7 @@ mod fullscreen;
 mod gpu_windows;
 #[cfg(all(windows, feature = "bud"))]
 mod hid_input;
+mod hid_policy;
 mod input;
 mod input_state;
 #[cfg(windows)]

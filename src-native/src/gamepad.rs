@@ -272,7 +272,7 @@ mod events {
 #[cfg(any(target_os = "android", target_os = "linux", test))]
 pub use events::Event;
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 pub mod polling {
     use super::*;
     use std::time::{Duration, Instant};

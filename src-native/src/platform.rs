@@ -2,20 +2,8 @@
 use serde::Serialize;
 use std::sync::Mutex;
 
-pub const MAX_TEXT: usize = 1024 * 1024;
-// The remote text protocol reserves one trailing NUL byte.
-const REMOTE_TEXT: usize = 102399;
-
-fn remote_text(mut text: String) -> String {
-    if text.len() > REMOTE_TEXT {
-        let mut end = REMOTE_TEXT;
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        text.truncate(end);
-    }
-    text
-}
+use crate::clipboard_sync::remote_text;
+pub use crate::clipboard_sync::MAX_TEXT;
 
 pub trait Desktop: Send + Sync {
     fn read_text(&self) -> Option<String>;

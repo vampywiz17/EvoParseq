@@ -52,12 +52,7 @@ pub(super) trait Runtime: Desktop {
     fn host_error(&self, code: i32) -> transport::HostStatus;
 }
 
-struct PendingClipboard {
-    text: String,
-    expires: Instant,
-    next_try: Instant,
-    attempts: u8,
-}
+use crate::clipboard_sync::Pending as PendingClipboard;
 
 struct Local {
     video: profile::Video,
@@ -132,49 +127,23 @@ impl Local {
         Ok(true)
     }
     fn receive_clipboard(&mut self, text: &str, desktop: &impl Desktop) {
-        // A newer remote value supersedes pending text, even if it matches the
-        // last successful value. Never retain rejected payloads or permissions.
-        self.pending_clipboard = None;
-        if !desktop.clipboard_allowed()
-            || text == self.last_clipboard
-            || text.len() > crate::platform::MAX_TEXT
-            || text.contains('\0')
-        {
-            return;
-        }
-        let now = Instant::now();
-        self.pending_clipboard = Some(PendingClipboard {
-            text: text.into(),
-            expires: now + Duration::from_secs(1),
-            next_try: now,
-            attempts: 0,
-        });
-        self.retry_clipboard(desktop, now);
+        crate::clipboard_sync::receive(
+            &mut self.last_clipboard,
+            &mut self.pending_clipboard,
+            text,
+            desktop.clipboard_allowed(),
+            Instant::now(),
+            |text| desktop.clipboard().write_text(text),
+        );
     }
     fn retry_clipboard(&mut self, desktop: &impl Desktop, now: Instant) {
-        let Some(pending) = self.pending_clipboard.as_mut() else {
-            return;
-        };
-        if !desktop.clipboard_allowed() || now >= pending.expires {
-            self.pending_clipboard = None;
-            return;
-        }
-        if now < pending.next_try {
-            return;
-        }
-        pending.attempts += 1;
-        if desktop.clipboard().write_text(&pending.text) {
-            self.last_clipboard = self.pending_clipboard.take().unwrap().text;
-        } else if pending.attempts >= 5 {
-            self.pending_clipboard = None;
-            crate::event_log::record(
-                "WARN",
-                "clipboard_write_unavailable",
-                serde_json::json!({"attempts":5}),
-            );
-        } else {
-            pending.next_try = now + Duration::from_millis(200);
-        }
+        crate::clipboard_sync::retry(
+            &mut self.last_clipboard,
+            &mut self.pending_clipboard,
+            desktop.clipboard_allowed(),
+            now,
+            |text| desktop.clipboard().write_text(text),
+        );
     }
     fn clipboard_event(
         &mut self,
@@ -203,10 +172,7 @@ impl Local {
             desktop.acknowledge_clipboard();
             if established && desktop.clipboard_allowed() {
                 if let Some(text) = desktop.clipboard().read_notification_text() {
-                    if text != self.last_clipboard {
-                        send(&crate::control::text(17, 7, &text)?)?;
-                        self.last_clipboard = text;
-                    }
+                    crate::clipboard_sync::send_local(&mut self.last_clipboard, text, &mut send)?;
                 }
             }
         }

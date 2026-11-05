@@ -45,6 +45,9 @@ pub struct Playback {
     input_geometry: AtomicU64,
     input_ready: AtomicBool,
     capture: AtomicBool,
+    pub(crate) pad_focus: AtomicBool,
+    pub(crate) clipboard_allowed: AtomicBool,
+    pub(crate) immersive: std::sync::atomic::AtomicU8,
     cursor_restore: Mutex<Option<(i32, i32)>>,
 }
 
@@ -60,6 +63,9 @@ impl Playback {
             input_geometry: AtomicU64::new(0),
             input_ready: AtomicBool::new(false),
             capture: AtomicBool::new(false),
+            pad_focus: AtomicBool::new(false),
+            clipboard_allowed: AtomicBool::new(false),
+            immersive: std::sync::atomic::AtomicU8::new(0),
             cursor_restore: Mutex::new(None),
         })
     }
@@ -79,6 +85,22 @@ impl Playback {
     }
     pub fn repaint(&self) {
         self.ui.request_repaint();
+    }
+    pub fn clipboard_write(&self, text: &str) -> bool {
+        if !self.clipboard_allowed.load(Ordering::Acquire) || self.stopped() {
+            return false;
+        }
+        self.ui.copy_text(text.to_owned());
+        self.ui.request_repaint();
+        true // Accepted by the existing eframe Wayland clipboard adapter.
+    }
+    pub fn clipboard_read(&self) {
+        self.ui
+            .send_viewport_cmd(eframe::egui::ViewportCommand::RequestPaste);
+        self.ui.request_repaint();
+    }
+    pub fn controller_focus(&self, active: bool) {
+        self.pad_focus.store(active, Ordering::Release);
     }
     pub fn stopped(&self) -> bool {
         self.stopped.load(Ordering::Acquire)
@@ -149,6 +171,10 @@ impl Playback {
     }
 
     pub fn submit_packet(&self, bytes: &[u8], info: PacketInfo) -> Result<bool> {
+        self.submit_oriented(bytes, info, 0)
+    }
+    pub fn submit_oriented(&self, bytes: &[u8], info: PacketInfo, rotation: u8) -> Result<bool> {
+        ensure!(rotation <= 3, "Invalid video rotation");
         let mut state = self.packets.lock().unwrap_or_else(|e| e.into_inner());
         state.check()?;
         ensure!(
@@ -185,7 +211,7 @@ impl Playback {
             .queue
             .submit_codec(buffer, info.idr, info.parameters, 0, info.codec);
         if accepted {
-            state.queue.set_last_packet(0, info.picture);
+            state.queue.set_last_packet(rotation, info.picture);
             if state.decoder_generation != state.queue.reset_generation
                 && state.initialization.is_none()
             {
@@ -268,6 +294,12 @@ impl Playback {
         &self,
         mut decode: impl FnMut(&[u8], crate::video_stream::Codec) -> Result<()>,
     ) -> Result<usize> {
+        self.decode_pending_oriented(|bytes, codec, _| decode(bytes, codec))
+    }
+    pub fn decode_pending_oriented(
+        &self,
+        mut decode: impl FnMut(&[u8], crate::video_stream::Codec, u8) -> Result<()>,
+    ) -> Result<usize> {
         let pending = self
             .packets
             .lock()
@@ -303,7 +335,7 @@ impl Playback {
                 (frame, generation)
             };
             let started = Instant::now();
-            let result = decode(&frame.bytes, frame.codec);
+            let result = decode(&frame.bytes, frame.codec, frame.rotation);
             {
                 let mut state = self.packets.lock().unwrap_or_else(|e| e.into_inner());
                 state

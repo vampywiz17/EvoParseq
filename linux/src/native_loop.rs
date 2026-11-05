@@ -18,6 +18,7 @@ pub struct KeyboardBridge {
     target: Mutex<Option<Arc<Playback>>>,
     released: AtomicBool,
     pub refresh_millihertz: AtomicU32,
+    pub paste: AtomicBool,
 }
 impl KeyboardBridge {
     pub fn bind(&self, playback: Option<Arc<Playback>>) {
@@ -46,6 +47,7 @@ pub struct Application<'a> {
     pub keyboard: Arc<KeyboardBridge>,
     modifiers: ModifiersState,
     root: Option<WindowId>,
+    pasting: bool,
 }
 impl<'a> Application<'a> {
     pub fn new(inner: eframe::EframeWinitApplication<'a>, keyboard: Arc<KeyboardBridge>) -> Self {
@@ -54,6 +56,7 @@ impl<'a> Application<'a> {
             keyboard,
             modifiers: ModifiersState::empty(),
             root: None,
+            pasting: false,
         }
     }
     fn display(&self, event_loop: &ActiveEventLoop) {
@@ -70,7 +73,7 @@ impl<'a> Application<'a> {
             .refresh_millihertz
             .store(hz.unwrap_or(0), Ordering::Relaxed);
     }
-    fn key(&self, key: PhysicalKey, down: bool) -> bool {
+    fn key(&mut self, key: PhysicalKey, down: bool) -> bool {
         let Some(playback) = self.keyboard.target() else {
             return false;
         };
@@ -84,6 +87,16 @@ impl<'a> Application<'a> {
         {
             self.keyboard.release();
             return true;
+        }
+        if code==KeyCode::KeyV {
+            if down && self.modifiers.control_key() && !self.modifiers.alt_key() && !self.modifiers.super_key() {
+                self.pasting=true;
+                self.keyboard.paste.store(true,Ordering::Release);
+                // Existing egui-winit clipboard code reads the focused seat and
+                // supplies Event::Paste. Clipboard text must precede host Ctrl+V.
+                return false;
+            }
+            if !down && self.pasting {self.pasting=false;return true;}
         }
         if let Some(usage) = usage(code) {
             let mods = if (224..=231).contains(&usage) {
