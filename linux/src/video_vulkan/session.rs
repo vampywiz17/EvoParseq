@@ -336,7 +336,6 @@ impl Session {
             };
         }
         let profiles = [profile];
-        let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
         let usage = crate::video_profile::surface_usage();
         let formats = unsafe { crate::video_profile::formats(&video, context.physical, &profile)? };
         ensure!(

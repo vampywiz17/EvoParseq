@@ -11,6 +11,10 @@ default = ["bud", "desktop-telemetry"]
 bud = []
 desktop-telemetry = ["bud"]
 
+# Shared source names are recognized, not enabled: Linux has no Windows VSR SDK.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("vendor-video"))', 'cfg(nvidia_vsr_sdk)'] }
+
 [dependencies]
 libc = "0.2"
 anyhow = "1"

@@ -83,7 +83,7 @@ impl Desktop {
                 ui.painter().rect_stroke(
                     rect,
                     0.,
-                    egui::Stroke::new(1., Color32::from_rgba_unmultiplied(99, 189, 231, alpha)),
+                    egui::Stroke::new(1_f32, Color32::from_rgba_unmultiplied(99, 189, 231, alpha)),
                     egui::StrokeKind::Inside,
                 );
                 ui.painter().image(

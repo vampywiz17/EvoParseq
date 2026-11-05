@@ -9,6 +9,10 @@ not a claim of hardware validation on every platform.
 - Removed saved arbitrary launcher geometry. Fixed canonical constraints now
   survive asynchronous fullscreen/unmaximize acknowledgments after Disconnect.
 - Restricted the unused-in-production codec test adapter to `cfg(test)`.
+- Removed unused Linux imports, a retired format-query variable and unused
+  profile constant reexports; retained the Windows-only Resolution alias.
+  Declared shared Windows cfg names without enabling their features on Linux.
+  Made UI stroke literals explicitly f32 for future compiler compatibility.
 - Extracted duplicated GitHub transport, redirect bounds, metadata size bounds
   and SHA-256 streaming verification into shared Rust `release_http`. Android and
   Linux retain separate package/channel/installer policies.

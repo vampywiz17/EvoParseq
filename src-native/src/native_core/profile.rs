@@ -3,7 +3,9 @@ use anyhow::{ensure, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 
-pub use crate::session_preferences::{Resolution, Video, MAX_BANDWIDTH_MBPS, MAX_FPS};
+#[cfg(windows)]
+pub use crate::session_preferences::Resolution;
+pub use crate::session_preferences::Video;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]

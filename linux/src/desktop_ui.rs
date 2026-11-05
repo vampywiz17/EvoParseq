@@ -6,7 +6,7 @@ use crate::{
     connection,
     launcher::{color, label, rect_at},
 };
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 #[derive(Default)]
 pub struct State {
     pub information: crate::information_linux::State,
