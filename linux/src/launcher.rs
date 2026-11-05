@@ -70,6 +70,7 @@ impl Desktop {
             ));
             let playback = crate::playback::Playback::new(ctx.clone());
             playback.set_hevc(hevc);
+            self.desktop_input.session(&playback);
             playback.immersive.store(
                 self.settings.native_video().immersive,
                 std::sync::atomic::Ordering::Release,

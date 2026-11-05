@@ -28,6 +28,9 @@ impl DesktopInput {
             ..Default::default()
         }
     }
+    pub fn session(&self, playback: &std::sync::Arc<Playback>) {
+        self.keyboard.session(playback);
+    }
     pub fn refresh_hz(&self) -> Option<f64> {
         let mhz = self
             .keyboard

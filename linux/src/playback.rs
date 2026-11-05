@@ -48,6 +48,7 @@ pub struct Playback {
     pub(crate) pad_focus: AtomicBool,
     pub(crate) clipboard_allowed: AtomicBool,
     clipboard_output: Mutex<Option<String>>,
+    clipboard_pending: AtomicBool,
     pub(crate) immersive: std::sync::atomic::AtomicU8,
     cursor_restore: Mutex<Option<(i32, i32)>>,
 }
@@ -67,6 +68,7 @@ impl Playback {
             pad_focus: AtomicBool::new(false),
             clipboard_allowed: AtomicBool::new(false),
             clipboard_output: Mutex::new(None),
+            clipboard_pending: AtomicBool::new(false),
             immersive: std::sync::atomic::AtomicU8::new(0),
             cursor_restore: Mutex::new(None),
         })
@@ -96,10 +98,14 @@ impl Playback {
             .clipboard_output
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(text.to_owned());
+        self.clipboard_pending.store(true, Ordering::Release);
         self.ui.request_repaint();
         true // One pending native output; latest value supersedes stale text.
     }
     pub fn finish_clipboard(&self, focused: bool) {
+        if !self.clipboard_pending.swap(false, Ordering::AcqRel) {
+            return;
+        }
         let text = self
             .clipboard_output
             .lock()
@@ -428,5 +434,30 @@ mod rotation_tests {
         })
         .unwrap();
         assert_eq!(rotations, [3]);
+    }
+}
+
+#[cfg(test)]
+mod clipboard_output_tests {
+    #[test]
+    fn linux_pending_clipboard_is_latest_only_and_revoked_before_native_output() {
+        let ctx = eframe::egui::Context::default();
+        let p = super::Playback::new(ctx.clone());
+        p.clipboard_allowed
+            .store(true, std::sync::atomic::Ordering::Release);
+        assert!(p.clipboard_write("one"));
+        assert!(p.clipboard_write("two"));
+        p.clipboard_allowed
+            .store(false, std::sync::atomic::Ordering::Release);
+        let out = ctx.run(Default::default(), |_| p.finish_clipboard(true));
+        assert!(out.platform_output.commands.is_empty());
+        p.clipboard_allowed
+            .store(true, std::sync::atomic::Ordering::Release);
+        p.clipboard_write("three");
+        p.clipboard_write("four");
+        let out = ctx.run(Default::default(), |_| p.finish_clipboard(true));
+        assert!(
+            matches!(out.platform_output.commands.as_slice(),[eframe::egui::OutputCommand::CopyText(text)] if text=="four")
+        );
     }
 }

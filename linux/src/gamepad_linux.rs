@@ -20,6 +20,8 @@ unsafe extern "C" {
     fn SDL_JoystickInstanceID(joystick: *mut c_void) -> i32;
     fn SDL_JoystickGetDeviceInstanceID(index: i32) -> i32;
     fn SDL_GameControllerUpdate();
+    fn SDL_GameControllerEventState(state: i32) -> i32;
+    fn SDL_JoystickEventState(state: i32) -> i32;
     fn SDL_GameControllerGetAxis(pad: *mut c_void, axis: i32) -> i16;
     fn SDL_GameControllerGetButton(pad: *mut c_void, button: i32) -> u8;
     fn SDL_GameControllerRumble(pad: *mut c_void, low: u16, high: u16, duration: u32) -> i32;
@@ -48,6 +50,12 @@ impl Devices {
             unsafe { SDL_InitSubSystem(SUBSYSTEM) } == 0,
             "Controller subsystem unavailable"
         );
+        // State polling is owned by the common Poller. Do not accumulate SDL
+        // button/axis events in a second, undrained application event queue.
+        unsafe {
+            SDL_GameControllerEventState(0);
+            SDL_JoystickEventState(0);
+        }
         let now = Instant::now();
         Ok(Self {
             pads: std::array::from_fn(|_| None),

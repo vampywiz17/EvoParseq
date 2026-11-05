@@ -271,6 +271,9 @@ impl Desktop {
 }
 
 impl eframe::App for Desktop {
+    fn on_exit(&mut self) {
+        self.shortcuts.take();
+    }
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         if raw.viewport_id != egui::ViewportId::ROOT {
             return;
@@ -370,11 +373,6 @@ impl eframe::App for Desktop {
                     self.signed_in = signed_in;
                     let message = video_timing
                         .map_or_else(|| message.clone(), |timing| format!("{message}\n{timing}"));
-                    event_log::record(
-                        "ERROR",
-                        "video_backend_failed",
-                        serde_json::json!({"backend":"Vulkan Video","decoded_pictures":decoder.decoded}),
-                    );
                     eprintln!("{message}");
                     self.error = Some(message);
                     if !signed_in {
@@ -398,6 +396,11 @@ impl eframe::App for Desktop {
                     let message = format!(
                         "Vulkan video stopped after {} pictures: {error:#}",
                         decoder.decoded
+                    );
+                    event_log::record(
+                        "ERROR",
+                        "video_backend_failed",
+                        serde_json::json!({"backend":"Vulkan Video","decoded_pictures":decoder.decoded}),
                     );
                     eprintln!("{message}");
                     self.error = Some(message);

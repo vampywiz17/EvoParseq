@@ -16,11 +16,15 @@ use winit::{
 #[derive(Default)]
 pub struct KeyboardBridge {
     target: Mutex<Option<Arc<Playback>>>,
+    session: Mutex<Option<std::sync::Weak<Playback>>>,
     released: AtomicBool,
     pub refresh_millihertz: AtomicU32,
     paste: Mutex<Option<std::time::Instant>>,
 }
 impl KeyboardBridge {
+    pub fn session(&self, playback: &Arc<Playback>) {
+        *self.session.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::downgrade(playback));
+    }
     pub fn bind(&self, playback: Option<Arc<Playback>>) {
         *self.target.lock().unwrap_or_else(|e| e.into_inner()) = playback;
     }
@@ -42,6 +46,16 @@ impl KeyboardBridge {
     }
     pub fn release(&self) {
         *self.paste.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        if let Some(playback) = self
+            .session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+        {
+            playback.controller_focus(false);
+            playback.clipboard_allowed.store(false, Ordering::Release);
+        }
         if let Some(playback) = self.target() {
             playback.clipboard_allowed.store(false, Ordering::Release);
             playback.controller_focus(false);
@@ -331,5 +345,24 @@ mod tests {
         ] {
             assert_eq!(usage(key), Some(expected));
         }
+    }
+}
+
+#[cfg(test)]
+mod focus_tests {
+    #[test]
+    fn linux_focus_loss_revokes_controller_and_clipboard_without_mouse_capture() {
+        let p = crate::playback::Playback::new(eframe::egui::Context::default());
+        let bridge = super::KeyboardBridge::default();
+        bridge.session(&p);
+        p.controller_focus(true);
+        p.clipboard_allowed
+            .store(true, std::sync::atomic::Ordering::Release);
+        bridge.release();
+        assert!(!p.pad_focus.load(std::sync::atomic::Ordering::Acquire));
+        assert!(
+            !p.clipboard_allowed
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
     }
 }

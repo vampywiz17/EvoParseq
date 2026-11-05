@@ -426,7 +426,9 @@ impl Painter {
                 self.configuration.desired_maximum_frame_latency = requested;
                 if let Some(render_state) = &self.render_state {
                     for surface in self.surfaces.values() {
-                        Self::configure_surface(surface, render_state, &self.configuration);
+                        if surface.width > 0 && surface.height > 0 {
+                            Self::configure_surface(surface, render_state, &self.configuration);
+                        }
                     }
                 }
             }

@@ -79,6 +79,7 @@ impl Session {
 pub struct Control {
     timing: crate::frame_timing::Requests,
     queried: bool,
+    pub(crate) hid_mouse: bool,
     primary_attempted: Option<String>,
     primary_revision: Option<(u64, u64)>,
     confirmation: Option<crate::host_video::Confirmation>,
@@ -311,7 +312,7 @@ impl Control {
             return Ok(());
         }
         self.confirm(session, &mut send);
-        {
+        if self.hid_mouse {
             let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
             if host.hid_mouse
                 && self.primary_revision != Some((host.revision, host.outputs_revision))
@@ -343,14 +344,7 @@ impl Control {
             }
         }
         let desired = session.bus.sample_requested();
-        if (desired
-            || session
-                .host
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .hid_mouse)
-            && !self.queried
-        {
+        if (desired || self.hid_mouse) && !self.queried {
             // Stock-host read-only queries, once per connection, on explicit diagnostics visibility.
             self.queried = true;
             let _ = send(crate::host_video::query()?);

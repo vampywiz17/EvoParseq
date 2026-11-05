@@ -181,12 +181,12 @@ fn run_webrtc(
                     break;
                 };
                 if channel == 0 && !text {
-                    input.clipboard_frame(&payload, playback);
                     diagnostics.receive(&payload, telemetry);
                     if let Ok(message) = control::decode(&payload) {
                         if let control::Message::Status(code) = &message {
                             ensure!(*code == 0, "The host ended the connection (status {code})");
                         }
+                        input.clipboard_frame(&message, &payload, playback);
                         input.host_control(&message, playback);
                     }
                 }
@@ -350,7 +350,9 @@ fn run_bud(
     let mut ingress = crate::bud_ingress::VideoState::new(playback.hevc(), false, false);
     let mut established = false;
     let mut input = Input::default();
+    let mut hid_previous = [(false, 0); 2];
     let mut diagnostics = crate::telemetry::Control::default();
+    diagnostics.hid_mouse = hid.mouse;
     let result = observe(
         Mode::Bud,
         audio.native_receiver(),
@@ -391,7 +393,6 @@ fn run_bud(
                 match event {
                     Event::Established { .. } => established = true,
                     Event::ExternalControl { bytes } => {
-                        input.clipboard_frame(&bytes, playback);
                         diagnostics.receive(&bytes, telemetry);
                         if let Ok(message) = control::decode(&bytes) {
                             if let control::Message::Status(code) = &message {
@@ -400,6 +401,7 @@ fn run_bud(
                                     "The host ended the connection (status {code})"
                                 );
                             }
+                            input.clipboard_frame(&message, &bytes, playback);
                             input.host_control(&message, playback);
                         }
                     }
@@ -505,12 +507,34 @@ fn run_bud(
                 telemetry.bus.publish(telemetry.generation, sample);
             }
             let session_ref = std::cell::RefCell::new(&mut session);
-            let hid_active = session_ref.borrow().hid_input_state();
-            let primary = telemetry
-                .host
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .primary_ready;
+            let hid_active = if hid.mouse || hid.keyboard {
+                session_ref.borrow().hid_input_state()
+            } else {
+                [(false, 0); 2]
+            };
+            for (index, (enabled, device)) in [(hid.mouse, "mouse"), (hid.keyboard, "keyboard")]
+                .into_iter()
+                .enumerate()
+            {
+                if enabled && hid_previous[index] != hid_active[index] {
+                    crate::event_log::record(
+                        if hid_active[index].1 == 0 {
+                            "INFO"
+                        } else {
+                            "ERROR"
+                        },
+                        "hid_input_state_changed",
+                        serde_json::json!({"device":device,"active":hid_active[index].0,"error":hid_active[index].1}),
+                    );
+                    hid_previous[index] = hid_active[index];
+                }
+            }
+            let primary = hid.mouse
+                && telemetry
+                    .host
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .primary_ready;
             input.pump(
                 playback,
                 established,
@@ -648,14 +672,19 @@ impl Default for Input {
     }
 }
 impl Input {
-    fn clipboard_frame(&mut self, bytes: &[u8], playback: &crate::playback::Playback) {
-        if let Ok(control::Message::Buffer {
+    fn clipboard_frame(
+        &mut self,
+        message: &control::Message,
+        bytes: &[u8],
+        playback: &crate::playback::Playback,
+    ) {
+        if let control::Message::Buffer {
             event,
             payload: Some(range),
-        }) = control::decode(bytes)
+        } = message
         {
             if event["type"] == 3 && event["id"] == 7 {
-                let bytes = &bytes[range];
+                let bytes = &bytes[range.clone()];
                 if let Ok(text) = std::str::from_utf8(bytes.strip_suffix(&[0]).unwrap_or(bytes)) {
                     let allowed = playback
                         .clipboard_allowed
