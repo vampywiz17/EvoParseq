@@ -249,21 +249,26 @@ private fun TvSettings(model: TvModel, first: FocusRequester, back: () -> Unit) 
         else if (!model.busy && restoreKey.isNotEmpty()) rowFocus.requestFocus()
     }
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-        Column(Modifier.width(160.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.width(160.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = back, scale = steadyScale,
                 modifier = Modifier.focusRequester(first).fillMaxWidth()) { Text("Back") }
             Text("SETTINGS", style = MaterialTheme.typography.titleMedium, color = Color(0xFF71BCFF))
-            listOf("Network", "Video", "Audio", "Diagnostics", "Device", "Updates").forEach { name ->
-                val active = category == name
-                Button(onClick = {
-                    category = name; choosing = null; restoreKey = ""
-                    if (name == "Device") model.inspectDecoders()
-                }, scale = steadyScale,
-                    modifier = Modifier.fillMaxWidth().semantics { this.selected = active }) {
-                    Box(Modifier.width(3.dp).height(18.dp)
-                        .background(if(active) Color(0xFF71BCFF) else Color.Transparent, RoundedCornerShape(2.dp)))
-                    Spacer(Modifier.width(10.dp))
-                    Text(name)
+            // Keep Back visible; focused categories scroll into view instead of
+            // measuring the final TV button with only the remaining few pixels.
+            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+                .padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                listOf("Network", "Video", "Audio", "Diagnostics", "Device", "Updates").forEach { name ->
+                    val active = category == name
+                    Button(onClick = {
+                        category = name; choosing = null; restoreKey = ""
+                        if (name == "Device") model.inspectDecoders()
+                    }, scale = steadyScale,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics { this.selected = active }) {
+                        Box(Modifier.width(3.dp).height(18.dp)
+                            .background(if(active) Color(0xFF71BCFF) else Color.Transparent, RoundedCornerShape(2.dp)))
+                        Spacer(Modifier.width(10.dp))
+                        Text(name)
+                    }
                 }
             }
         }

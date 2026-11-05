@@ -1,6 +1,6 @@
 # EvoParseq for Android TV
 
-Android preview: **0.9.6-dev.3** on `dev` and `codex/linux-flatpak`. First live device: Xiaomi TV Box S
+Android preview: **0.9.6-dev.4** on `dev` and `codex/linux-flatpak`. First live device: Xiaomi TV Box S
 (3rd Gen) EU, Android 14 (32-bit ARM userspace). Google TV / Android TV interface,
 D-pad navigation, two-factor sign-in and shared Rust account/session logic.
 
