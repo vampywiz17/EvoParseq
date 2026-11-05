@@ -363,6 +363,40 @@ mod tests {
             sink(&packet).map(Some)
         }
     }
+    #[cfg(not(windows))]
+    #[test]
+    fn pcm_surround_reaches_common_callback_bit_exact_and_keeps_speaker_positions() {
+        let layout = crate::audio_layout::Layout::new(6, 0x3f).unwrap();
+        let audio = crate::audio_stream::Pipeline::start_with_layout(Some(100), layout);
+        let mut reader = audio.native_receiver().callback_reader().unwrap();
+        let samples = [i16::MIN, -1, 0, 1, 12345, i16::MAX];
+        // Native header: 5.1 back speakers, one frame, 48 kHz, PCM, six channels.
+        let mut packet = vec![0x3f, 0, 0, 0, 1, 0, 0, 0, 0x80, 0xbb, 0, 0, 2, 2, 6];
+        for value in samples {
+            packet.extend_from_slice(&value.to_le_bytes());
+        }
+        let mut source = Source {
+            video: VecDeque::new(),
+            audio: VecDeque::from([packet]),
+            order: Vec::new(),
+        };
+        let counts = pump_source(
+            &mut source,
+            &mut VideoState::new(false, false, false),
+            &Target::default(),
+            &audio.sender().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(counts.accepted_audio, 1);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while audio.snapshot().packets_decoded == 0 && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(audio.snapshot().codec, Some("PCM (uncompressed)"));
+        let mut output = [0; 6];
+        assert_eq!(reader.render_layout(&mut output, layout, 0).frames, 1);
+        assert_eq!(output, samples);
+    }
     #[test]
     fn video_first_bounded_batches_drain_bursts_without_parking_or_starving_audio() {
         let audio = crate::audio_stream::Pipeline::start_with_budget(Some(100));

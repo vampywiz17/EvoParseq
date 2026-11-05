@@ -57,6 +57,13 @@ jobs:
             printf 'set(ANDROID_ABI "%s" CACHE STRING "")\nset(ANDROID_PLATFORM android-29 CACHE STRING "")\ninclude("%s/build/cmake/android.toolchain.cmake")\n' "$abi" "$ANDROID_NDK_HOME" > "$CMAKE_TOOLCHAIN_FILE"
             cargo ndk -t "$abi" --platform 29 -o ../app/src/main/jniLibs build --locked --release
             cargo ndk -t "$abi" --platform 29 clippy --locked -- -D warnings
+            # API-32 mask functions must remain optional runtime lookups. A strong
+            # import would prevent loading the whole core on API 29-31.
+            "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" --dyn-syms --wide "../app/src/main/jniLibs/$abi/libevoparseq_tv.so" > "$RUNNER_TEMP/audio-symbols-$abi.txt"
+            if grep -E 'UND.*AAudioStream(Builder_setChannelMask|_getChannelMask)' "$RUNNER_TEMP/audio-symbols-$abi.txt"; then
+              echo 'New AAudio API was linked strongly; older Android loading would fail'
+              exit 1
+            fi
           done
       - name: Restore protected release signing key
         env:

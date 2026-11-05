@@ -259,12 +259,11 @@ impl Settings {
         })
     }
     pub fn validate(&self) -> Result<()> {
-        if self.custom_audio_buffer
-            && (self.audio_max_buffer_ms == 0
-                || self.audio_max_buffer_ms > 500
-                || self.audio_min_buffer_ms > self.audio_max_buffer_ms)
-        {
-            bail!("Audio buffer must satisfy 0 <= minimum <= maximum <= 500 ms, with maximum above zero");
+        if self.custom_audio_buffer {
+            crate::audio_stream::validate_buffer_limits(
+                self.audio_min_buffer_ms,
+                self.audio_max_buffer_ms,
+            )?;
         }
         if self.force_relay && self.stun_only {
             bail!("Force TURN relay cannot be combined with STUN only");

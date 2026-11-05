@@ -774,10 +774,11 @@ impl Attempt {
         #[cfg(target_os = "linux")] video: Option<Arc<dyn crate::video_output::NativeSink>>,
         #[cfg(target_os = "linux")] audio_budget: Option<u32>,
         #[cfg(target_os = "android")] video: Arc<crate::video_android::Pipeline>,
+        #[cfg(target_os = "android")] maximum_ms: u32,
     ) {
         let mut state = self.completion.lock().unwrap_or_else(|e| e.into_inner());
         #[cfg(target_os = "android")]
-        let audio_budget = Some(100);
+        let audio_budget = Some(maximum_ms);
         state.audio_stream = Some(crate::audio_stream::Pipeline::start_with_budget(
             audio_budget,
         ));

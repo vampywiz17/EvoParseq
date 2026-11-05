@@ -16,6 +16,15 @@ use std::{
 const MAX_SAMPLES: usize = 48_000; // 500 ms, interleaved stereo
 const PCM_SAMPLES: usize = 5760 * 2; // RFC maximum 120 ms, stereo
 const RECYCLED_BUFFERS: usize = 32;
+/// Common Windows/Android/Linux custom-buffer bounds, in milliseconds.
+pub fn validate_buffer_limits(minimum: u32, maximum: u32) -> Result<()> {
+    anyhow::ensure!(
+        maximum > 0 && maximum <= 500 && minimum <= maximum,
+        "Audio buffer must satisfy 0 <= minimum <= maximum <= 500 ms, with maximum above zero"
+    );
+    Ok(())
+}
+
 #[derive(Clone, Default, Serialize)]
 pub struct Snapshot {
     pub layout: Option<Layout>,

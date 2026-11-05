@@ -84,6 +84,9 @@ should not be read as Linux feature parity.
 - Standard gamepads; optional remote D-pad mouse, short/long OK clicks and
   supported OK + direction dragging. Physical mouse/keyboard use normal input
   with optional capture. Windows HID passthrough is not an Android feature.
+- AAudio device recovery, optional custom buffering, BUD PCM and capability-gated
+  5.1/7.1 output; diagnostic logging with save/share export. These additions need
+  live audio-device validation; WebRTC remains stereo Opus.
 
 Live-tested on Xiaomi TV Box S (3rd Gen), Android 14, including BUD at 50 Mbit/s,
 NVIDIA-encoded Main10, remote mouse and a GameSir controller. WebRTC at sustained

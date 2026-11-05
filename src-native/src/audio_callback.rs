@@ -101,6 +101,11 @@ impl Publisher {
     }
 }
 impl CallbackReader {
+    /// Called only with the old native callbacks stopped, before reopening output.
+    pub fn restart(&mut self) {
+        self.buffering = true;
+    }
+
     /// No mutex, allocation, deallocation, native call or decoding here.
     /// PCM is copied once, directly into the device-owned output buffer.
     pub fn render(&mut self, output: &mut [i16]) -> Rendered {
@@ -115,11 +120,6 @@ impl CallbackReader {
         minimum_frames: usize,
     ) -> Rendered {
         let channels = usize::from(layout.channels);
-        if self.buffering && self.shared.frames.load(Ordering::Acquire) < minimum_frames {
-            output.fill(0);
-            return Rendered::default();
-        }
-        self.buffering = false;
         let mut result = Rendered {
             invalid_layout: !output.len().is_multiple_of(channels),
             ..Default::default()
@@ -171,10 +171,16 @@ impl CallbackReader {
                 continue;
             }
             let (block, offset) = self.pending.as_mut().unwrap();
-            if block.layout != layout && block.layout != Layout::STEREO {
+            if block.layout != layout && block.layout != Layout::STEREO && layout != Layout::STEREO
+            {
                 result.invalid_layout = true;
                 break;
             }
+            // Retire stale epochs before testing the startup/refill threshold.
+            if self.buffering && self.shared.frames.load(Ordering::Acquire) < minimum_frames {
+                break;
+            }
+            self.buffering = false;
             let source_channels = usize::from(block.layout.channels);
             let frames = ((output.len() - filled) / channels)
                 .min((block.pcm.len() - *offset) / source_channels);
@@ -182,6 +188,13 @@ impl CallbackReader {
             if block.layout == layout {
                 output[filled..filled + count]
                     .copy_from_slice(&block.pcm[*offset..*offset + count]);
+            } else if layout == Layout::STEREO {
+                for (dst, src) in output[filled..filled + frames * channels]
+                    .chunks_exact_mut(channels)
+                    .zip(block.pcm[*offset..*offset + count].chunks_exact(source_channels))
+                {
+                    dst.copy_from_slice(&block.layout.stereo(src));
+                }
             } else {
                 for (dst, src) in output[filled..filled + frames * channels]
                     .chunks_exact_mut(channels)
@@ -287,6 +300,54 @@ mod tests {
         publisher.push(vec![22, 23], Layout::STEREO, 9600).unwrap();
         assert_eq!(reader.render_layout(&mut output, layout, 2).frames, 1);
         assert_eq!(output, [20, 21, 0, 0, 0, 0]);
+    }
+    #[test]
+    fn recovery_retires_old_partial_blocks_before_refilling_minimum() {
+        let (mut publisher, mut reader) = new();
+        push(&mut publisher, &[1, -1, 2, -2]);
+        let mut output = [0; 2];
+        assert_eq!(
+            reader.render_layout(&mut output, Layout::STEREO, 2).frames,
+            1
+        );
+        publisher.discard();
+        reader.restart();
+        push(&mut publisher, &[3, -3]);
+        assert_eq!(
+            reader.render_layout(&mut output, Layout::STEREO, 2).frames,
+            0
+        );
+        assert_eq!(output, [0, 0]);
+        push(&mut publisher, &[4, -4]);
+        assert_eq!(
+            reader.render_layout(&mut output, Layout::STEREO, 2).frames,
+            1
+        );
+        assert_eq!(output, [3, -3]);
+        assert_eq!(
+            reader.render_layout(&mut output, Layout::STEREO, 2).frames,
+            1
+        );
+        assert_eq!(output, [4, -4]);
+    }
+    #[test]
+    fn route_recovery_can_fold_surround_down_without_reordering_following_blocks() {
+        let (mut publisher, mut reader) = new();
+        let layout = Layout::new(8, 0x63f).unwrap();
+        publisher
+            .push(vec![100, 200, 0, 30000, 0, 0, 0, 0], layout, 9600)
+            .unwrap();
+        push(&mut publisher, &[300, 400]);
+        let mut output = [0; 4];
+        assert_eq!(
+            reader.render_layout(&mut output, Layout::STEREO, 0).frames,
+            2
+        );
+        assert_eq!(output, [100, 200, 300, 400]);
+        let mut report = Snapshot::default();
+        publisher.snapshot(&mut report);
+        assert_eq!(report.queued_frames, 0);
+        assert_eq!(report.queued_samples, 0);
     }
     #[test]
     fn overflow_retires_stale_audio_and_never_exceeds_sample_budget() {

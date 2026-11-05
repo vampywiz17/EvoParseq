@@ -8,11 +8,13 @@ pub mod account_signaling;
 pub mod attempt;
 #[path = "../../../src-native/src/audio_layout.rs"]
 pub mod audio_layout;
+mod audio_preferences;
+#[cfg(any(target_os = "android", test))]
+#[path = "../../../src-native/src/audio_recovery.rs"]
+mod audio_recovery;
 #[path = "../../../src-native/src/audio_stream.rs"]
 pub mod audio_stream;
 #[path = "../../../src-native/src/bud_ingress.rs"]
-// Native lifecycle calls pump only on Android; host builds exercise its
-// borrowed-media contracts through this same source's isolated unit tests.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub mod bud_ingress;
 #[path = "../../../src-native/src/codec_initialization.rs"]
@@ -84,5 +86,6 @@ pub mod viewport;
 
 #[path = "../../../src-native/src/release_apk.rs"]
 pub mod release_apk;
+
 #[path = "../../../src-native/src/release_http.rs"]
 mod release_http;

@@ -102,8 +102,9 @@ internal class TvModel(application: Application) : AndroidViewModel(application)
             val previousCrash = recentAppFailure(application)
             val saved = preferences.getString("requests", "") ?: ""
             val reply = JSONObject(NativeCore.settings(saved, "", 0))
+            val diagnosticsReady = runCatching { Diagnostics.configure(application, reply.optJSONObject("settings")?.optBoolean("logging") ?: false) }.getOrDefault(false)
             var restored = false
-            var feedback = reply.optString("error")
+            var feedback = if (diagnosticsReady) reply.optString("error") else "Diagnostic logging is unavailable."
             try {
                 val token = vault.load()
                 if (token != null) {
@@ -195,14 +196,39 @@ internal class TvModel(application: Application) : AndroidViewModel(application)
         request {
             val reply = JSONObject(NativeCore.settings(current, key, index))
             var feedback = reply.optString("error")
-            val saved = reply.optBoolean("ok") && preferences.edit()
+            val configured = reply.optBoolean("ok") && (key != "logging" || Diagnostics.configure(getApplication(), reply.getJSONObject("settings").optBoolean("logging")))
+            if (reply.optBoolean("ok") && !configured) feedback = "Could not configure diagnostic logging."
+            val saved = reply.optBoolean("ok") && configured && preferences.edit()
                 .putString("requests", reply.getJSONObject("settings").toString()).commit()
-            if (reply.optBoolean("ok") && !saved) feedback = "Could not save TV settings."
+            if (reply.optBoolean("ok") && !saved) {
+                if (configured && key == "logging") runCatching {
+                    Diagnostics.configure(getApplication(), JSONObject(current).optBoolean("logging"))
+                }
+                if (configured) feedback = "Could not save TV settings."
+            }
             return@request {
                 if (saved) settings = reply
                 message = if (saved) "Saved on this TV. Applies to the next connection." else feedback
             }
         }
+    }
+
+    var diagnosticMessage by mutableStateOf("")
+        private set
+    fun diagnosticFeedback(text: String) { diagnosticMessage = text }
+    fun prepareDiagnostics(ready: (java.io.File) -> Unit) = request {
+        val file = try { Diagnostics.prepare(getApplication()) } catch (_: Exception) {
+            return@request { diagnosticMessage = "Could not export diagnostics. Check free storage and retry." }
+        }
+        return@request { diagnosticMessage = "Diagnostic archive prepared."; ready(file) }
+    }
+    fun saveDiagnostics(file: java.io.File, uri: android.net.Uri) = request {
+        val ok = runCatching {
+            getApplication<Application>().contentResolver.openOutputStream(uri, "w")!!.use { output ->
+                file.inputStream().use { it.copyTo(output) }
+            }
+        }.isSuccess
+        return@request { diagnosticMessage = if (ok) "Diagnostics saved." else "Could not save diagnostics." }
     }
 
     fun openLocalSetup() = request {
@@ -258,7 +284,7 @@ internal class TvModel(application: Application) : AndroidViewModel(application)
         streamStatus = JSONObject().put("state", "Connecting…")
         worker.execute {
             val reply = runCatching {
-                JSONObject(NativeCore.startStream(surface, host.peer, current, DecoderInventory.choices(), width, height))
+                JSONObject(NativeCore.startStream(surface, host.peer, current, DecoderInventory.choices(), AudioOutputs.inventory(getApplication()), width, height))
             }.getOrElse { JSONObject().put("error", "Could not start hardware streaming on this device.") }
             main.post {
                 if (generation == streamGeneration && !disposed.get()) {

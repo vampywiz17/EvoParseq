@@ -695,6 +695,7 @@ dependencies = [
  "futures-util",
  "httparse",
  "jni",
+ "libc",
  "libopus_sys",
  "ndk-sys",
  "qrcode",

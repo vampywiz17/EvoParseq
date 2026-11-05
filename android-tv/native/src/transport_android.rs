@@ -42,8 +42,11 @@ pub struct Bud {
     wire_id: String,
     routes: Option<VecDeque<Route>>,
     retries: usize,
+    audio_settings: crate::audio_preferences::Settings,
+    audio_layout: crate::audio_layout::Layout,
 }
 impl Transport {
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         id: &str,
         peer: &str,
@@ -52,6 +55,8 @@ impl Transport {
         bud: bool,
         video: Arc<video_android::Pipeline>,
         network: Arc<crate::network::Network>,
+        audio_settings: crate::audio_preferences::Settings,
+        audio_layout: crate::audio_layout::Layout,
     ) -> Result<Self> {
         if !bud {
             let target = peer.to_owned();
@@ -69,15 +74,15 @@ impl Transport {
                 true,
                 Some(network),
             )?;
-            attempt.start_native_media(video);
+            attempt.start_native_media(video, audio_settings.maximum());
             return Ok(Self::WebRtc(Box::new(attempt)));
         }
         let mut session = bud_ingress::session(
             config.allow_hevc,
             config.ten_bit,
             false,
-            false,
-            crate::audio_layout::Layout::STEREO,
+            audio_settings.pcm,
+            audio_layout,
         )?;
         session.wake_consumer(std::thread::current());
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -126,7 +131,8 @@ impl Transport {
             writer(signaling.offer(&credentials).to_string()),
             "Could not send BUD offer"
         );
-        let audio = audio_stream::Pipeline::start_with_budget(Some(100));
+        let audio =
+            audio_stream::Pipeline::start_with_layout(Some(audio_settings.maximum()), audio_layout);
         let sender = audio
             .sender()
             .ok_or_else(|| anyhow::anyhow!("Audio unavailable"))?;
@@ -150,6 +156,8 @@ impl Transport {
             wire_id: id.into(),
             routes,
             retries: 0,
+            audio_settings,
+            audio_layout,
         })))
     }
     pub fn receive(&mut self, text: &str, id: &str) -> Result<()> {
@@ -322,8 +330,8 @@ impl Bud {
             self.config.allow_hevc,
             self.config.ten_bit,
             false,
-            false,
-            crate::audio_layout::Layout::STEREO,
+            self.audio_settings.pcm,
+            self.audio_layout,
         )?;
         session.wake_consumer(std::thread::current());
         self.retries += 1;

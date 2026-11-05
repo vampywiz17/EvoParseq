@@ -253,7 +253,7 @@ private fun TvSettings(model: TvModel, first: FocusRequester, back: () -> Unit) 
             Button(onClick = back, scale = steadyScale,
                 modifier = Modifier.focusRequester(first).fillMaxWidth()) { Text("Back") }
             Text("SETTINGS", style = MaterialTheme.typography.titleMedium, color = Color(0xFF71BCFF))
-            listOf("Network", "Video", "Device", "Updates").forEach { name ->
+            listOf("Network", "Video", "Audio", "Diagnostics", "Device", "Updates").forEach { name ->
                 val active = category == name
                 Button(onClick = {
                     category = name; choosing = null; restoreKey = ""
@@ -284,7 +284,7 @@ private fun TvSettings(model: TvModel, first: FocusRequester, back: () -> Unit) 
             } else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(choice?.getString("label") ?: category, style = MaterialTheme.typography.headlineSmall)
-                Text("Requests apply to your next connection. The host chooses the actual video format.",
+                Text(model.settings?.optString(when (category) {"Audio" -> "audio_hint"; "Diagnostics" -> "diagnostic_hint"; else -> "request_hint"}) ?: "",
                     color = Color(0xFFA8BED7), fontSize=14.sp, lineHeight=20.sp)
                 if (model.settings == null) Button(onClick = model::readSettings,
                     scale = steadyScale, enabled = !model.busy) { Text("Reload settings") }
@@ -310,7 +310,9 @@ private fun TvSettings(model: TvModel, first: FocusRequester, back: () -> Unit) 
                         Button(onClick = model::resetNetwork, enabled = !model.busy, scale = steadyScale,
                             modifier = Modifier.fillMaxWidth()) { Text("Remove saved relay settings") }
                         Text("Local HTTPS pairing only. Credentials are encrypted on this TV.", color = Color(0xFFA8BED7))
-                    } else {
+                    } else if (category == "Diagnostics") {
+                        DiagnosticActions(model)
+                    } else if (category == "Video") {
                         Text("Dynamic FPS reduces traffic for still images. Fixed FPS requests continuous frames; it does not duplicate frames on the TV.", color = Color(0xFFA8BED7))
                     }
                 } else {
@@ -374,4 +376,33 @@ private fun UpdateSettings(model: TvModel) {
         Text("Updates come from EvoParseq GitHub releases. Android asks you to approve installation. Your settings and saved sign-in are retained.",
             color = Color(0xFFA8BED7))
     }
+}
+
+@Composable
+private fun DiagnosticActions(model: TvModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var pending by rememberSaveable { mutableStateOf<String?>(null) }
+    val save = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        val file = pending?.let { java.io.File(it) }
+        pending = null
+        if (uri != null && file != null) model.saveDiagnostics(file, uri)
+    }
+    Button(onClick = {
+        model.prepareDiagnostics { file ->
+            pending = file.absolutePath
+            try { save.launch("EvoParseq-diagnostics.zip") }
+            catch (_: android.content.ActivityNotFoundException) {
+                pending = null
+                model.diagnosticFeedback("No document picker is installed. Use Share diagnostics instead.")
+            }
+        }
+    }, enabled = !model.busy) { Text("Save diagnostics") }
+    Button(onClick = {
+        model.prepareDiagnostics { file ->
+            try { Diagnostics.share(context, file) }
+            catch (_: Exception) { model.diagnosticFeedback("No sharing app is available. Use Save diagnostics instead.") }
+        }
+    }, enabled = !model.busy) { Text("Share diagnostics") }
+    Text(model.diagnosticMessage, color = Color(0xFFA8BED7))
 }

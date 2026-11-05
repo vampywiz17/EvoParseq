@@ -1,6 +1,6 @@
 # EvoParseq for Android TV
 
-Android preview: **0.9.6-dev.2** on `dev` and `codex/linux-flatpak`. First live device: Xiaomi TV Box S
+Android preview: **0.9.6-dev.3** on `dev` and `codex/linux-flatpak`. First live device: Xiaomi TV Box S
 (3rd Gen) EU, Android 14 (32-bit ARM userspace). Google TV / Android TV interface,
 D-pad navigation, two-factor sign-in and shared Rust account/session logic.
 
@@ -17,15 +17,29 @@ D-pad navigation, two-factor sign-in and shared Rust account/session logic.
   This does not prove driver/compositor zero copy or direct scanout.
 - H.264 8-bit 4:2:0 is the default. Request HEVC 8/10-bit 4:2:0 in Settings when
   supported. The host chooses the actual format; Main10 is not HDR.
-- Shared Rust Opus decoder, bounded queues and keyframe recovery; stereo 48 kHz
-  AAudio pull output. The callback never waits on the session worker or allocates.
+- Shared Rust Opus/PCM decoder and bounded queues; 48 kHz AAudio pull output.
+  BUD optionally requests raw PCM and the verified output's 5.1/7.1 speaker layout.
+  WebRTC remains stereo Opus. API 29-31 and outputs without explicit supported
+  positions use stereo; API 32+ channel-mask functions are resolved at runtime.
+  The callback never waits on the session worker, allocates or issues stream commands.
+- Audio device errors reopen only the AAudio output with bounded shared retry
+  backoff, preserving the video/transport. Stale PCM is retired before playback
+  resumes. Recovery onto a stereo device folds down surround explicitly.
+- Settings > Audio offers optional minimum/maximum buffering (0-500 ms;
+  maximum must be positive and at least the minimum). Legacy/default behavior
+  remains a zero minimum and a 100 ms queue ceiling. Larger minima add latency.
+- Settings > Diagnostics enables bounded JSONL operational logging (off by
+  default) and saves/shares a ZIP using Android's document picker/FileProvider.
+  Only two rotated logs (up to 5 MiB each) and basic device information are
+  exported. Credentials, settings, clipboard, media and logcat are excluded.
+  A TV needs a compatible document provider or sharing app to export the ZIP.
 - Sign-in is remembered using AES-256-GCM and a non-exportable Android Keystore
   key. Only the session token is saved, encrypted in app-private no-backup storage;
   passwords and 2FA codes are never saved. Sign out removes local credentials and
   requests server-side revocation. Invalid/expired credentials require sign-in.
 - Back/Disconnect, backgrounding, audio focus loss and Surface destruction stop
   the stream. Reconnect explicitly when a new Surface is created.
-- Network/Video settings are grouped for D-pad use. Fixed FPS requests host
+- Network/Video/Audio/Diagnostics settings are grouped for D-pad use. Fixed FPS requests host
   `fullFPS`; dynamic FPS allows the host to reduce frame production when idle.
 - The overlay shows sampled Surface submission FPS, selected-pair RTT, received
   payload bitrate and actual codec/depth. It hides after five idle seconds;
@@ -210,3 +224,9 @@ Keep the signing key/password backed up securely; losing it prevents ordinary
 updates of existing installations. The Android APIs used are documented under
 [PackageInstaller](https://developer.android.com/reference/android/content/pm/PackageInstaller)
 and [application signing](https://developer.android.com/studio/publish/app-signing).
+
+## Video capability research
+
+See [Android video alternatives](../docs/ANDROID_VIDEO_ALTERNATIVES.md) for
+4:4:4, ARR/VRR and the strict project Zero copy definition. These are researched
+limits, not newly enabled features. The MediaCodec-to-Surface path is unchanged.
