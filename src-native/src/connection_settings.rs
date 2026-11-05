@@ -514,7 +514,10 @@ impl Manager {
         self.resolve_settings(&settings).await
     }
     /// Explicit BUD adapter: freeze preferences and credentials together.
-    #[cfg(all(windows, feature = "bud"))]
+    #[cfg(any(
+        all(windows, feature = "bud"),
+        all(target_os = "linux", feature = "desktop-telemetry")
+    ))]
     pub async fn resolve_bud(&self) -> Result<(Settings, Vec<RTCIceServer>)> {
         let (settings, error) = self.view();
         if error.is_some() {
@@ -528,7 +531,10 @@ impl Manager {
         Ok((settings, servers))
     }
 
-    #[cfg(all(windows, feature = "bud"))]
+    #[cfg(any(
+        all(windows, feature = "bud"),
+        all(target_os = "linux", feature = "desktop-telemetry")
+    ))]
     pub async fn resolve_bud_relay(&self, settings: &Settings) -> Result<Vec<RTCIceServer>> {
         if settings.stun_only {
             bail!("TURN is disabled by STUN-only settings");
@@ -1074,5 +1080,33 @@ impl VideoFormat {
         if self != Self::H264 {
             s.experimental_ten_bit = self == Self::Hevc10;
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteMode {
+    Automatic,
+    DirectOnly,
+    ForceRelay,
+}
+impl RouteMode {
+    pub const ALL: [Self; 3] = [Self::Automatic, Self::DirectOnly, Self::ForceRelay];
+    pub const LABELS: [&'static str; 3] = [
+        "Automatic (direct or TURN)",
+        "Direct only (STUN / LAN / VPN)",
+        "Force TURN relay",
+    ];
+    pub fn current(s: &Settings) -> Self {
+        if s.stun_only {
+            Self::DirectOnly
+        } else if s.force_relay {
+            Self::ForceRelay
+        } else {
+            Self::Automatic
+        }
+    }
+    pub fn apply(self, s: &mut Settings) {
+        s.stun_only = self == Self::DirectOnly;
+        s.force_relay = self == Self::ForceRelay;
     }
 }

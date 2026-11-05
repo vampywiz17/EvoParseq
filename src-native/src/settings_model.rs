@@ -78,7 +78,7 @@ impl Tab {
     }
     pub fn notice(self) -> &'static str {
         match self {
-            Self::Network => "ICE chooses the route automatically unless Force TURN relay is enabled.\nChanges apply to your next connection.",
+            Self::Network => crate::network_settings::NOTICE,
             Self::Video => "Video options are requests/preferences, not guaranteed results; compatibility fallback may apply.\nCheck Connection stats for the actual stream format, decoder and fallback.\nVideo changes apply to your next connection.",
             Self::Audio => "Audio changes apply on your next connection.",
             Self::Input => "Enable BUD on the Network tab to use HID input.\nInput changes apply to your next connection.",
@@ -86,34 +86,8 @@ impl Tab {
     }
 }
 
+pub use crate::connection_settings::RouteMode;
 pub use crate::connection_settings::VideoFormat;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RouteMode {
-    Automatic,
-    DirectOnly,
-    ForceRelay,
-}
-impl RouteMode {
-    pub const ALL: [Self; 3] = [Self::Automatic, Self::DirectOnly, Self::ForceRelay];
-    pub const LABELS: [&'static str; 3] = [
-        "Automatic (direct or TURN)",
-        "Direct only (STUN / LAN / VPN)",
-        "Force TURN relay",
-    ];
-    pub fn current(s: &Settings) -> Self {
-        if s.stun_only {
-            Self::DirectOnly
-        } else if s.force_relay {
-            Self::ForceRelay
-        } else {
-            Self::Automatic
-        }
-    }
-    pub fn apply(self, s: &mut Settings) {
-        s.stun_only = self == Self::DirectOnly;
-        s.force_relay = self == Self::ForceRelay;
-    }
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputMode {
     Standard,
@@ -294,14 +268,12 @@ impl Form {
             .and_then(|i| self.gpu_choices.get(i))
             .context("Choose Automatic or an available video GPU")?
             .clone();
-        settings.stun_urls = urls(&self.stun_urls);
-        settings.turn_urls = urls(&self.turn_urls);
-        settings.custom_username = settings.custom_username.trim().into();
-        settings.turn_key_id = settings.turn_key_id.trim().into();
-        settings.ttl = self
-            .ttl
-            .parse()
-            .context("Enter a valid credential lifetime")?;
+        crate::network_settings::apply_fields(
+            &mut settings,
+            &self.stun_urls,
+            &self.turn_urls,
+            &self.ttl,
+        )?;
         Ok(settings)
     }
     pub fn save(&mut self, manager: &Manager) -> bool {
@@ -321,7 +293,7 @@ impl Form {
                 self.token = Zeroizing::new(String::new());
                 self.forget_password = false;
                 self.forget_token = false;
-                self.feedback = "Settings saved. They apply on your next connection.".into();
+                self.feedback = crate::network_settings::SAVED.into();
                 true
             }
             Err(error) => {
@@ -331,19 +303,8 @@ impl Form {
         }
     }
 }
-fn urls(text: &str) -> Vec<String> {
-    text.lines()
-        .map(str::trim)
-        .filter(|u| !u.is_empty())
-        .map(|u| {
-            if let Some((scheme, rest)) = u.split_once(':') {
-                format!("{}:{rest}", scheme.to_ascii_lowercase())
-            } else {
-                u.into()
-            }
-        })
-        .collect()
-}
+#[cfg(test)]
+use crate::network_settings::urls;
 
 #[cfg(test)]
 mod tests {

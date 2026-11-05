@@ -1,6 +1,6 @@
 # EvoParseq Linux Flatpak preview
 
-Current preview: **0.1.14**, developed on `codex/linux-flatpak`. This is an
+Current preview: **0.1.15**, developed on `codex/linux-flatpak`. This is an
 experimental Linux client for unmodified Parsec hosts, not a stable release.
 Windows and Android TV feature availability differs; see the [root README](../README.md).
 
@@ -10,7 +10,7 @@ Windows and Android TV feature availability differs; see the [root README](../RE
 | --- | --- |
 | Desktop | Wayland, egui with a Vulkan renderer; shared Windows application layout and native window decorations |
 | Account | Sign-in, 2FA, computer discovery, manual peer ID and encrypted remembered sessions |
-| Transport | WebRTC and explicitly selected BUD; no silent transport fallback |
+| Transport | WebRTC and explicitly selected BUD; direct/STUN, custom TURN UDP/TLS/TCP, Cloudflare TURN, direct-only and Force TURN; no silent transport fallback |
 | Video | Vulkan Video; progressive H.264 or HEVC Main, 8-bit 4:2:0, without frame reordering |
 | Audio | Stereo Opus through PipeWire, with local mute and volume controls |
 | Input | Normal Parsec mouse/keyboard and host-requested relative pointer capture |
@@ -20,9 +20,8 @@ Windows and Android TV feature availability differs; see the [root README](../RE
 
 10-bit/4:4:4 playback, application Zero copy mode, AI upscaling, controllers,
 HID, clipboard synchronization, rotated video and explicit immersive-mode
-selection are **not integrated on Linux**. TURN provider/credential/Force TURN
-controls are also not integrated into the Linux Settings UI. Existing saved
-fields for these features do not enable them. Unsupported controls in the
+selection are **not integrated on Linux**. Existing saved fields for these
+unsupported features do not enable them. Unsupported controls in the
 shared Settings/session layout remain disabled.
 
 ## Install and run
@@ -243,3 +242,26 @@ owner's hardware validation. The previous HD 520 live result was H.264.
 The Vulkan contracts are documented by Khronos under
 [H.265 decode](https://docs.vulkan.org/features/latest/features/proposals/VK_KHR_video_decode_h265.html)
 and [video coding](https://docs.vulkan.org/spec/latest/chapters/videocoding.html).
+
+## Network settings (0.1.15)
+
+Settings → Network uses the Windows form and shared Rust validation, URL parsing,
+credential generation/cache and route policy for both WebRTC and BUD. Add one
+STUN or TURN URL per line, or select Cloudflare TURN and supply the key ID/token.
+Blank password/token edits keep the saved secret; Forget removes it. Credentials
+are protected with the Linux Secret portal; saving can prompt your desktop
+keyring and never blocks video rendering. Temporary Cloudflare credentials are
+cached in memory only when enabled. Changes apply to the next connection.
+
+Automatic BUD routing first tries direct UDP, then the configured TURN carriers
+in the Windows order (UDP, TLS, TCP). Each retry has fresh session credentials
+and a fresh signaling attempt ID. Direct-only never provisions TURN; Force TURN
+never falls back to direct. Actual route reporting still uses transport evidence.
+Windows-only TCP/TLS QoS remains disabled. Event logging can be enabled here.
+No new media worker, image copy, readback or render pass is introduced.
+
+The offline network fixtures cover protected-secret persistence, failed edits,
+WebRTC relay policy, BUD carrier ordering and direct-only credential isolation.
+Live relay interoperability still needs validation with your TURN provider and
+network; successful offline fixtures do not establish that every firewall route
+is reachable.

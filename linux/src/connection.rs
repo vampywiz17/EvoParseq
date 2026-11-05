@@ -32,15 +32,21 @@ pub fn run_stream(
     mode: Mode,
     playback: &Arc<crate::playback::Playback>,
     telemetry: &Arc<crate::telemetry::Session>,
+    settings: &Arc<crate::connection_settings::Manager>,
 ) -> Result<String> {
+    // Unlock portal-backed secrets on this blocking account worker before the
+    // async ICE resolver runs. Keyring UI never runs on a media/render thread.
+    let (preferences, error) = settings.view();
+    ensure!(error.is_none(), "Fix connection settings before connecting");
+    preferences.validate()?;
     playback.bind_input_consumer();
     let socket = Socket::open(session)?;
     let mut nonce = [0u8; 16];
     getrandom::fill(&mut nonce).map_err(|_| anyhow::anyhow!("Could not generate connection ID"))?;
     let id: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
     let result = match mode {
-        Mode::WebRtc => run_webrtc(&socket, peer, &id, playback, telemetry),
-        Mode::Bud => run_bud(&socket, peer, &id, playback, telemetry),
+        Mode::WebRtc => run_webrtc(&socket, peer, &id, playback, telemetry, settings),
+        Mode::Bud => run_bud(&socket, peer, &id, playback, telemetry, settings),
     };
     (socket.writer)(
         native_wire::envelope("offer_cancel", peer, &id, serde_json::json!({})).to_string(),
@@ -53,12 +59,19 @@ fn create_webrtc_attempt(
     output: Output,
     config: control::Config,
     playback: &Arc<crate::playback::Playback>,
+    settings: Option<Arc<dyn crate::rtc_configuration::NetworkSettings>>,
 ) -> Result<Attempt> {
     // Match the existing Windows/Android Parsec host compatibility policy.
     // This permits legacy RSA key sizes only; signature and SDP fingerprint
     // checks remain enabled; this policy is independent of rendering state.
-    let attempt =
-        Attempt::spawn_configured(id, output, Some(config), StunProvider::Parsec, true, None)?;
+    let attempt = Attempt::spawn_configured(
+        id,
+        output,
+        Some(config),
+        StunProvider::Parsec,
+        true,
+        settings,
+    )?;
     attempt.start_native_media(Some(playback.clone()));
     Ok(attempt)
 }
@@ -69,6 +82,7 @@ fn run_webrtc(
     id: &str,
     playback: &Arc<crate::playback::Playback>,
     telemetry: &Arc<crate::telemetry::Session>,
+    settings: &Arc<crate::connection_settings::Manager>,
 ) -> Result<String> {
     let writer = socket.writer.clone();
     let target = peer.to_owned();
@@ -93,7 +107,8 @@ fn run_webrtc(
         ten_bit: false,
         chroma_444: false,
     };
-    let mut attempt = create_webrtc_attempt(id, output, config.clone(), playback)?;
+    let mut attempt =
+        create_webrtc_attempt(id, output, config.clone(), playback, Some(settings.clone()))?;
     attempt.set_linux_telemetry(telemetry.bus.clone(), telemetry.generation);
     let receiver = attempt
         .audio_receiver()
@@ -221,7 +236,8 @@ mod tests {
             chroma_444: false,
         };
         let mut attempt =
-            create_webrtc_attempt("linux-certificate-policy", output, config, &playback).unwrap();
+            create_webrtc_attempt("linux-certificate-policy", output, config, &playback, None)
+                .unwrap();
         let report = attempt.snapshot();
         assert_eq!(report["legacy_rsa_1024_enabled"], true);
         assert_eq!(report["unavailable_media_bypasses_control_queue"], true);
@@ -240,30 +256,26 @@ fn run_bud(
     id: &str,
     playback: &Arc<crate::playback::Playback>,
     telemetry: &Arc<crate::telemetry::Session>,
+    settings: &Arc<crate::connection_settings::Manager>,
 ) -> Result<String> {
     use evoparseq_bud::{
         bud::{Event, Route},
         signaling::Signaling,
     };
 
-    let (_, url) = StunProvider::Parsec
-        .server()
-        .context("Missing STUN server")?;
-    let url = webrtc::ice::url::Url::parse_url(url)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let stun = runtime.block_on(async {
-        tokio::time::timeout(
-            Duration::from_secs(3),
-            tokio::net::lookup_host((url.host.as_str(), url.port)),
-        )
-        .await
-        .ok()
-        .and_then(|result| result.ok())
-        .map(|addresses| addresses.collect())
-        .unwrap_or_default()
-    });
+    let (route, mut relays, preferences) = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(15), crate::bud_routes::route(settings))
+            .await
+            .context("BUD route resolution timed out")?
+    })?;
+    let mut wire_id = id.to_owned();
+    let mut answered_at: Option<Instant> = None;
+    let mut deadline = Instant::now() + Duration::from_secs(30);
+    let mut direct = matches!(&route, Route::Direct { .. });
+    let mut retries = 0;
     let mut session = crate::bud_ingress::session(
         playback.hevc(),
         false,
@@ -272,9 +284,9 @@ fn run_bud(
         crate::audio_layout::Layout::STEREO,
     )?;
     session.wake_consumer(std::thread::current());
-    let credentials = session.offer(id, Route::Direct { stun })?;
+    let credentials = session.offer(&wire_id, route)?;
     let mut source = session.take_media()?;
-    let signaling = Signaling::new(peer, id)?;
+    let mut signaling = Signaling::new(peer, &wire_id)?;
     ensure!(
         (socket.writer)(signaling.offer(&credentials).to_string()),
         "Could not send BUD offer"
@@ -294,7 +306,15 @@ fn run_bud(
             if !*signaling_closed {
                 for _ in 0..64 {
                     match socket.next() {
-                        Ok(Some(text)) => signaling.receive(&text, &mut session)?,
+                        Ok(Some(text)) => {
+                            signaling.receive(&text, &mut session)?;
+                            let value: serde_json::Value = serde_json::from_str(&text)?;
+                            if value["action"] == "answer_relay"
+                                && value["payload"]["attempt_id"].as_str() == Some(wire_id.as_str())
+                            {
+                                answered_at.get_or_insert_with(Instant::now);
+                            }
+                        }
                         Ok(None) => break,
                         Err(_) if established => {
                             *signaling_closed = true;
@@ -304,6 +324,7 @@ fn run_bud(
                     }
                 }
             }
+            let mut ended = false;
             for _ in 0..64 {
                 let Some(event) = session.poll()? else { break };
                 if let Some(candidate) = signaling.candidate(&event) {
@@ -326,12 +347,75 @@ fn run_bud(
                             input.host_control(&message, playback);
                         }
                     }
-                    Event::Ended { outcome } => bail!("BUD connection ended: {outcome:?}"),
+                    Event::Ended { outcome } => {
+                        ensure!(!established, "BUD connection ended: {outcome:?}");
+                        ended = true;
+                    }
                     Event::IoFailure { stage, kind, .. } => {
-                        bail!("BUD IO failed: {} ({kind:?})", stage.name());
+                        ensure!(!established, "BUD IO failed: {} ({kind:?})", stage.name());
+                        ended = true;
                     }
                     _ => {}
                 }
+            }
+            if !established
+                && (ended
+                    || Instant::now() >= deadline
+                    || (direct
+                        && answered_at.is_some_and(|at| at.elapsed() >= Duration::from_secs(4))))
+            {
+                ensure!(retries < 32, "BUD configured route attempts exhausted");
+                if relays.is_none() {
+                    relays = Some(runtime.block_on(async {
+                        tokio::time::timeout(
+                            Duration::from_secs(15),
+                            crate::bud_routes::relay_route(settings, &preferences),
+                        )
+                        .await
+                        .context("BUD relay resolution timed out")?
+                    })?);
+                }
+                if playback.stopped() {
+                    return Ok((false, ingress.snapshot(), false));
+                }
+                let route = relays
+                    .as_mut()
+                    .and_then(|routes| routes.pop_front())
+                    .context("BUD configured routes exhausted")?;
+                session.close();
+                ensure!(
+                    (socket.writer)(
+                        native_wire::envelope(
+                            "offer_cancel",
+                            peer,
+                            &wire_id,
+                            serde_json::json!({})
+                        )
+                        .to_string()
+                    ),
+                    "Could not withdraw BUD offer"
+                );
+                wire_id = crate::bud_routes::native_attempt_id()?;
+                session = crate::bud_ingress::session(
+                    playback.hevc(),
+                    false,
+                    false,
+                    false,
+                    crate::audio_layout::Layout::STEREO,
+                )?;
+                session.wake_consumer(std::thread::current());
+                let credentials = session.offer(&wire_id, route)?;
+                source = session.take_media()?;
+                signaling = Signaling::new(peer, &wire_id)?;
+                ensure!(
+                    (socket.writer)(signaling.offer(&credentials).to_string()),
+                    "Could not send BUD relay offer"
+                );
+                direct = false;
+                retries += 1;
+                answered_at = None;
+                deadline = Instant::now() + Duration::from_secs(30);
+                return Ok((false, ingress.snapshot(), true));
             }
             if let Some(generation) = playback.take_keyframe_request()? {
                 ingress.wait_for_keyframe();
@@ -382,6 +466,9 @@ fn run_bud(
     input.release(playback, |bytes| session.send_frame(bytes));
     diagnostics.stop(telemetry, |bytes| session.send_frame(&bytes));
     session.close();
+    (socket.writer)(
+        native_wire::envelope("offer_cancel", peer, &wire_id, serde_json::json!({})).to_string(),
+    );
     result
 }
 
@@ -398,7 +485,9 @@ fn observe(
     let mut signaling_closed = false;
     let mut keyframe_received = false;
     let mut connected = false;
+    let bud = mode == Mode::Bud;
     let mode = mode.label();
+    let mut ready_at = None;
     loop {
         if playback.stopped() {
             return Ok(format!("{mode} stream disconnected"));
@@ -406,8 +495,17 @@ fn observe(
         let (ready, video, more_pending) = poll(&mut signaling_closed)?;
         connected |= ready;
         let now = Instant::now();
+        if ready {
+            ready_at.get_or_insert(now);
+        }
         keyframe_received |= ready && video.parameter_sets_and_idr_observed;
-        if !keyframe_received && now >= deadline {
+        if !keyframe_received
+            && if bud {
+                ready_at.is_some_and(|at| now.duration_since(at) >= Duration::from_secs(20))
+            } else {
+                now >= deadline
+            }
+        {
             if connected {
                 bail!("{mode} connected, but no complete video keyframe arrived within 20 seconds");
             }

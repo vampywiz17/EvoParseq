@@ -13,7 +13,7 @@ requires no browser, WebView or helper executable.
 Parsec, Unity or lowlat.** A Parsec account and a compatible host are required.
 
 **This is the Linux Flatpak development branch (`codex/linux-flatpak`).**
-The current Linux preview is **0.1.14**, alongside the existing Windows and
+The current Linux preview is **0.1.15**, alongside the existing Windows and
 Android TV clients. Linux support is experimental and is not a stable release.
 Download `EvoParseq-Linux-Flatpak` from a successful
 [Linux Flatpak CI run](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Acodex%2Flinux-flatpak).
@@ -45,6 +45,9 @@ numbers are separate from those releases.
   in a 2-by-2 layout. CPU/RSS are sampled at most once per second and only while
   Connection stats is open. No GPU utilization sampler or extra render pass is
   introduced; unavailable measurements remain explicitly unavailable.
+- **Network:** shared Windows STUN/custom TURN/Cloudflare configuration,
+  direct-only and Force TURN for WebRTC and BUD; protected relay secrets and
+  optional in-memory Cloudflare credentials. Windows-only TCP/TLS QoS stays disabled.
 - **Persistence:** Windows-compatible `settings.json` schema and encrypted
   remembered sessions through the Linux Secret portal. Passwords and 2FA codes
   are never saved; protected credentials are not portable between platforms.
@@ -58,7 +61,7 @@ establish support on every Skylake system or driver. The package defaults to
 
 **Not yet integrated on Linux:** 10-bit/4:4:4 playback, the application's
 Zero copy mode, AI upscaling, HID, controllers, clipboard synchronization,
-rotation, explicit immersive-mode selection and TURN configuration controls.
+rotation and explicit immersive-mode selection.
 The full Settings layout is present; unimplemented controls remain disabled.
 
 See [Linux installation, current scope and diagnostics](linux/README.md) and

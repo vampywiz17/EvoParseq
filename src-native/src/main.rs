@@ -60,6 +60,7 @@ mod media_scheduling;
 mod native_core;
 #[cfg(windows)]
 mod native_wire;
+mod network_settings;
 #[cfg(windows)]
 mod nvidia_vsr;
 #[cfg(windows)]

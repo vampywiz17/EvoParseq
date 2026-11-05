@@ -13,6 +13,8 @@ mod audio_pipewire;
 pub mod audio_stream;
 #[path = "../../src-native/src/bud_ingress.rs"]
 mod bud_ingress;
+#[path = "../../src-native/src/bud_routes.rs"]
+mod bud_routes;
 #[path = "../../src-native/src/codec_initialization.rs"]
 pub mod codec_initialization;
 mod connection;
@@ -24,6 +26,8 @@ mod display_timing;
 mod host_displays;
 #[path = "../../src-native/src/native_core/host_video.rs"]
 mod host_video;
+#[path = "../../src-native/src/network_settings.rs"]
+mod network_settings;
 #[path = "../../src-native/src/native_core/profile.rs"]
 pub(crate) mod profile;
 mod resources_linux;
@@ -68,6 +72,8 @@ pub mod media_ingress;
 mod native_loop;
 #[path = "../../src-native/src/native_wire.rs"]
 pub mod native_wire;
+#[cfg(test)]
+mod network_tests;
 #[path = "../../src-native/src/native_core/picker.rs"]
 mod picker;
 mod playback;
@@ -179,7 +185,7 @@ fn account_worker(
                 let result = form.session
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("Sign in first."))
-                    .and_then(|session| connection::run_stream(session, &peer, mode, &playback, &telemetry));
+                    .and_then(|session| connection::run_stream(session, &peer, mode, &playback, &telemetry, &settings));
                 let reply = match result {
                     Ok(message) => Reply::StreamEnded(message),
                     Err(error) => Reply::Error {

@@ -14,9 +14,38 @@ pub struct State {
     pub stats: bool,
     pub stats_tab: usize,
     pub prefer_hevc: bool,
+    pub network: Option<crate::network_settings::Draft>,
+    pub saving:
+        Option<std::sync::mpsc::Receiver<(crate::network_settings::Draft, Result<(), String>)>>,
+    pub feedback: String,
 }
 impl Desktop {
     pub(super) fn settings(&mut self, ui: &mut egui::Ui) {
+        if let Some(receiver) = &self.ui_state.saving {
+            match receiver.try_recv() {
+                Ok((draft, result)) => {
+                    self.ui_state.network = Some(draft);
+                    self.ui_state.saving = None;
+                    self.ui_state.feedback = match result {
+                        Ok(()) => crate::network_settings::SAVED.into(),
+                        Err(error) => error,
+                    };
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.ui_state.saving = None;
+                    self.ui_state.feedback = "Settings worker is unavailable.".into();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    ui.label("Saving settings...");
+                    return;
+                }
+            }
+        }
+        let draft = self
+            .ui_state
+            .network
+            .get_or_insert_with(|| crate::network_settings::Draft::new(self.settings.view().0));
+        self.ui_state.provider = usize::from(draft.values.provider == "cloudflare");
         ui.style_mut().override_font_id = Some(egui::FontId::proportional(s::BODY as f32));
         ui.visuals_mut().override_text_color = Some(color(app_style::SETTINGS_TEXT));
         ui.visuals_mut().extreme_bg_color = color(app_style::SETTINGS_FIELD);
@@ -58,30 +87,12 @@ impl Desktop {
         {
             self.show_video = false;
             self.fitted_stream = None;
+            self.ui_state.network = None;
+            return;
         }
-        if ui
+        let save = ui
             .put(r(s::SAVE), egui::Button::new("Save settings"))
-            .clicked()
-        {
-            let bud = self.transport == connection::Mode::Bud;
-            match self.settings.update_local(|settings| {
-                settings.bud = bud;
-                if self.ui_state.prefer_hevc {
-                    crate::connection_settings::VideoFormat::Hevc8
-                } else {
-                    crate::connection_settings::VideoFormat::H264
-                }
-                .apply(settings);
-                Ok(())
-            }) {
-                Ok(()) => {
-                    self.error = None;
-                    self.show_video = false;
-                    self.fitted_stream = None;
-                }
-                Err(error) => self.error = Some(error.to_string()),
-            }
-        }
+            .clicked();
         ui.painter().line_segment(
             [
                 origin + egui::vec2(0., 147.),
@@ -159,19 +170,86 @@ impl Desktop {
                             });
                         });
                 });
-            } else if row.label == f::TURN_PROVIDER.label {
-                // Navigation between the two existing Windows form groups, not a saved
-                // provider value. Saving persists only the integrated transport choice.
+            } else if tab == 0 && row.label != f::TCP_TLS_QOS.label {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                    egui::ComboBox::from_id_salt("provider-page")
-                        .width(400.)
-                        .selected_text(
-                            ["Custom servers", "Cloudflare TURN"][self.ui_state.provider],
-                        )
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.ui_state.provider, 0, "Custom servers");
-                            ui.selectable_value(&mut self.ui_state.provider, 1, "Cloudflare TURN");
+                    use crate::connection_settings::RouteMode;
+                    if row.label == f::STUN_SERVERS.label {
+                        ui.put(
+                            rect,
+                            egui::TextEdit::multiline(&mut draft.stun_urls).char_limit(32768),
+                        );
+                    } else if row.label == f::CONNECTION_ROUTE.label {
+                        let mut route = RouteMode::current(&draft.values);
+                        egui::ComboBox::from_id_salt(row.label)
+                            .width(400.)
+                            .selected_text(RouteMode::LABELS[route as usize])
+                            .show_ui(ui, |ui| {
+                                for (mode, text) in
+                                    RouteMode::ALL.into_iter().zip(RouteMode::LABELS)
+                                {
+                                    ui.selectable_value(&mut route, mode, text);
+                                }
+                            });
+                        route.apply(&mut draft.values);
+                    } else if row.label == f::EVENT_LOG.label {
+                        ui.put(
+                            rect,
+                            egui::Checkbox::new(&mut draft.values.event_logging, row.control_text),
+                        );
+                    } else {
+                        ui.add_enabled_ui(!draft.values.stun_only, |ui| {
+                            if row.label == f::TURN_PROVIDER.label {
+                                egui::ComboBox::from_id_salt(row.label)
+                                    .width(400.)
+                                    .selected_text(if draft.values.provider == "cloudflare" {
+                                        "Cloudflare TURN"
+                                    } else {
+                                        "Custom servers"
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut draft.values.provider,
+                                            "custom".into(),
+                                            "Custom servers",
+                                        );
+                                        ui.selectable_value(
+                                            &mut draft.values.provider,
+                                            "cloudflare".into(),
+                                            "Cloudflare TURN",
+                                        );
+                                    });
+                            } else if row.label == f::CREDENTIAL_CACHE.label {
+                                ui.put(
+                                    rect,
+                                    egui::Checkbox::new(
+                                        &mut draft.values.cache_credentials,
+                                        row.control_text,
+                                    ),
+                                );
+                            } else {
+                                let (value, secret, multiline): (&mut String, bool, bool) =
+                                    if row.label == f::TURN_SERVERS.label {
+                                        (&mut draft.turn_urls, false, true)
+                                    } else if row.label == f::USERNAME.label {
+                                        (&mut draft.values.custom_username, false, false)
+                                    } else if row.label == f::PASSWORD.label {
+                                        (&mut draft.password, true, false)
+                                    } else if row.label == f::TURN_KEY_ID.label {
+                                        (&mut draft.values.turn_key_id, false, false)
+                                    } else if row.label == f::API_TOKEN.label {
+                                        (&mut draft.token, true, false)
+                                    } else {
+                                        (&mut draft.ttl, false, false)
+                                    };
+                                let edit = if multiline {
+                                    egui::TextEdit::multiline(value)
+                                } else {
+                                    egui::TextEdit::singleline(value).password(secret)
+                                };
+                                ui.put(rect, edit.char_limit(32768));
+                            }
                         });
+                    }
                 });
             } else {
                 ui.scope(|ui| {
@@ -203,35 +281,62 @@ impl Desktop {
             } else {
                 628
             };
-            ui.scope(|ui| {
-                ui.disable();
-                ui.put(
-                    r([420, y, 400, 28]),
-                    egui::Checkbox::new(
-                        &mut false,
-                        if self.ui_state.provider == 0 {
-                            "Forget saved password"
-                        } else {
-                            "Forget saved API token"
-                        },
-                    ),
-                );
+            ui.add_enabled_ui(!draft.values.stun_only, |ui| {
+                let (value, text) = if self.ui_state.provider == 0 {
+                    (&mut draft.forget_password, "Forget saved password")
+                } else {
+                    (&mut draft.forget_token, "Forget saved API token")
+                };
+                ui.put(r([420, y, 400, 28]), egui::Checkbox::new(value, text));
             });
         }
         label(
             ui,
             r([0, footer, 820, 64]),
-            "N/A",
+            if self.ui_state.tab == 0 {
+                crate::network_settings::NOTICE
+            } else {
+                ""
+            },
             13.,
             color(app_style::SETTINGS_MUTED),
         );
         label(
             ui,
             r([0, footer + 78, 820, 40]),
-            "N/A",
+            &self.ui_state.feedback,
             16.,
             color(app_style::SETTINGS_TEXT),
         );
+        if save {
+            let mut draft = self
+                .ui_state
+                .network
+                .take()
+                .expect("network form initialized");
+            draft.values.bud = self.transport == connection::Mode::Bud;
+            if self.ui_state.prefer_hevc {
+                crate::connection_settings::VideoFormat::Hevc8
+            } else {
+                crate::connection_settings::VideoFormat::H264
+            }
+            .apply(&mut draft.values);
+            let settings = self.settings.clone();
+            let context = ui.ctx().clone();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            // One short-lived storage operation, never a media/render worker.
+            // Secret portal requests can block for desktop approval.
+            match std::thread::Builder::new()
+                .name("settings-save".into())
+                .spawn(move || {
+                    let result = draft.save(&settings).map_err(|error| error.to_string());
+                    let _ = sender.send((draft, result));
+                    context.request_repaint();
+                }) {
+                Ok(_) => self.ui_state.saving = Some(receiver),
+                Err(_) => self.ui_state.feedback = "Could not start settings worker.".into(),
+            }
+        }
     }
     pub(super) fn menu_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("native-menu")

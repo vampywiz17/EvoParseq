@@ -92,6 +92,14 @@ fn open(input: &[u8], key: &[u8; 32]) -> Result<Vec<u8>> {
     Ok(plain.to_vec())
 }
 pub fn protect(input: &[u8], encrypt: bool) -> Result<Vec<u8>> {
+    #[cfg(test)]
+    if TEST_STORAGE.with(|active| active.get()) {
+        return if encrypt {
+            seal(input, &[7; 32])
+        } else {
+            open(input, &[7; 32])
+        };
+    }
     // Called only on the existing account/settings worker, never the UI thread.
     if !encrypt && !input.starts_with(MAGIC) {
         bail!("Saved secret belongs to another platform or protection format");
@@ -109,6 +117,20 @@ pub fn protect(input: &[u8], encrypt: bool) -> Result<Vec<u8>> {
     } else {
         open(input, key)
     }
+}
+// Isolated fixture key, never installed in the production portal cache.
+#[cfg(test)]
+thread_local! { static TEST_STORAGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+#[cfg(test)]
+pub(crate) fn fixture<T>(run: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_STORAGE.with(|active| active.set(self.0));
+        }
+    }
+    let _reset = Reset(TEST_STORAGE.with(|active| active.replace(true)));
+    run()
 }
 #[cfg(test)]
 mod tests {

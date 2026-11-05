@@ -44,7 +44,7 @@ modules:
       - >-
         cargo test --manifest-path linux/Cargo.toml --bin evoparseq-linux stats --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
       - >-
-        for filter in session_preferences host_video host_displays frame_timing input_handoff; do cargo test --manifest-path linux/Cargo.toml --bin evoparseq-linux "$filter" --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release || exit; done
+        for filter in network_settings connection_settings::tests::credential_request connection_settings::tests::credential_service session_preferences host_video host_displays frame_timing input_handoff; do cargo test --manifest-path linux/Cargo.toml --bin evoparseq-linux "$filter" --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release || exit; done
       - >-
         cargo test --manifest-path linux/Cargo.toml --test video_contract --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
       - >-
