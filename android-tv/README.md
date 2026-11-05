@@ -1,6 +1,6 @@
 # EvoParseq for Android TV
 
-Development branch: `dev` (0.9.6-dev.1). First live device: Xiaomi TV Box S
+Android preview: **0.9.6-dev.2** on `dev` and `codex/linux-flatpak`. First live device: Xiaomi TV Box S
 (3rd Gen) EU, Android 14 (32-bit ARM userspace). Google TV / Android TV interface,
 D-pad navigation, two-factor sign-in and shared Rust account/session logic.
 
@@ -103,16 +103,19 @@ input backends. No decoded-frame conversion/copy layer is added to Windows.
 ## Build / install
 
 The `EvoParseq Android TV preview` workflow runs common Rust tests/Clippy,
-ARM64/ARMv7 builds and Clippy, and Android assemble/lint. It publishes a debug-signed
-side-load APK, not a Play Store release. Each CI build can use a different debug
-certificate: uninstall an older preview if Android rejects the update signature.
+ARM64/ARMv7 builds and Clippy, and Android release assemble/lint. It produces a
+side-load APK signed with the persistent distribution key, not a Play Store
+release. Older debug-signed previews require the one-time migration described
+under In-app updates below.
 
 Prerequisites: JDK17, Gradle8.13, SDK36/build-tools36.0.0, NDK28.2.13676358,
 Rust and cargo-ndk4.1.2. See `.github/workflows/android-tv.yml` for the exact
 per-ABI Opus CMake toolchain and build commands. No local signing keys or
 `local.properties` belong in git.
 
-APK: `android-tv/app/build/outputs/apk/debug/app-debug.apk`. Both ARM64 and ARMv7
+CI APK: `EvoParseq-TV.apk` (from `app/build/outputs/apk/release/app-release.apk`).
+Local `assembleDebug` builds remain debug-signed and cannot replace the signed
+distribution build. Both ARM64 and ARMv7
 native libraries and Opus are included; no extra installation/root is required.
 
 References: [TV design](https://developer.android.com/design/ui/tv),

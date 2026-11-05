@@ -168,26 +168,8 @@ pub fn download(candidate: &Candidate, destination: &Path) -> Result<()> {
         if let Some(size) = response.content_length() {
             ensure!(size == candidate.size, "APK size changed");
         }
-        let mut reader = response.take(candidate.size + 1);
         let mut file = std::fs::File::create(destination)?;
-        let mut digest = Sha256::new();
-        let mut count = 0;
-        let mut buffer = [0u8; 65536];
-        loop {
-            let n = reader.read(&mut buffer)?;
-            if n == 0 {
-                break;
-            }
-            count += n as u64;
-            ensure!(count <= candidate.size, "APK exceeds release size");
-            digest.update(&buffer[..n]);
-            file.write_all(&buffer[..n])?;
-        }
-        ensure!(count == candidate.size, "Truncated APK download");
-        let actual = format!("{:x}", digest.finalize());
-        if !actual.eq_ignore_ascii_case(hash(&candidate.digest)?) {
-            bail!("APK integrity verification failed");
-        }
+        copy_verified(response, &mut file, candidate)?;
         file.sync_all()?;
         Ok(())
     })();
@@ -196,11 +178,53 @@ pub fn download(candidate: &Candidate, destination: &Path) -> Result<()> {
     }
     result
 }
+fn copy_verified(reader: impl Read, writer: &mut impl Write, candidate: &Candidate) -> Result<()> {
+    let mut reader = reader.take(candidate.size + 1);
+    let mut digest = Sha256::new();
+    let mut count = 0;
+    let mut buffer = [0u8; 65536];
+    loop {
+        let n = reader.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        count += n as u64;
+        ensure!(count <= candidate.size, "APK exceeds release size");
+        digest.update(&buffer[..n]);
+        writer.write_all(&buffer[..n])?;
+    }
+    ensure!(count == candidate.size, "Truncated APK download");
+    let actual = format!("{:x}", digest.finalize());
+    if !actual.eq_ignore_ascii_case(hash(&candidate.digest)?) {
+        bail!("APK integrity verification failed");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     fn release(tag: &str, pre: bool) -> serde_json::Value {
         serde_json::json!({"tag_name":tag,"draft":false,"prerelease":pre,"body":"Changes","assets":[{"name":"EvoParseq-TV.apk","size":12,"digest":format!("sha256:{}","ab".repeat(32)),"browser_download_url":format!("{REPO}/releases/download/{tag}/EvoParseq-TV.apk")} ]})
+    }
+    #[test]
+    fn apk_download_requires_exact_length_and_digest() {
+        let bytes = b"signed APK fixture";
+        let candidate = Candidate {
+            version: "v0.9.6".into(),
+            notes: String::new(),
+            url: String::new(),
+            size: bytes.len() as u64,
+            digest: format!("sha256:{:x}", Sha256::digest(bytes)),
+        };
+        let mut output = Vec::new();
+        copy_verified(&bytes[..], &mut output, &candidate).unwrap();
+        assert_eq!(output, bytes);
+        assert!(copy_verified(&bytes[..bytes.len() - 1], &mut Vec::new(), &candidate).is_err());
+        assert!(copy_verified(&[0u8; 64][..], &mut Vec::new(), &candidate).is_err());
+        let mut wrong = candidate.clone();
+        wrong.digest = format!("sha256:{}", "00".repeat(32));
+        assert!(copy_verified(&bytes[..], &mut Vec::new(), &wrong).is_err());
     }
     #[test]
     fn apk_channels_and_versions_are_ordered() {

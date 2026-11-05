@@ -355,7 +355,7 @@ private fun UpdateSettings(model: TvModel) {
         verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Updates", style = MaterialTheme.typography.headlineSmall)
         Text("Installed: ${model.installedVersion}")
-        Button(onClick = { prerelease = !prerelease }, enabled = !model.busy) {
+        Button(onClick = { prerelease = !prerelease; model.checkUpdates(prerelease) }, enabled = !model.busy) {
             Text(if (prerelease) "Release channel: Include prereleases" else "Release channel: Stable")
         }
         Button(onClick = { model.checkUpdates(prerelease) }, enabled = !model.busy) {
