@@ -74,6 +74,8 @@ jobs:
           ANDROID_TV_KEYSTORE: ${{ runner.temp }}/evoparseq-tv.p12
           ANDROID_TV_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_TV_KEYSTORE_PASSWORD }}
         run: gradle --no-daemon assembleRelease lintRelease
+      - name: Verify signed APK
+        run: '"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs android-tv/app/build/outputs/apk/release/app-release.apk'
       - name: Remove temporary signing key
         if: always()
         run: rm -f "$RUNNER_TEMP/evoparseq-tv.p12"

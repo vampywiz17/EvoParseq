@@ -69,8 +69,9 @@ internal object AppUpdater {
     }
     fun install(activity: Activity, id: Int) {
         val intent = Intent(activity, UpdateInstallReceiver::class.java).setAction("${activity.packageName}.UPDATE_RESULT").putExtra("session", id)
+        val mutable = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
         val callback = PendingIntent.getBroadcast(activity, id, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
+            PendingIntent.FLAG_UPDATE_CURRENT or mutable)
         activity.getSharedPreferences("app-updates", Context.MODE_PRIVATE).edit().remove("result").apply()
         activity.packageManager.packageInstaller.openSession(id).use { it.commit(callback.intentSender) }
         activity.getSharedPreferences("app-updates", Context.MODE_PRIVATE).edit().remove("prepared").apply()

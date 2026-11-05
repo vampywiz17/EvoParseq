@@ -350,7 +350,7 @@ private fun CapabilityBlock(text: String) {
 @Composable
 private fun UpdateSettings(model: TvModel) {
     var prerelease by rememberSaveable { mutableStateOf(false) }
-    val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+    val activity = androidx.activity.compose.LocalActivity.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Updates", style = MaterialTheme.typography.headlineSmall)
