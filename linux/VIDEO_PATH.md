@@ -1,6 +1,6 @@
 # Linux H.264 / HEVC 8-bit video path audit
 
-Source review, 2026-11-04. Applies to the Linux Flatpak playback preview only.
+Source review, updated 2026-11-05. Applies to the Linux Flatpak playback preview only.
 This establishes application behavior, not driver/compositor/scanout behavior.
 
 ## Decoded images
@@ -276,3 +276,19 @@ uses rotated aspect-fit extents. It adds no decoded-image copy or render pass.
 The Linux-only egui-wgpu patch can reconfigure the existing swapchain before
 acquiring its next image when a new connection selects its latency preference.
 A requested frame-latency limit is not proof of actual queue depth or scanout.
+
+## Cross-vendor eligibility review (0.1.17)
+
+No GPU vendor ID selects or enables a decoder path. Startup, session creation
+and the diagnostic probe now share the original-surface requirements and format
+query. The probe includes driver identity, DPB capacity/modes and combined
+sample/decode/DPB NV12 support. Startup rejects unsupported H.264 adapters before
+creating the device, so an incapable adapter does not hide a later eligible one.
+`--video-adapter <name>` constrains the startup candidates for multi-GPU tests.
+
+The current allocation is separate per-reference, coincident DPB/output. Layered
+DPB-only and distinct-only output are not implemented. These limitations can
+exclude AMD or NVIDIA drivers; Vulkan Video extension presence alone is not proof
+of compatibility. They are reported explicitly, not hidden behind a copy path.
+No per-picture work, synchronization, GPU copies, render passes or driver-specific
+media fallback was added. Physical AMD/NVIDIA playback remains unverified.

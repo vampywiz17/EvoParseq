@@ -2,6 +2,10 @@
 pub const REPOSITORY: &str = "https://github.com/vampywiz17/EvoParseq";
 pub const TITLE: &str = "About EvoParseq";
 pub const HEADING: &str = "EvoParseq";
+pub const UPDATES_TITLE: &str = "EvoParseq - Updates";
+pub const UPDATES_HEADING: &str = "Updates";
+pub const CHECK_AGAIN: &str = "Check again";
+pub const UPDATES_SIZE: [f32; 2] = [740., 720.];
 pub const PROJECT: &str = "Project page";
 pub const CLOSE: &str = "Close";
 pub const SIZE: [f32; 2] = [740., 640.];

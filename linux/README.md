@@ -1,6 +1,6 @@
 # EvoParseq Linux Flatpak preview
 
-Current preview: **0.1.16**, developed on `codex/linux-flatpak`. This is an
+Current preview: **0.1.17**, developed on `codex/linux-flatpak`. This is an
 experimental Linux client for unmodified Parsec hosts, not a stable release.
 Windows and Android TV feature availability differs; see the [root README](../README.md).
 
@@ -27,10 +27,10 @@ single host display is supported; HID mouse pins the verified primary output.
 
 Download the `EvoParseq-Linux-Flatpak` artifact from a successful
 [Linux CI run](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Acodex%2Flinux-flatpak),
-then extract `EvoParseq-Linux.flatpak` from the artifact ZIP.
+then extract `EvoParseq-Linux-v0.1.17-x86_64.flatpak` from the artifact ZIP.
 
 ```sh
-flatpak install --user --reinstall EvoParseq-Linux.flatpak
+flatpak install --user --reinstall EvoParseq-Linux-v0.1.17-x86_64.flatpak
 flatpak run io.github.vampywiz17.EvoParseq
 ```
 
@@ -67,7 +67,7 @@ and mouse mapping centered on resize.
 Compositor decorations are used when available; winit's Adwaita decorations are
 the Wayland fallback. The package supplies host cursor-theme paths and bundled
 Adwaita cursors for systems without a usable cursor theme/cursor-shape protocol.
-Connection stats uses its own OS-decorated, resizable window; its events are not
+Connection stats uses its own OS-decorated, fixed-size window; its events are not
 forwarded to the host.
 
 Click the video to activate normal remote mouse/keyboard input.
@@ -80,16 +80,16 @@ initial drag position.
 
 Physical key events preserve ISO/numpad keys and left/right modifiers. The
 host keyboard layout and IME handle them; local IME/text payloads are not sent.
-System/compositor shortcuts stay local. Clipboard shortcuts operate on the host
-clipboard; they do not synchronize the local clipboard. No HID device or extra
-Flatpak device permission is used for input.
+System/compositor shortcuts stay local. Focused text clipboard synchronization and opt-in BUD HID reuse the shared Rust
+policy. Controller access uses Flatpak's scoped input permission; no broad device
+access is requested.
 
 ## Overlay and Connection stats
 
 The Windows-style translucent draggable session badge opens the shared panel.
 Local panel clicks/drags release remote input and are not forwarded. The stream
 menu contains Settings, Connection stats and Help; Settings restores a hidden
-session badge. Unintegrated Help actions remain disabled.
+session badge. Help opens native About and Updates windows.
 
 The overlay binds host display selection/Refresh, resolution, bandwidth, FPS,
 frame pacing and Apply. Shared validation preserves untouched host streams,
@@ -97,8 +97,9 @@ and confirmation checks subsequent host replies. Command failures are shown
 without disconnecting an otherwise working stream. Fullscreen, Settings,
 Disconnect, Close, Hide button and local PipeWire mute/volume are connected.
 Ctrl+Alt+Del is available only for a host reporting Windows and still requires
-host authorization/service support. Orientation and immersive-mode selectors
-remain disabled.
+host authorization/service support. Orientation and supported immersive mouse/
+keyboard modes are connected; keyboard shortcut inhibition requires compositor
+support.
 
 Preview **0.1.13** fixes settings/display replies containing the stock host's
 terminal NUL byte. It matches the Windows adapter and prevents valid replies
@@ -156,7 +157,8 @@ PipeWire uses the shared Opus/audio buffering core. Local volume/mute commands
 run on the existing PipeWire main loop through public stream controls, without
 adding application PCM gain processing to the audio callback. A narrow helper
 supplies the required C variadic terminator omitted by the pinned Rust wrapper.
-Automatic reopening after audio-device failures is not yet integrated on Linux.
+Output and daemon failures reopen the stream on the existing worker using the
+shared bounded recovery policy, preserving mute/volume.
 
 ## Settings and protected sign-in
 
@@ -235,8 +237,9 @@ Main10, 4:4:4, range extensions, multilayer coding and VPS HRD parameters are
 explicitly rejected. Optional non-decoding SPS VUI metadata is not supplied to
 the Vulkan session; the shared parser's range/crop data still drives presentation.
 Offline fixtures include synthetic streaming and NVIDIA low-latency sequences;
-physical HEVC playback and sustained performance still require the TV/laptop
-owner's hardware validation. The previous HD 520 live result was H.264.
+H.264 and HEVC 8-bit playback have been reported working on the maintainer's
+HD 520 laptop. Other devices and sustained performance still require live
+validation.
 
 The Vulkan contracts are documented by Khronos under
 [H.265 decode](https://docs.vulkan.org/features/latest/features/proposals/VK_KHR_video_decode_h265.html)
@@ -315,3 +318,62 @@ is reachable.
 Automated fixtures validate the common policy and adapter contracts. Live PCM,
 multichannel, HID, clipboard, controller/rumble and compositor behavior still need
 validation on the user's hardware; successful compilation is not hardware proof.
+
+## Information and GitHub updates (0.1.17)
+
+Help → About shares Windows' content, fonts and layout descriptors, with Linux
+version/platform and installation-specific text. Help → Updates explicitly checks
+GitHub releases (including clearly labelled Linux previews). Only an asset named
+`EvoParseq-Linux-v<major.minor.patch>-x86_64.flatpak` is eligible. The Linux package
+version is compared independently of the Windows/Android release tag. Older,
+wrong-architecture, ambiguous or unverifiable packages are refused.
+
+Downloads are bounded to the GitHub-reported size and SHA-256 digest, over HTTPS
+with restricted GitHub redirects. Verified bundles stay in the app-private cache
+and are passed as read-only file descriptors through XDG OpenURI/OpenFile to the
+system software installer. The user reviews/confirms the installation there and
+restarts EvoParseq afterwards. No host shell escape, broad D-Bus permission,
+silent replacement or automatic restart is used. This verifies the published
+GitHub digest, not an independent publisher signature. A desktop software manager
+capable of handling `.flatpak` bundles and an OpenURI portal backend are required;
+if unavailable, the UI reports the error and retains the verified cached bundle.
+
+CI artifacts alone are not releases. Until a compatible versioned Flatpak is
+attached to a GitHub release, Updates correctly reports no newer Linux package.
+The workflow produces the versioned asset ready for that publication; it does
+not publish a release automatically.
+
+## AMD / NVIDIA test preparation
+
+Selection and eligibility are capability-based, without a vendor allowlist.
+The existing GPU-resident path still requires `SEPARATE_REFERENCE_IMAGES`,
+`DPB_AND_OUTPUT_COINCIDE` and sampleable, mutable NV12 2D optimal-tiling images
+with combined decode-output/DPB/sampling usage. A driver exposing only layered
+DPB or distinct DPB/output is **not supported by this implementation yet**,
+even if it supports Vulkan Video decoding in another application. Unsupported
+paths fail explicitly; no hidden image-copy, software or cross-GPU fallback is
+introduced. The probe now prints the driver, both DPB flags and exact path
+eligibility, rather than treating general decode support as sufficient.
+
+```sh
+flatpak update
+flatpak run io.github.vampywiz17.EvoParseq --probe-video
+flatpak run io.github.vampywiz17.EvoParseq --video-adapter NVIDIA
+flatpak run io.github.vampywiz17.EvoParseq --video-adapter 'AMD Radeon'
+```
+
+`--video-adapter` matches the case-insensitive adapter name, tries only matching
+adapters at startup, and never silently substitutes another vendor for playback.
+It is a startup test selection, not live GPU switching. Use the exact name from
+the probe if a broad substring matches several devices.
+
+AMD uses the runtime's compatible Vulkan driver (normally Mesa RADV); NVIDIA
+requires a supported host driver and the Flatpak graphics extension matching
+that host driver. Do not bundle or force a different proprietary driver version.
+The Intel-specific `ANV_DEBUG` setting does not select a GPU or enable video on
+AMD/NVIDIA. Test H.264 first, then HEVC Main 8-bit, over BUD and WebRTC; include
+window resizing, fullscreen, focus return and reconnect. AMD/NVIDIA physical
+playback has **not** been validated by this change.
+
+See the [branch cleanup review](AUDIT.md) for retained tests/dependencies and
+platform-boundary checks.

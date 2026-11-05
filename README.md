@@ -13,7 +13,7 @@ requires no browser, WebView or helper executable.
 Parsec, Unity or lowlat.** A Parsec account and a compatible host are required.
 
 **This is the Linux Flatpak development branch (`codex/linux-flatpak`).**
-The current Linux preview is **0.1.16**, alongside the existing Windows and
+The current Linux preview is **0.1.17**, alongside the existing Windows and
 Android TV clients. Linux support is experimental and is not a stable release.
 Download `EvoParseq-Linux-Flatpak` from a successful
 [Linux Flatpak CI run](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Acodex%2Flinux-flatpak).
@@ -27,7 +27,7 @@ numbers are separate from those releases.
 - **Wayland + Vulkan:** egui desktop UI follows the Windows client's shared
   wording, logical dimensions and layout, with native desktop window decorations.
   Login/computer picker and Settings have fixed sizes; the stream is resizable
-  and uses centered aspect fitting. Connection stats is a separate native window.
+  and uses centered aspect fitting. Connection stats is a separate fixed-size native window.
 - **Shared Rust core:** account/2FA, discovery, session preferences, settings,
   WebRTC/BUD, media ingress, normal input and diagnostic models are reused.
   Linux adapters provide Vulkan Video/Vulkan, PipeWire, Wayland input and
@@ -46,6 +46,9 @@ numbers are separate from those releases.
   in a 2-by-2 layout. CPU/RSS are sampled at most once per second and only while
   Connection stats is open. No GPU utilization sampler or extra render pass is
   introduced; unavailable measurements remain explicitly unavailable.
+- **Updates:** Help → About and GitHub Flatpak checks; verified Linux packages open
+  in the system installer for user confirmation. CI artifacts must first be
+  published as versioned release assets to be discoverable.
 - **Network:** shared Windows STUN/custom TURN/Cloudflare configuration,
   direct-only and Force TURN for WebRTC and BUD; protected relay secrets and
   optional in-memory Cloudflare credentials. Windows-only TCP/TLS QoS stays disabled.

@@ -46,11 +46,9 @@ jobs:
           test -s "$RUNNER_TEMP/flatpak-build/files/share/icons/Adwaita/cursors/ew-resize"
           flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo "$RUNNER_TEMP/flatpak-repo" "$RUNNER_TEMP/EvoParseq-Linux.flatpak" io.github.vampywiz17.EvoParseq
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' linux/Cargo.toml | head -n1)
-          cp "$RUNNER_TEMP/EvoParseq-Linux.flatpak" "$RUNNER_TEMP/EvoParseq-Linux-v${version}-x86_64.flatpak"
+          mv "$RUNNER_TEMP/EvoParseq-Linux.flatpak" "$RUNNER_TEMP/EvoParseq-Linux-v${version}-x86_64.flatpak"
       - uses: actions/upload-artifact@v4
         with:
           name: EvoParseq-Linux-Flatpak
-          path: |
-            ${{ runner.temp }}/EvoParseq-Linux.flatpak
-            ${{ runner.temp }}/EvoParseq-Linux-v*-x86_64.flatpak
+          path: ${{ runner.temp }}/EvoParseq-Linux-v*-x86_64.flatpak
           if-no-files-found: error

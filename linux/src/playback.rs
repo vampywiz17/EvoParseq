@@ -313,6 +313,7 @@ impl Playback {
     pub fn decode_pending(&self, mut decode: impl FnMut(&[u8]) -> Result<()>) -> Result<usize> {
         self.decode_pending_codec(|bytes, _| decode(bytes))
     }
+    #[cfg(test)]
     pub fn decode_pending_codec(
         &self,
         mut decode: impl FnMut(&[u8], crate::video_stream::Codec) -> Result<()>,

@@ -43,6 +43,7 @@ impl State {
         }
     }
     fn check(&mut self, ctx: &egui::Context) {
+        self.candidate = None;
         self.message = "Checking GitHub for a newer Linux Flatpak...".into();
         self.run(ctx, || {
             Ok(Outcome::Checked(release_flatpak::check(env!(
@@ -142,6 +143,110 @@ fn install(candidate: release_flatpak::Candidate) -> Result<Outcome> {
     // Keep the verified file: the system installer may read it asynchronously.
     // No host shell, D-Bus escape permission, silent replacement or restart.
 }
+impl State {
+    fn contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        root: &egui::Context,
+        mode: Mode,
+        logo: &egui::TextureHandle,
+    ) {
+        use crate::launcher::{color, label, rect_at};
+        ui.style_mut().override_font_id = Some(egui::FontId::proportional(16.));
+        let size = ui.max_rect().size();
+        let rects = about::rectangles(size.x as i32, size.y as i32);
+        let origin = ui.max_rect().min;
+        let r = |i: usize| rect_at(origin, rects[i]);
+        let migration = "Linux Flatpak updates use the desktop software installer. Settings and protected sign-in data stay in this application's private storage. A GitHub preview is identified explicitly. Close and restart EvoParseq after installation.";
+        let info = about::content(env!("CARGO_PKG_VERSION"), "Linux x86_64", "", migration);
+        let (version, status, notes) = if mode == Mode::About {
+            (info.version, info.status, info.notes.replace("\r\n", "\n"))
+        } else {
+            let available = self
+                .candidate
+                .as_ref()
+                .map(|c| {
+                    format!(
+                        "\nAvailable: {} ({})",
+                        c.version,
+                        if c.prerelease { "preview" } else { "stable" }
+                    )
+                })
+                .unwrap_or_default();
+            (
+                format!("Installed: v{}{available}", env!("CARGO_PKG_VERSION")),
+                self.message.clone(),
+                self.candidate
+                    .as_ref()
+                    .map(|c| format!("{}\n\n{migration}", c.notes))
+                    .unwrap_or_else(|| migration.into()),
+            )
+        };
+        ui.put(r(0), egui::Image::new((logo.id(), egui::vec2(40., 40.))));
+        label(
+            ui,
+            r(1),
+            if mode == Mode::About {
+                about::HEADING
+            } else {
+                about::UPDATES_HEADING
+            },
+            32.,
+            color(crate::app_style::TEXT),
+        );
+        label(
+            ui,
+            r(2),
+            &version.replace("\r\n", "\n"),
+            16.,
+            color(crate::app_style::TEXT),
+        );
+        label(ui, r(3), &status, 16., color(crate::app_style::TEXT));
+        let notes_rect = r(4);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(notes_rect), |ui| {
+            ui.set_clip_rect(notes_rect);
+            egui::ScrollArea::vertical()
+                .id_salt("information-notes")
+                .show(ui, |ui| {
+                    ui.add(egui::Label::new(&notes).selectable(true).wrap());
+                });
+        });
+        let check = r(5);
+        let download = r(6);
+        let close = r(7);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(check), |ui| {
+            let button = egui::Button::new(if mode == Mode::About {
+                about::PROJECT
+            } else {
+                about::CHECK_AGAIN
+            })
+            .min_size(check.size());
+            if ui.add_enabled(self.pending.is_none(), button).clicked() {
+                if mode == Mode::About {
+                    self.run(root, project_page);
+                } else {
+                    self.check(root);
+                }
+            }
+        });
+        if mode == Mode::Updates {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(download), |ui| {
+                let button = egui::Button::new("Install Flatpak").min_size(download.size());
+                if ui
+                    .add_enabled(self.pending.is_none() && self.candidate.is_some(), button)
+                    .clicked()
+                {
+                    let candidate = self.candidate.clone().unwrap();
+                    self.message = "Downloading and verifying the Linux Flatpak...".into();
+                    self.run(root, move || install(candidate));
+                }
+            });
+        }
+        if ui.put(close, egui::Button::new(about::CLOSE)).clicked() {
+            self.mode = None;
+        }
+    }
+}
 impl Desktop {
     pub(super) fn information(&mut self, ctx: &egui::Context) {
         self.ui_state.information.receive();
@@ -151,48 +256,40 @@ impl Desktop {
         let title = if mode == Mode::About {
             about::TITLE
         } else {
-            "EvoParseq - Updates"
+            about::UPDATES_TITLE
         };
         let size = if mode == Mode::About {
             about::SIZE
         } else {
-            [740., 720.]
+            about::UPDATES_SIZE
         };
-        let logo = self.logo.clone();
-        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("information-native"),egui::ViewportBuilder::default().with_title(title).with_decorations(true).with_inner_size(size).with_min_inner_size(size).with_max_inner_size(size).with_resizable(false).with_maximize_button(false),|child,_|{
-            if child.input(|i|i.viewport().close_requested()) {self.ui_state.information.mode=None;return;}
-            egui::CentralPanel::default().frame(egui::Frame::new().fill(crate::launcher::color(crate::app_style::BACKGROUND))).show(child,|ui|{
-                use crate::launcher::{label,rect_at,color};
-                ui.style_mut().override_font_id=Some(egui::FontId::proportional(16.));
-                let state=&mut self.ui_state.information;
-                let size=ui.max_rect().size();
-                let rects=about::rectangles(size.x as i32,size.y as i32);
-                let origin=ui.max_rect().min;
-                let r=|i:usize|rect_at(origin,rects[i]);
-                let migration="Linux Flatpak updates use the desktop software installer. Settings and protected sign-in data stay in this application's private storage. A GitHub preview is identified explicitly. Close and restart EvoParseq after installation.";
-                let info=about::content(env!("CARGO_PKG_VERSION"),"Linux x86_64", "",migration);
-                let (version,status,mut notes)=if mode==Mode::About {(info.version,info.status,info.notes.replace("\r\n","\n"))} else {
-                    let available=state.candidate.as_ref().map(|c|format!("\nAvailable: {} ({})",c.version,if c.prerelease {"preview"} else {"stable"})).unwrap_or_default();
-                    (format!("Installed: v{}{available}",env!("CARGO_PKG_VERSION")),state.message.clone(),state.candidate.as_ref().map(|c|format!("{}\n\n{migration}",c.notes)).unwrap_or_else(||migration.into()))
-                };
-                ui.put(r(0),egui::Image::new((logo.id(),egui::vec2(40.,40.))));
-                label(ui,r(1),if mode==Mode::About {about::HEADING} else {"Updates"},32.,color(crate::app_style::TEXT));
-                label(ui,r(2),&version.replace("\r\n","\n"),16.,color(crate::app_style::TEXT));
-                label(ui,r(3),&status,16.,color(crate::app_style::TEXT));
-                ui.put(r(4),egui::TextEdit::multiline(&mut notes).font(egui::TextStyle::Body).interactive(false));
-                let check=r(5);let download=r(6);let close=r(7);
-                if ui.put(check,egui::Button::new(if mode==Mode::About {about::PROJECT} else {"Check again"})).clicked() && state.pending.is_none() {
-                    if mode==Mode::About {state.run(ctx,project_page);} else {state.check(ctx);}
+        let builder = egui::ViewportBuilder::default()
+            .with_title(title)
+            .with_decorations(true)
+            .with_inner_size(size)
+            .with_min_inner_size(size)
+            .with_max_inner_size(size)
+            .with_resizable(false)
+            .with_maximize_button(false);
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("information-native"),
+            builder,
+            |child, _| {
+                if child.input(|i| i.viewport().close_requested()) {
+                    self.ui_state.information.mode = None;
+                    return;
                 }
-                if mode==Mode::Updates {
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(download),|ui|{
-                        if ui.add_enabled(state.pending.is_none() && state.candidate.is_some(),egui::Button::new("Install Flatpak").min_size(download.size())).clicked() {
-                            let candidate=state.candidate.clone().unwrap();state.message="Downloading and verifying the Linux Flatpak...".into();state.run(ctx,move||install(candidate));
-                        }
+                egui::CentralPanel::default()
+                    .frame(
+                        egui::Frame::new()
+                            .fill(crate::launcher::color(crate::app_style::BACKGROUND)),
+                    )
+                    .show(child, |ui| {
+                        self.ui_state
+                            .information
+                            .contents(ui, ctx, mode, &self.logo)
                     });
-                }
-                if ui.put(close,egui::Button::new(about::CLOSE)).clicked() {state.mode=None;}
-            });
-        });
+            },
+        );
     }
 }

@@ -69,14 +69,14 @@ pub enum Mode {
 impl Mode {
     pub fn title(self) -> &'static str {
         match self {
-            Self::About => "About EvoParseq",
-            Self::Updates => "EvoParseq - Updates",
+            Self::About => crate::about::TITLE,
+            Self::Updates => crate::about::UPDATES_TITLE,
         }
     }
     pub fn heading(self) -> &'static str {
         match self {
-            Self::About => "EvoParseq",
-            Self::Updates => "Updates",
+            Self::About => crate::about::HEADING,
+            Self::Updates => crate::about::UPDATES_HEADING,
         }
     }
 }

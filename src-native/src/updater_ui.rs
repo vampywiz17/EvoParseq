@@ -188,7 +188,7 @@ unsafe fn open_page(parent: HWND, pages: Arc<Pages>, mode: Mode) -> HWND {
         if about {
             crate::about::SIZE[1] as i32
         } else {
-            720
+            crate::about::UPDATES_SIZE[1] as i32
         },
         parent,
         null_mut(),
@@ -228,9 +228,16 @@ unsafe fn open_page(parent: HWND, pages: Arc<Pages>, mode: Mode) -> HWND {
     );
     crate::connection_settings_ui::controls::multiline(notes);
     for (id, label) in [
-        (CHECK, if about { "Project page" } else { "Check again" }),
+        (
+            CHECK,
+            if about {
+                crate::about::PROJECT
+            } else {
+                crate::about::CHECK_AGAIN
+            },
+        ),
         (DOWNLOAD, "Download ZIP"),
-        (CLOSE, "Close"),
+        (CLOSE, crate::about::CLOSE),
     ] {
         add(
             hwnd,
