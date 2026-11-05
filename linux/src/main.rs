@@ -360,8 +360,9 @@ impl eframe::App for Desktop {
         if let (Some(playback), Some(decoder)) = (&self.playback, &mut self.decoder) {
             match playback
                 .resume_if_ready(ctx.input(|input| input.focused))
-                .and_then(|_| playback.decode_pending(|bytes| decoder.submit(bytes)))
-            {
+                .and_then(|_| {
+                    playback.decode_pending_codec(|bytes, codec| decoder.submit(bytes, codec))
+                }) {
                 Err(error) => {
                     playback.stop();
                     let message = format!(
@@ -563,7 +564,10 @@ fn main() -> anyhow::Result<()> {
                         },
                         error: settings_error.clone(),
                         show_video: false,
-                        ui_state: Default::default(),
+                        ui_state: desktop_ui::State {
+                            prefer_hevc: saved.prefer_hevc,
+                            ..Default::default()
+                        },
                         badge: Default::default(),
                         fitted_stream: None,
                         launcher_size: None,

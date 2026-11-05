@@ -54,11 +54,13 @@ impl Desktop {
             }
         };
         if let Some(context) = self.video_context.clone() {
+            let hevc = self.settings.view().0.prefer_hevc && context.hevc;
             self.decoder = Some(crate::video_vulkan::Decoder::new(
                 context,
                 self.output_format,
             ));
             let playback = crate::playback::Playback::new(ctx.clone());
+            playback.set_hevc(hevc);
             self.desktop_input.video = None;
             self.badge = Default::default();
             self.badge

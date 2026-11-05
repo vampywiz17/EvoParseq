@@ -86,37 +86,7 @@ impl Tab {
     }
 }
 
-/// Compound choices retain the existing settings schema and transport rules.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum VideoFormat {
-    H264,
-    Hevc8,
-    Hevc10,
-}
-impl VideoFormat {
-    pub const ALL: [Self; 3] = [Self::H264, Self::Hevc8, Self::Hevc10];
-    pub const LABELS: [&'static str; 3] = [
-        "H.264",
-        "H.265 / HEVC (8-bit)",
-        "H.265 / HEVC (10-bit, experimental)",
-    ];
-    pub fn current(s: &Settings) -> Self {
-        if !s.prefer_hevc {
-            Self::H264
-        } else if s.experimental_ten_bit {
-            Self::Hevc10
-        } else {
-            Self::Hevc8
-        }
-    }
-    pub fn apply(self, s: &mut Settings) {
-        s.prefer_hevc = self != Self::H264;
-        // Keep a dormant preference when HEVC is disabled, as older settings do.
-        if self != Self::H264 {
-            s.experimental_ten_bit = self == Self::Hevc10;
-        }
-    }
-}
+pub use crate::connection_settings::VideoFormat;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteMode {
     Automatic,

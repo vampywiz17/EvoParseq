@@ -10,6 +10,7 @@ pub struct Context {
     pub raw: ash::Device,
     pub physical: vk::PhysicalDevice,
     pub decode_family: u32,
+    pub hevc: bool,
     pub decode_status: bool,
     pub decode_queue: vk::Queue,
     pub device: wgpu::Device,
@@ -99,16 +100,32 @@ unsafe fn create_on(instance: &wgpu::Instance, adapter: &wgpu::Adapter) -> Resul
                 .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
         })
         .context("Graphics/compute queue unavailable")? as u32;
-    let decode_family = families
-        .iter()
-        .zip(&operations)
-        .position(|(q, op)| {
-            q.queue_flags.contains(vk::QueueFlags::VIDEO_DECODE_KHR)
-                && op
+    let h264_queue = |index: usize| {
+        families[index]
+            .queue_flags
+            .contains(vk::QueueFlags::VIDEO_DECODE_KHR)
+            && operations[index]
+                .video_codec_operations
+                .contains(vk::VideoCodecOperationFlagsKHR::DECODE_H264)
+    };
+    let decode_family = (0..families.len())
+        .find(|&i| {
+            h264_queue(i)
+                && available(ash::khr::video_decode_h265::NAME)
+                && operations[i]
                     .video_codec_operations
-                    .contains(vk::VideoCodecOperationFlagsKHR::DECODE_H264)
+                    .contains(vk::VideoCodecOperationFlagsKHR::DECODE_H265)
         })
+        .or_else(|| (0..families.len()).find(|&i| h264_queue(i)))
         .context("H.264 decode queue unavailable")? as u32;
+    let hevc = available(ash::khr::video_decode_h265::NAME)
+        && hevc_main_available(raw_instance, physical).unwrap_or(false)
+        && operations[decode_family as usize]
+            .video_codec_operations
+            .contains(vk::VideoCodecOperationFlagsKHR::DECODE_H265);
+    if hevc && !required.contains(&ash::khr::video_decode_h265::NAME) {
+        required.push(ash::khr::video_decode_h265::NAME);
+    }
     let priorities = [1.0];
     let mut queues = vec![
         vk::DeviceQueueCreateInfo::default()
@@ -165,6 +182,7 @@ unsafe fn create_on(instance: &wgpu::Instance, adapter: &wgpu::Adapter) -> Resul
         instance: raw_instance.clone(),
         physical,
         decode_family,
+        hevc,
         decode_status: statuses[decode_family as usize].query_result_status_support != 0,
         decode_queue: unsafe { raw.get_device_queue(decode_family, 0) },
         properties: unsafe { raw_instance.get_physical_device_memory_properties(physical) },
@@ -197,4 +215,71 @@ impl Context {
             .context("Graphics completion timeout")?;
         Ok(())
     }
+}
+
+fn hevc_main_available(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Result<bool> {
+    let entry = unsafe { ash::Entry::load()? };
+    let video = ash::khr::video_queue::Instance::new(&entry, instance);
+    let mut codec = vk::VideoDecodeH265ProfileInfoKHR::default().std_profile_idc(1);
+    let mut usage = crate::video_profile::usage();
+    let profile = vk::VideoProfileInfoKHR::default()
+        .video_codec_operation(vk::VideoCodecOperationFlagsKHR::DECODE_H265)
+        .chroma_subsampling(vk::VideoChromaSubsamplingFlagsKHR::TYPE_420)
+        .luma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
+        .chroma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
+        .push_next(&mut codec)
+        .push_next(&mut usage);
+    let mut codec_caps = vk::VideoDecodeH265CapabilitiesKHR::default();
+    let mut decode = vk::VideoDecodeCapabilitiesKHR::default();
+    let mut caps = vk::VideoCapabilitiesKHR::default()
+        .push_next(&mut codec_caps)
+        .push_next(&mut decode);
+    unsafe {
+        (video.fp().get_physical_device_video_capabilities_khr)(physical, &profile, &mut caps)
+            .result()?;
+    }
+    let eligible = caps.max_dpb_slots >= 2
+        && caps.max_active_reference_pictures >= 1
+        && caps
+            .flags
+            .contains(vk::VideoCapabilityFlagsKHR::SEPARATE_REFERENCE_IMAGES);
+    if !eligible
+        || !decode
+            .flags
+            .contains(vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE)
+    {
+        return Ok(false);
+    }
+    let profiles = [profile];
+    let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
+    let query = vk::PhysicalDeviceVideoFormatInfoKHR::default()
+        .image_usage(
+            vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
+                | vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR
+                | vk::ImageUsageFlags::SAMPLED,
+        )
+        .push_next(&mut list);
+    let mut count = 0;
+    unsafe {
+        (video.fp().get_physical_device_video_format_properties_khr)(
+            physical,
+            &query,
+            &mut count,
+            std::ptr::null_mut(),
+        )
+        .result()?;
+    }
+    let mut formats = vec![vk::VideoFormatPropertiesKHR::default(); count as usize];
+    unsafe {
+        (video.fp().get_physical_device_video_format_properties_khr)(
+            physical,
+            &query,
+            &mut count,
+            formats.as_mut_ptr(),
+        )
+        .result()?;
+    }
+    Ok(formats[..count as usize]
+        .iter()
+        .any(|v| v.format == vk::Format::G8_B8R8_2PLANE_420_UNORM))
 }

@@ -1,5 +1,6 @@
 mod commands;
 mod device;
+mod hevc_parameters;
 mod output;
 mod parameters;
 mod session;
@@ -12,7 +13,9 @@ use std::sync::Arc;
 
 pub struct Decoder {
     context: Arc<Context>,
-    stream: Stream,
+    stream: Option<Stream>,
+    hevc: Option<Box<(lowlat_decode::hevc::Stream, hevc_parameters::Headers)>>,
+    codec: crate::video_stream::Codec,
     session: Option<session::Session>,
     pipeline: Arc<wgpu::RenderPipeline>,
     layout: wgpu::BindGroupLayout,
@@ -121,7 +124,9 @@ impl Decoder {
         });
         Self {
             context,
-            stream: Stream::new(),
+            stream: None,
+            hevc: None,
+            codec: crate::video_stream::Codec::H264,
             session: None,
             pipeline,
             layout,
@@ -144,42 +149,112 @@ impl Decoder {
         }
     }
 
-    pub fn submit(&mut self, bytes: &[u8]) -> Result<()> {
-        let mut read = self
-            .stream
-            .read(bytes)
-            .map_err(|e| anyhow::anyhow!("H.264 parsing: {e:?}"))?;
-        if read == Read::FormatChanged {
-            self.frame = None;
-            self.frames.clear();
-            self.presentation = None;
-            self.session = None;
-            read = self
-                .stream
-                .read(bytes)
-                .map_err(|e| anyhow::anyhow!("H.264 format change: {e:?}"))?;
-        }
-        if read != Read::Picture {
-            return Ok(());
-        }
-        let job = self.stream.job().context("H.264 picture unavailable")?;
+    pub fn submit(&mut self, bytes: &[u8], codec: crate::video_stream::Codec) -> Result<()> {
+        use crate::video_stream::Codec;
         ensure!(
-            job.sps.vui.max_num_reorder_frames.unwrap_or(0) == 0,
-            "This low-latency preview requires an H.264 stream without reordered frames"
+            self.decoded == 0 || self.codec == codec,
+            "Unexpected video codec change"
         );
-        if self.session.is_none() {
-            self.session = Some(session::Session::new(self.context.clone(), &job.sps)?);
-        }
-        self.profile = Some(job.sps.profile_idc);
-        let session = self.session.as_mut().unwrap();
-        session.decode(job, bytes)?;
-        let visible = job.sps.visible();
-        let full_range = job.sps.vui.video_full_range;
-        let crop = job.sps.crop.unwrap_or_default();
-        self.stream
-            .finish()
-            .map_err(|e| anyhow::anyhow!("H.264 reference state: {e:?}"))?;
-        let output = output::latest(&mut self.stream.dpb);
+        self.codec = codec;
+        let (visible, crop, full_range, output) = match codec {
+            Codec::H264 => {
+                let stream = self.stream.get_or_insert_with(Stream::new);
+                let mut read = stream
+                    .read(bytes)
+                    .map_err(|e| anyhow::anyhow!("H.264 parsing: {e:?}"))?;
+                if read == Read::FormatChanged {
+                    self.frame = None;
+                    self.frames.clear();
+                    self.presentation = None;
+                    self.session = None;
+                    read = stream
+                        .read(bytes)
+                        .map_err(|e| anyhow::anyhow!("H.264 format change: {e:?}"))?;
+                }
+                if read != Read::Picture {
+                    return Ok(());
+                }
+                let job = stream.job().context("H.264 picture unavailable")?;
+                ensure!(
+                    job.sps.vui.max_num_reorder_frames.unwrap_or(0) == 0,
+                    "Low-latency H.264 requires no reordered frames"
+                );
+                if self.session.is_none() {
+                    self.session = Some(session::Session::new(self.context.clone(), &job.sps)?);
+                }
+                self.profile = Some(job.sps.profile_idc);
+                self.session.as_mut().unwrap().decode(job, bytes)?;
+                let result = (
+                    job.sps.visible(),
+                    job.sps.crop.unwrap_or_default(),
+                    job.sps.vui.video_full_range,
+                );
+                stream
+                    .finish()
+                    .map_err(|e| anyhow::anyhow!("H.264 reference state: {e:?}"))?;
+                (
+                    result.0,
+                    result.1,
+                    result.2,
+                    output::latest(&mut stream.dpb),
+                )
+            }
+            Codec::Hevc => {
+                let state = self.hevc.get_or_insert_with(|| {
+                    Box::new((
+                        lowlat_decode::hevc::Stream::new(),
+                        hevc_parameters::Headers::default(),
+                    ))
+                });
+                let (stream, headers) = state.as_mut();
+                headers.observe(bytes)?;
+                let mut read = stream
+                    .read(bytes)
+                    .map_err(|e| anyhow::anyhow!("HEVC parsing: {e:?}"))?;
+                if read == lowlat_decode::hevc::Read::FormatChanged {
+                    self.frame = None;
+                    self.frames.clear();
+                    self.presentation = None;
+                    self.session = None;
+                    read = stream
+                        .read(bytes)
+                        .map_err(|e| anyhow::anyhow!("HEVC format change: {e:?}"))?;
+                }
+                if read != lowlat_decode::hevc::Read::Picture {
+                    return Ok(());
+                }
+                let job = stream.job().context("HEVC picture unavailable")?;
+                hevc_parameters::validate(&job.sps)?;
+                if self.session.is_none() {
+                    let (_, header) = headers.active(&job.sps)?;
+                    self.session = Some(session::Session::new_hevc(
+                        self.context.clone(),
+                        &job.sps,
+                        header,
+                    )?);
+                }
+                self.profile = Some(job.sps.profile_idc);
+                self.session
+                    .as_mut()
+                    .unwrap()
+                    .decode_hevc(job, headers, bytes)?;
+                let result = (
+                    job.sps.visible(),
+                    job.sps.conformance_window.unwrap_or_default(),
+                    job.sps.video_full_range,
+                );
+                stream
+                    .finish()
+                    .map_err(|e| anyhow::anyhow!("HEVC reference state: {e:?}"))?;
+                let mut output = None;
+                while let Some(next) = stream.next_output() {
+                    stream.dpb.taken(next.slot);
+                    output = Some(next.slot);
+                }
+                (result.0, result.1, result.2, output)
+            }
+        };
+        let session = self.session.as_ref().unwrap();
         let key = (visible, crop, full_range);
         if self.presentation != Some(key) {
             self.frames.clear();
@@ -280,7 +355,10 @@ impl Decoder {
         report.decoder_initialized = self.session.is_some();
         report.frames_decoded = self.decoded;
         report.frames_presented = self.presented.get();
-        report.decoder = Some("Vulkan Video H.264");
+        report.decoder = Some(match self.codec {
+            crate::video_stream::Codec::H264 => "Vulkan Video H.264",
+            crate::video_stream::Codec::Hevc => "Vulkan Video HEVC",
+        });
         report.renderer = Some("Vulkan / NV12 conversion");
         report.native_decoder_surface = Some("Original Vulkan NV12 decoder image");
         report.hardware_decode = None;
@@ -288,7 +366,7 @@ impl Decoder {
         report.decoded_bit_depth = self.session.as_ref().map(|_| 8);
         report.decoded_chroma = self.session.as_ref().map(|_| "4:2:0");
         report.display_rgb_bit_depth = self.output_depth;
-        report.codec = Some(crate::video_stream::Codec::H264);
+        report.codec = Some(self.codec);
         report.adapter = Some(self.context.adapter_name.clone());
         report.presentation_mode = Some("Vulkan / compositor-managed (vsync requested)");
         report.vsr_status = Some("Not enabled on Linux");

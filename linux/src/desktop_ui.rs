@@ -13,6 +13,7 @@ pub struct State {
     pub provider: usize,
     pub stats: bool,
     pub stats_tab: usize,
+    pub prefer_hevc: bool,
 }
 impl Desktop {
     pub(super) fn settings(&mut self, ui: &mut egui::Ui) {
@@ -65,6 +66,12 @@ impl Desktop {
             let bud = self.transport == connection::Mode::Bud;
             match self.settings.update_local(|settings| {
                 settings.bud = bud;
+                if self.ui_state.prefer_hevc {
+                    crate::connection_settings::VideoFormat::Hevc8
+                } else {
+                    crate::connection_settings::VideoFormat::H264
+                }
+                .apply(settings);
                 Ok(())
             }) {
                 Ok(()) => {
@@ -128,6 +135,28 @@ impl Desktop {
                                 connection::Mode::Bud,
                                 s::TRANSPORT_CHOICES[1],
                             );
+                        });
+                });
+            } else if row.label == f::VIDEO_FORMAT.label {
+                use crate::connection_settings::VideoFormat;
+                let supported = self.video_context.as_ref().is_some_and(|c| c.hevc);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    egui::ComboBox::from_id_salt("video-format")
+                        .width(400.)
+                        .selected_text(VideoFormat::LABELS[usize::from(self.ui_state.prefer_hevc)])
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.ui_state.prefer_hevc,
+                                false,
+                                VideoFormat::LABELS[0],
+                            );
+                            ui.add_enabled_ui(supported, |ui| {
+                                ui.selectable_value(
+                                    &mut self.ui_state.prefer_hevc,
+                                    true,
+                                    VideoFormat::LABELS[1],
+                                );
+                            });
                         });
                 });
             } else if row.label == f::TURN_PROVIDER.label {

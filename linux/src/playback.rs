@@ -37,6 +37,7 @@ impl Pending {
 
 pub struct Playback {
     stopped: AtomicBool,
+    hevc: AtomicBool,
     packets: Mutex<Pending>,
     ui: eframe::egui::Context,
     pub(crate) input: crate::input_handoff::Inbox,
@@ -51,6 +52,7 @@ impl Playback {
     pub fn new(ui: eframe::egui::Context) -> Arc<Self> {
         Arc::new(Self {
             stopped: AtomicBool::new(false),
+            hevc: AtomicBool::new(false),
             packets: Mutex::new(Pending::default()),
             ui,
             input: Default::default(),
@@ -60,6 +62,12 @@ impl Playback {
             capture: AtomicBool::new(false),
             cursor_restore: Mutex::new(None),
         })
+    }
+    pub fn set_hevc(&self, enabled: bool) {
+        self.hevc.store(enabled, Ordering::Relaxed);
+    }
+    pub fn hevc(&self) -> bool {
+        self.hevc.load(Ordering::Relaxed)
     }
     pub fn video_snapshot(&self) -> crate::video_output::Snapshot {
         self.packets
@@ -252,7 +260,14 @@ impl Playback {
 
     /// Consume only the initial bounded backlog. Every accepted reference is
     /// decoded; normal presentation afterwards uses the newest output.
+    #[cfg(test)]
     pub fn decode_pending(&self, mut decode: impl FnMut(&[u8]) -> Result<()>) -> Result<usize> {
+        self.decode_pending_codec(|bytes, _| decode(bytes))
+    }
+    pub fn decode_pending_codec(
+        &self,
+        mut decode: impl FnMut(&[u8], crate::video_stream::Codec) -> Result<()>,
+    ) -> Result<usize> {
         let pending = self
             .packets
             .lock()
@@ -288,7 +303,7 @@ impl Playback {
                 (frame, generation)
             };
             let started = Instant::now();
-            let result = decode(&frame.bytes);
+            let result = decode(&frame.bytes, frame.codec);
             {
                 let mut state = self.packets.lock().unwrap_or_else(|e| e.into_inner());
                 state

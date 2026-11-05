@@ -2,6 +2,8 @@
 mod desktop_input;
 #[path = "../../src-native/src/gamepad.rs"]
 mod gamepad;
+#[path = "../src/video_vulkan/hevc_parameters.rs"]
+mod hevc_parameters;
 #[path = "../../src-native/src/input_handoff.rs"]
 mod input_handoff;
 #[path = "../src/video_vulkan/output.rs"]
@@ -457,4 +459,127 @@ fn bud_encoder_rebuild_retires_old_references_and_resumes_with_parameters() {
         .unwrap();
     assert_eq!(count, 1);
     assert!(playback.status().is_none());
+}
+
+#[test]
+fn hevc_main_metadata_and_reference_slots_match_shared_parser() {
+    for fixture in [
+        include_bytes!("data/hevc-40-frames.bin").as_slice(),
+        include_bytes!("data/hevc-nvenc-ll-8-frames.bin").as_slice(),
+    ] {
+        let mut stream = lowlat_decode::hevc::Stream::new();
+        let mut headers = hevc_parameters::Headers::default();
+        let mut pos = 0;
+        let mut pictures = 0;
+        while pos < fixture.len() {
+            let size = u32::from_le_bytes(fixture[pos..pos + 4].try_into().unwrap()) as usize;
+            pos += 4;
+            let bytes = &fixture[pos..pos + size];
+            pos += size;
+            headers.observe(bytes).unwrap();
+            assert_eq!(
+                stream.read(bytes).unwrap(),
+                lowlat_decode::hevc::Read::Picture
+            );
+            let job = stream.job().unwrap();
+            hevc_parameters::validate(&job.sps).unwrap();
+            let (v, h) = headers.active(&job.sps).unwrap();
+            let vp = hevc_parameters::profile(&v.header.ptl).unwrap();
+            let sp = hevc_parameters::profile(&h.ptl).unwrap();
+            let vb = hevc_parameters::buffers(&v.header.ordering);
+            let sb = hevc_parameters::buffers(&h.ordering);
+            let lists = hevc_parameters::scaling(&job.sps.scaling);
+            let sets = job.sps.st_rps[..job.sps.num_short_term_ref_pic_sets as usize]
+                .iter()
+                .map(hevc_parameters::rps)
+                .collect::<anyhow::Result<Vec<_>>>()
+                .unwrap();
+            let long = ash::vk::native::StdVideoH265LongTermRefPicsSps {
+                used_by_curr_pic_lt_sps_flag: 0,
+                lt_ref_pic_poc_lsb_sps: job.sps.lt_ref_pic_poc_lsb_sps,
+            };
+            let sps =
+                hevc_parameters::sequence(&job.sps, h, &sp, &sb, &lists, &sets, &long).unwrap();
+            let _vps = hevc_parameters::video(v, &vp, &vb);
+            let pps = hevc_parameters::picture(
+                &job.pps,
+                &job.sps,
+                headers.pps[job.pps.id as usize].unwrap(),
+                &lists,
+            );
+            assert_eq!(sps.bit_depth_luma_minus8, 0);
+            assert_eq!(pps.pps_seq_parameter_set_id, sps.sps_seq_parameter_set_id);
+            let slots: Vec<_> = (0..18).map(|i| Some((17 - i) as u32)).collect();
+            let picture = hevc_parameters::decode_picture(job, &slots).unwrap();
+            assert_eq!(picture.PicOrderCntVal, job.current.poc);
+            use lowlat_decode::hevc::dpb::Set;
+            for (set, actual) in [
+                (Set::StCurrBefore, picture.RefPicSetStCurrBefore),
+                (Set::StCurrAfter, picture.RefPicSetStCurrAfter),
+                (Set::LtCurr, picture.RefPicSetLtCurr),
+            ] {
+                let expected: Vec<_> = job
+                    .references
+                    .as_slice()
+                    .iter()
+                    .flatten()
+                    .filter(|r| r.set == set)
+                    .map(|r| slots[r.slot].unwrap() as u8)
+                    .collect();
+                assert_eq!(&actual[..expected.len()], expected.as_slice());
+                assert!(actual[expected.len()..].iter().all(|v| *v == 255));
+            }
+            for slice in job.slices.as_slice().iter().flatten() {
+                let offset = parameters::slice_offset(bytes, slice.offset).unwrap() as usize;
+                assert_eq!(&bytes[offset..offset + 3], &[0, 0, 1]);
+            }
+            stream.finish().unwrap();
+            while let Some(out) = stream.next_output() {
+                stream.dpb.taken(out.slot);
+            }
+            pictures += 1;
+        }
+        assert!(pictures >= 8);
+    }
+}
+#[test]
+fn hevc_rejects_main10_reordering_and_truncated_parameter_sets() {
+    for fixture in [
+        include_bytes!("data/hevc-main10-first.bin").as_slice(),
+        include_bytes!("data/hevc-reordered-first.bin").as_slice(),
+    ] {
+        let size = u32::from_le_bytes(fixture[..4].try_into().unwrap()) as usize;
+        let bytes = &fixture[4..4 + size];
+        assert!(hevc_parameters::Headers::default().observe(bytes).is_err());
+    }
+    for bytes in [
+        &[0, 0, 1, 64, 1][..],
+        &[0, 0, 1, 66, 1, 0][..],
+        &[0, 0, 1, 68, 1][..],
+    ] {
+        assert!(hevc_parameters::Headers::default().observe(bytes).is_err());
+    }
+}
+#[test]
+fn hevc_packets_keep_their_codec_through_the_existing_queue() {
+    let playback = playback::Playback::new(eframe::egui::Context::default());
+    let fixture = include_bytes!("data/hevc-40-frames.bin");
+    let size = u32::from_le_bytes(fixture[..4].try_into().unwrap()) as usize;
+    let bytes = &fixture[4..4 + size];
+    let mut inspector = video_stream::Inspector::default();
+    inspector.enable_hevc(true);
+    let info = inspector.receive(bytes).unwrap();
+    assert_eq!(info.codec, video_stream::Codec::Hevc);
+    assert!(info.idr && info.parameters);
+    playback.submit_packet(bytes, info).unwrap();
+    assert_eq!(
+        playback
+            .decode_pending_codec(|packet, codec| {
+                assert_eq!(packet, bytes);
+                assert_eq!(codec, video_stream::Codec::Hevc);
+                Ok(())
+            })
+            .unwrap(),
+        1
+    );
 }

@@ -946,7 +946,11 @@ fn worker(
                 && config.ten_bit
                 && crate::video_windows::hevc_ten_bit_available(gpu.as_ref());
         }
-        #[cfg(not(any(windows, target_os = "android")))]
+        #[cfg(not(any(
+            windows,
+            target_os = "android",
+            all(target_os = "linux", feature = "desktop-telemetry")
+        )))]
         {
             config.allow_hevc = false;
         }

@@ -89,7 +89,7 @@ fn run_webrtc(
             version_offset: 0,
             flag_offset: 4,
         },
-        allow_hevc: false,
+        allow_hevc: playback.hevc(),
         ten_bit: false,
         chroma_444: false,
     };
@@ -265,7 +265,7 @@ fn run_bud(
         .unwrap_or_default()
     });
     let mut session = crate::bud_ingress::session(
-        false,
+        playback.hevc(),
         false,
         false,
         false,
@@ -281,7 +281,7 @@ fn run_bud(
     );
     let audio = audio_stream::Pipeline::start_with_budget(Some(100));
     let sender = audio.sender().context("Audio pipeline unavailable")?;
-    let mut ingress = crate::bud_ingress::VideoState::new(false, false, false);
+    let mut ingress = crate::bud_ingress::VideoState::new(playback.hevc(), false, false);
     let mut established = false;
     let mut input = Input::default();
     let mut diagnostics = crate::telemetry::Control::default();
@@ -357,7 +357,7 @@ fn run_bud(
                     audio_bytes: bud.channels[2].bytes,
                     codec: framing.codec,
                     profile: framing.sps_profile_idc,
-                    hevc_advertised: false,
+                    hevc_advertised: playback.hevc(),
                     ..Default::default()
                 };
                 sample.bud = Some(bud);
