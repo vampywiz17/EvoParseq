@@ -1,3 +1,4 @@
+use crate::audio_layout::Layout;
 use crate::audio_stream::{CallbackReader, NativeReceiver};
 use anyhow::{Context, Result};
 use pipewire as pw;
@@ -5,7 +6,38 @@ use pw::spa::{
     self,
     pod::{Object, Pod, Value, serialize::PodSerializer},
 };
-use std::{io::Cursor, thread::JoinHandle};
+use std::{
+    cell::RefCell,
+    io::Cursor,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::JoinHandle,
+};
+#[derive(Clone, Copy)]
+pub struct Config {
+    pub layout: Layout,
+    pub minimum_ms: u32,
+    pub maximum_ms: u32,
+    pub custom: bool,
+}
+impl Config {
+    pub fn new(settings: &crate::connection_settings::Settings, layout: Layout) -> Self {
+        let (minimum_ms, maximum_ms) = if settings.custom_audio_buffer {
+            (settings.audio_min_buffer_ms, settings.audio_max_buffer_ms)
+        } else {
+            (75, 150)
+        };
+        Self {
+            layout,
+            minimum_ms,
+            maximum_ms,
+            custom: settings.custom_audio_buffer,
+        }
+    }
+}
 
 #[derive(Default, Clone)]
 pub struct State {
@@ -14,6 +46,10 @@ pub struct State {
     pub muted: Option<bool>,
     pub volume: Option<f32>,
     pub ready: bool,
+    pub layout: Option<Layout>,
+    pub limits: Option<(u32, u32, bool)>,
+    pub recovering: bool,
+    pub recoveries: u64,
 }
 #[derive(Clone, Copy)]
 pub enum Command {
@@ -24,22 +60,70 @@ pub enum Command {
 pub struct Output {
     stop: pw::channel::Sender<Command>,
     worker: Option<JoinHandle<Result<()>>>,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl Output {
     pub fn start(
         source: &NativeReceiver,
         state: std::sync::Arc<std::sync::Mutex<State>>,
+        config: Config,
     ) -> Result<Self> {
         let reader = source.callback_reader()?;
         let (stop, commands) = pw::channel::channel();
         state.lock().unwrap_or_else(|e| e.into_inner()).commands = Some(stop.clone());
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel = cancelled.clone();
+        let receiver = source.clone();
         let worker = std::thread::Builder::new()
             .name("evoparseq-pipewire".into())
-            .spawn(move || playback(reader, commands, state))?;
+            .spawn(move || {
+                let reader = Rc::new(RefCell::new(reader));
+                let mut commands = Some(commands);
+                let mut recovery = crate::audio_recovery::Recovery::default();
+                while !cancel.load(Ordering::Acquire) {
+                    let result = playback(
+                        reader.clone(),
+                        &mut commands,
+                        state.clone(),
+                        config,
+                        cancel.clone(),
+                    );
+                    if cancel.load(Ordering::Acquire) {
+                        break;
+                    }
+                    receiver.discard_pending();
+                    if !state.lock().unwrap_or_else(|e| e.into_inner()).recovering {
+                        recovery.restored();
+                    }
+                    if recovery.begin() {
+                        crate::event_log::record(
+                            "WARN",
+                            "audio_output_recovery_started",
+                            serde_json::json!({"backend":"PipeWire"}),
+                        );
+                    }
+                    {
+                        let mut report = state.lock().unwrap_or_else(|e| e.into_inner());
+                        report.ready = false;
+                        report.recovering = true;
+                        report.error = Some(
+                            if result.is_err() {
+                                "PipeWire output unavailable; retrying"
+                            } else {
+                                "PipeWire output disconnected; retrying"
+                            }
+                            .into(),
+                        );
+                    }
+                    std::thread::park_timeout(recovery.failed());
+                }
+                Ok(())
+            })?;
         Ok(Self {
             stop,
             worker: Some(worker),
+            cancelled,
         })
     }
 
@@ -47,7 +131,9 @@ impl Output {
         let Some(worker) = self.worker.take() else {
             return Ok(());
         };
+        self.cancelled.store(true, Ordering::Release);
         let _ = self.stop.send(Command::Stop);
+        worker.thread().unpark();
         worker
             .join()
             .map_err(|_| anyhow::anyhow!("PipeWire worker stopped unexpectedly"))?
@@ -61,9 +147,11 @@ impl Drop for Output {
 }
 
 fn playback(
-    reader: CallbackReader,
-    stop: pw::channel::Receiver<Command>,
+    reader: Rc<RefCell<CallbackReader>>,
+    stop: &mut Option<pw::channel::Receiver<Command>>,
     state: std::sync::Arc<std::sync::Mutex<State>>,
+    config: Config,
+    cancel: Arc<AtomicBool>,
 ) -> Result<()> {
     pw::init();
     let mainloop = pw::main_loop::MainLoop::new(None)?;
@@ -71,6 +159,11 @@ fn playback(
     let core = context
         .connect(None)
         .context("Could not connect to PipeWire")?;
+    let quit_core = mainloop.clone();
+    let _core_listener = core
+        .add_listener_local()
+        .error(move |_, _, _, _| quit_core.quit())
+        .register();
     let stream = std::rc::Rc::new(pw::stream::Stream::new(
         &core,
         "EvoParseq",
@@ -83,37 +176,10 @@ fn playback(
     let quit_commands = mainloop.clone();
     let command_stream = stream.clone();
     let command_state = state.clone();
-    let _stop = stop.attach(mainloop.loop_(), move |command| {
-        let result = match command {
-            Command::Stop => {
-                quit_commands.quit();
-                return;
-            }
-            Command::Mute(muted) => set_control(
-                &command_stream,
-                spa::sys::SPA_PROP_mute,
-                &mut [if muted { 1. } else { 0. }],
-            ),
-            Command::Volume(percent) => {
-                let gain = f32::from(percent.min(100)) / 100.;
-                set_control(
-                    &command_stream,
-                    spa::sys::SPA_PROP_channelVolumes,
-                    &mut [gain, gain],
-                )
-            }
-        };
-        if result.is_err() {
-            command_state
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .error = Some("PipeWire did not accept the audio control".into());
-        }
-    });
     let quit = mainloop.clone();
     let output_state = state.clone();
     let _listener = stream
-        .add_local_listener_with_user_data(reader)
+        .add_local_listener_with_user_data(())
         .control_info(move |_, _, id, control| {
             let Some(control) = (unsafe { control.as_ref() }) else {
                 return;
@@ -135,8 +201,18 @@ fn playback(
             }
         })
         .state_changed(move |_, _, _, stream_state| {
-            state.lock().unwrap_or_else(|e| e.into_inner()).ready =
-                matches!(stream_state, pw::stream::StreamState::Streaming);
+            let mut output = state.lock().unwrap_or_else(|e| e.into_inner());
+            output.ready = matches!(stream_state, pw::stream::StreamState::Streaming);
+            if output.ready {
+                if output.recovering {
+                    output.recoveries += 1;
+                }
+                output.recovering = false;
+                output.error = None;
+                output.layout = Some(config.layout);
+                output.limits = Some((config.minimum_ms, config.maximum_ms, config.custom));
+            }
+            drop(output);
             let state = stream_state;
             if matches!(
                 state,
@@ -145,7 +221,8 @@ fn playback(
                 quit.quit();
             }
         })
-        .process(|stream, reader| {
+        .process(move |stream, _| {
+            let stride = usize::from(config.layout.channels) * 2;
             let Some(mut buffer) = stream.dequeue_buffer() else {
                 return;
             };
@@ -154,26 +231,30 @@ fn playback(
                 return;
             };
             let size = data.data().map_or(0, |bytes| {
-                let capacity = bytes.len() / 4;
+                let capacity = bytes.len() / stride;
                 let frames = if requested == 0 {
                     capacity.min(480)
                 } else {
                     capacity.min(requested)
                 };
-                let bytes = &mut bytes[..frames * 4];
+                let bytes = &mut bytes[..frames * stride];
                 // i16 accepts every bit pattern. An unaligned mapping is filled
                 // with silence to avoid constructing an invalid sample slice.
                 let (head, samples, tail) = unsafe { bytes.align_to_mut::<i16>() };
                 if head.is_empty() && tail.is_empty() {
-                    reader.render(samples);
+                    reader.borrow_mut().render_layout(
+                        samples,
+                        config.layout,
+                        config.minimum_ms as usize * 48,
+                    );
                 } else {
                     bytes.fill(0);
                 }
-                frames * 4
+                frames * stride
             });
             let chunk = data.chunk_mut();
             *chunk.offset_mut() = 0;
-            *chunk.stride_mut() = 4;
+            *chunk.stride_mut() = (usize::from(config.layout.channels) * 2) as i32;
             *chunk.size_mut() = size as u32;
         })
         .register()?;
@@ -185,7 +266,8 @@ fn playback(
         spa::param::audio::AudioFormat::S16BE
     });
     info.set_rate(48_000);
-    info.set_channels(2);
+    info.set_channels(u32::from(config.layout.channels));
+    info.set_position(crate::audio_device::positions(config.layout));
     let (pod, _) = PodSerializer::serialize(
         Cursor::new(Vec::new()),
         &Value::Object(Object {
@@ -195,18 +277,53 @@ fn playback(
         }),
     )?;
     let mut params = [Pod::from_bytes(pod.get_ref()).context("Invalid PipeWire audio format")?];
-    stream.connect(
-        spa::utils::Direction::Output,
-        None,
-        pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
-        &mut params,
-    )?;
-    mainloop.run();
-    match stream.state() {
-        pw::stream::StreamState::Error(_) => anyhow::bail!("PipeWire playback failed"),
-        pw::stream::StreamState::Unconnected => anyhow::bail!("PipeWire playback disconnected"),
-        _ => Ok(()),
-    }
+    let attached = stop
+        .take()
+        .context("Missing PipeWire command receiver")?
+        .attach(mainloop.loop_(), move |command| {
+            let result = match command {
+                Command::Stop => {
+                    cancel.store(true, Ordering::Release);
+                    quit_commands.quit();
+                    return;
+                }
+                Command::Mute(muted) => set_control(
+                    &command_stream,
+                    spa::sys::SPA_PROP_mute,
+                    &mut [if muted { 1. } else { 0. }],
+                ),
+                Command::Volume(percent) => {
+                    let gain = f32::from(percent.min(100)) / 100.;
+                    set_control(
+                        &command_stream,
+                        spa::sys::SPA_PROP_channelVolumes,
+                        &mut [gain; 8][..usize::from(config.layout.channels)],
+                    )
+                }
+            };
+            if result.is_err() {
+                command_state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .error = Some("PipeWire did not accept the audio control".into());
+            }
+        });
+    let result = (|| -> Result<()> {
+        stream.connect(
+            spa::utils::Direction::Output,
+            None,
+            pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
+            &mut params,
+        )?;
+        mainloop.run();
+        match stream.state() {
+            pw::stream::StreamState::Error(_) => anyhow::bail!("PipeWire playback failed"),
+            pw::stream::StreamState::Unconnected => anyhow::bail!("PipeWire playback disconnected"),
+            _ => Ok(()),
+        }
+    })();
+    *stop = Some(attached.deattach());
+    result
 }
 
 // The pinned pipewire-rs 0.8 wrapper omits the C API's required trailing control

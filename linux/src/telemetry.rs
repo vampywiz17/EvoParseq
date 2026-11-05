@@ -387,7 +387,7 @@ impl View {
             sample.audio_ready = report.codec.is_some();
             sample.audio_codec = report.codec;
             sample.audio_layout = report.layout;
-            sample.audio_decoded_queue_ms = Some(report.queued_samples as f64 / 96.);
+            sample.audio_decoded_queue_ms = Some(report.queued_frames as f64 / 48.);
             sample.audio_native = Some(report);
         }
         self.timing = session.bus.host_timing.snapshot(session.generation);
@@ -533,7 +533,15 @@ impl View {
             ));
             result.rows.push((
                 crate::app_style::forms::STAT_AUDIO_RECOVERIES.into(),
-                "Automatic output reopening is not enabled".into(),
+                format!(
+                    "{}{}",
+                    self.audio.recoveries,
+                    if self.audio.recovering {
+                        " (recovering)"
+                    } else {
+                        ""
+                    }
+                ),
             ));
         }
         if tab == 0 {

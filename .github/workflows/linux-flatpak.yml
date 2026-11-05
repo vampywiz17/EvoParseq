@@ -26,7 +26,7 @@ jobs:
           mkdir -p "$stage"
           git archive HEAD linux .cargo assets/evoparseq.svg assets/evoparseq.png LICENSE src-native | tar -x -C "$stage"
           cd "$stage"
-          rustfmt --edition 2024 --config skip_children=true --check linux/src/telemetry.rs linux/src/resources_linux.rs linux/src/secure_storage.rs linux/src/settings_linux.rs linux/src/main.rs linux/src/launcher.rs linux/src/desktop_linux.rs linux/src/native_loop.rs linux/src/session_overlay.rs linux/src/desktop_ui.rs linux/src/window_mode.rs linux/src/cursor_theme.rs linux/src/video_probe.rs linux/src/connection.rs linux/src/network_tests.rs linux/src/video_profile.rs linux/src/audio_pipewire.rs linux/src/playback.rs linux/src/video_vulkan/*.rs linux/tests/video_contract.rs
+          rustfmt --edition 2024 --config skip_children=true --check linux/src/telemetry.rs linux/src/resources_linux.rs linux/src/secure_storage.rs linux/src/settings_linux.rs linux/src/main.rs linux/src/launcher.rs linux/src/desktop_linux.rs linux/src/native_loop.rs linux/src/session_overlay.rs linux/src/desktop_ui.rs linux/src/window_mode.rs linux/src/cursor_theme.rs linux/src/video_probe.rs linux/src/connection.rs linux/src/network_tests.rs linux/src/video_profile.rs linux/src/audio_pipewire.rs linux/src/audio_device.rs linux/src/playback.rs linux/src/video_vulkan/*.rs linux/tests/video_contract.rs
           cargo vendor --manifest-path linux/Cargo.toml --locked --versioned-dirs vendor > .cargo/config.toml
       - name: Install Flatpak SDK
         run: |

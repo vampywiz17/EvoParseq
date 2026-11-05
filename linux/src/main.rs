@@ -6,9 +6,12 @@ mod account_signaling;
 mod app_style;
 #[path = "../../src-native/src/attempt.rs"]
 pub mod attempt;
+mod audio_device;
 #[path = "../../src-native/src/audio_layout.rs"]
 pub mod audio_layout;
 mod audio_pipewire;
+#[path = "../../src-native/src/audio_recovery.rs"]
+mod audio_recovery;
 #[path = "../../src-native/src/audio_stream.rs"]
 pub mod audio_stream;
 #[path = "../../src-native/src/bud_ingress.rs"]
@@ -471,6 +474,11 @@ fn main() -> anyhow::Result<()> {
 
     let settings = settings_linux::open()?;
     let (saved, settings_error) = settings.view();
+    event_log::initialize(
+        settings.directory().join("client-events.jsonl"),
+        saved.event_logging,
+    )?;
+    let _log_guard = event_log::Guard;
     let restore = !saved.native_core.encrypted_session.is_empty();
     let mut setup = egui_wgpu::WgpuSetupCreateNew::default();
     setup.instance_descriptor.backends = wgpu::Backends::VULKAN;

@@ -772,10 +772,15 @@ impl Attempt {
     pub fn start_native_media(
         &self,
         #[cfg(target_os = "linux")] video: Option<Arc<dyn crate::video_output::NativeSink>>,
+        #[cfg(target_os = "linux")] audio_budget: Option<u32>,
         #[cfg(target_os = "android")] video: Arc<crate::video_android::Pipeline>,
     ) {
         let mut state = self.completion.lock().unwrap_or_else(|e| e.into_inner());
-        state.audio_stream = Some(crate::audio_stream::Pipeline::start_with_budget(Some(100)));
+        #[cfg(target_os = "android")]
+        let audio_budget = Some(100);
+        state.audio_stream = Some(crate::audio_stream::Pipeline::start_with_budget(
+            audio_budget,
+        ));
         #[cfg(target_os = "linux")]
         {
             state.linux_video = video;

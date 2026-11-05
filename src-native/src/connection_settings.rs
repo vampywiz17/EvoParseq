@@ -1110,3 +1110,24 @@ impl RouteMode {
         s.force_relay = self == Self::ForceRelay;
     }
 }
+
+pub enum BinaryChoice {
+    TcpQos,
+    Chroma,
+    Rendering,
+    AudioBuffer,
+    AudioCodec,
+    Speakers,
+}
+impl BinaryChoice {
+    pub fn labels(self) -> [&'static str; 2] {
+        match self {
+            Self::TcpQos => ["Off (default)", "Audio/video QoS (experimental)"],
+            Self::Chroma => ["4:2:0", "Prefer 4:4:4 (experimental)"],
+            Self::Rendering => ["Normal GPU rendering", "Zero copy (experimental, HEVC)"],
+            Self::AudioBuffer => ["Default (core limits)", "Custom limits"],
+            Self::AudioCodec => ["Opus", "Allow raw PCM (BUD)"],
+            Self::Speakers => ["Stereo", "Match output layout (experimental, BUD)"],
+        }
+    }
+}

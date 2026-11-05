@@ -40,6 +40,11 @@ pub fn run_stream(
     ensure!(error.is_none(), "Fix connection settings before connecting");
     preferences.validate()?;
     playback.bind_input_consumer();
+    crate::event_log::record(
+        "INFO",
+        "connection_started",
+        serde_json::json!({"transport":mode.label()}),
+    );
     let socket = Socket::open(session)?;
     let mut nonce = [0u8; 16];
     getrandom::fill(&mut nonce).map_err(|_| anyhow::anyhow!("Could not generate connection ID"))?;
@@ -51,6 +56,11 @@ pub fn run_stream(
     (socket.writer)(
         native_wire::envelope("offer_cancel", peer, &id, serde_json::json!({})).to_string(),
     );
+    crate::event_log::record(
+        if result.is_ok() { "INFO" } else { "ERROR" },
+        "connection_finished",
+        serde_json::json!({"transport":mode.label(),"success":result.is_ok()}),
+    );
     result
 }
 
@@ -60,6 +70,7 @@ fn create_webrtc_attempt(
     config: control::Config,
     playback: &Arc<crate::playback::Playback>,
     settings: Option<Arc<dyn crate::rtc_configuration::NetworkSettings>>,
+    audio_budget: Option<u32>,
 ) -> Result<Attempt> {
     // Match the existing Windows/Android Parsec host compatibility policy.
     // This permits legacy RSA key sizes only; signature and SDP fingerprint
@@ -72,7 +83,7 @@ fn create_webrtc_attempt(
         true,
         settings,
     )?;
-    attempt.start_native_media(Some(playback.clone()));
+    attempt.start_native_media(Some(playback.clone()), audio_budget);
     Ok(attempt)
 }
 
@@ -107,8 +118,16 @@ fn run_webrtc(
         ten_bit: false,
         chroma_444: false,
     };
-    let mut attempt =
-        create_webrtc_attempt(id, output, config.clone(), playback, Some(settings.clone()))?;
+    let audio_config =
+        audio_pipewire::Config::new(&settings.view().0, crate::audio_layout::Layout::STEREO);
+    let mut attempt = create_webrtc_attempt(
+        id,
+        output,
+        config.clone(),
+        playback,
+        Some(settings.clone()),
+        Some(audio_config.maximum_ms),
+    )?;
     attempt.set_linux_telemetry(telemetry.bus.clone(), telemetry.generation);
     let receiver = attempt
         .audio_receiver()
@@ -120,6 +139,7 @@ fn run_webrtc(
         receiver,
         playback,
         telemetry,
+        audio_config,
         |signaling_closed| {
             if !*signaling_closed {
                 for _ in 0..64 {
@@ -235,9 +255,15 @@ mod tests {
             ten_bit: false,
             chroma_444: false,
         };
-        let mut attempt =
-            create_webrtc_attempt("linux-certificate-policy", output, config, &playback, None)
-                .unwrap();
+        let mut attempt = create_webrtc_attempt(
+            "linux-certificate-policy",
+            output,
+            config,
+            &playback,
+            None,
+            Some(100),
+        )
+        .unwrap();
         let report = attempt.snapshot();
         assert_eq!(report["legacy_rsa_1024_enabled"], true);
         assert_eq!(report["unavailable_media_bypasses_control_queue"], true);
@@ -271,6 +297,12 @@ fn run_bud(
             .await
             .context("BUD route resolution timed out")?
     })?;
+    let layout = if preferences.experimental_surround_audio {
+        crate::audio_device::default_layout().unwrap_or(crate::audio_layout::Layout::STEREO)
+    } else {
+        crate::audio_layout::Layout::STEREO
+    };
+    let audio_config = audio_pipewire::Config::new(&preferences, layout);
     let mut wire_id = id.to_owned();
     let mut answered_at: Option<Instant> = None;
     let mut deadline = Instant::now() + Duration::from_secs(30);
@@ -280,8 +312,8 @@ fn run_bud(
         playback.hevc(),
         false,
         false,
-        false,
-        crate::audio_layout::Layout::STEREO,
+        preferences.allow_raw_audio,
+        layout,
     )?;
     session.wake_consumer(std::thread::current());
     let credentials = session.offer(&wire_id, route)?;
@@ -291,7 +323,7 @@ fn run_bud(
         (socket.writer)(signaling.offer(&credentials).to_string()),
         "Could not send BUD offer"
     );
-    let audio = audio_stream::Pipeline::start_with_budget(Some(100));
+    let audio = audio_stream::Pipeline::start_with_layout(Some(audio_config.maximum_ms), layout);
     let sender = audio.sender().context("Audio pipeline unavailable")?;
     let mut ingress = crate::bud_ingress::VideoState::new(playback.hevc(), false, false);
     let mut established = false;
@@ -302,6 +334,7 @@ fn run_bud(
         audio.native_receiver(),
         playback,
         telemetry,
+        audio_config,
         |signaling_closed| {
             if !*signaling_closed {
                 for _ in 0..64 {
@@ -400,8 +433,8 @@ fn run_bud(
                     playback.hevc(),
                     false,
                     false,
-                    false,
-                    crate::audio_layout::Layout::STEREO,
+                    preferences.allow_raw_audio,
+                    layout,
                 )?;
                 session.wake_consumer(std::thread::current());
                 let credentials = session.offer(&wire_id, route)?;
@@ -477,9 +510,10 @@ fn observe(
     receiver: audio_stream::NativeReceiver,
     playback: &Arc<crate::playback::Playback>,
     telemetry: &Arc<crate::telemetry::Session>,
+    audio_config: audio_pipewire::Config,
     mut poll: impl FnMut(&mut bool) -> Result<(bool, crate::video_stream::Snapshot, bool)>,
 ) -> Result<String> {
-    let _output = audio_pipewire::Output::start(&receiver, telemetry.output.clone())?;
+    let _output = audio_pipewire::Output::start(&receiver, telemetry.output.clone(), audio_config)?;
     telemetry.set_audio(receiver);
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut signaling_closed = false;

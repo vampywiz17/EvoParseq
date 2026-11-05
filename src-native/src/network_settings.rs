@@ -13,6 +13,8 @@ pub struct Draft {
     pub stun_urls: String,
     pub turn_urls: String,
     pub ttl: String,
+    pub audio_min: String,
+    pub audio_max: String,
     pub password: Zeroizing<String>,
     pub token: Zeroizing<String>,
     pub forget_password: bool,
@@ -24,6 +26,8 @@ impl Draft {
             stun_urls: values.stun_urls.join("\n"),
             turn_urls: values.turn_urls.join("\n"),
             ttl: values.ttl.to_string(),
+            audio_min: values.audio_min_buffer_ms.to_string(),
+            audio_max: values.audio_max_buffer_ms.to_string(),
             values,
             password: Zeroizing::new(String::new()),
             token: Zeroizing::new(String::new()),
@@ -36,6 +40,7 @@ impl Draft {
     pub fn save(&mut self, manager: &Manager) -> Result<()> {
         let mut candidate = self.values.clone();
         apply_fields(&mut candidate, &self.stun_urls, &self.turn_urls, &self.ttl)?;
+        apply_audio_fields(&mut candidate, &self.audio_min, &self.audio_max)?;
         manager.save(
             candidate,
             &self.password,
@@ -53,6 +58,15 @@ pub fn apply_fields(settings: &mut Settings, stun: &str, turn: &str, ttl: &str) 
     settings.custom_username = settings.custom_username.trim().into();
     settings.turn_key_id = settings.turn_key_id.trim().into();
     settings.ttl = ttl.parse().context("Enter a valid credential lifetime")?;
+    Ok(())
+}
+pub fn apply_audio_fields(settings: &mut Settings, minimum: &str, maximum: &str) -> Result<()> {
+    settings.audio_min_buffer_ms = minimum
+        .parse()
+        .context("Enter an audio minimum in milliseconds")?;
+    settings.audio_max_buffer_ms = maximum
+        .parse()
+        .context("Enter an audio maximum in milliseconds")?;
     Ok(())
 }
 pub fn urls(text: &str) -> Vec<String> {

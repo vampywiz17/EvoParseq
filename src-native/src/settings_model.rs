@@ -136,26 +136,7 @@ impl InputMode {
         }
     }
 }
-pub enum BinaryChoice {
-    TcpQos,
-    Chroma,
-    Rendering,
-    AudioBuffer,
-    AudioCodec,
-    Speakers,
-}
-impl BinaryChoice {
-    pub fn labels(self) -> [&'static str; 2] {
-        match self {
-            Self::TcpQos => ["Off (default)", "Audio/video QoS (experimental)"],
-            Self::Chroma => ["4:2:0", "Prefer 4:4:4 (experimental)"],
-            Self::Rendering => ["Normal GPU rendering", "Zero copy (experimental, HEVC)"],
-            Self::AudioBuffer => ["Default (core limits)", "Custom limits"],
-            Self::AudioCodec => ["Opus", "Allow raw PCM (BUD)"],
-            Self::Speakers => ["Stereo", "Match output layout (experimental, BUD)"],
-        }
-    }
-}
+pub use crate::connection_settings::BinaryChoice;
 
 pub struct Availability {
     pub bud: bool,
@@ -255,14 +236,11 @@ impl Form {
         settings.nvidia_vsr = settings.nvidia_vsr.min(4);
         // Preserve the existing parse order and validation even for inactive
         // numeric fields. Domain/secret validation remains in Manager::save.
-        settings.audio_min_buffer_ms = self
-            .audio_min
-            .parse()
-            .context("Enter an audio minimum in milliseconds")?;
-        settings.audio_max_buffer_ms = self
-            .audio_max
-            .parse()
-            .context("Enter an audio maximum in milliseconds")?;
+        crate::network_settings::apply_audio_fields(
+            &mut settings,
+            &self.audio_min,
+            &self.audio_max,
+        )?;
         settings.video_gpu = self
             .gpu_selection
             .and_then(|i| self.gpu_choices.get(i))

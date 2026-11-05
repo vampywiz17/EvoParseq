@@ -185,6 +185,7 @@ fn snapshot(shared: &Mutex<State>) -> Snapshot {
     #[cfg(not(windows))]
     if let Some(callback) = &state.callback {
         callback.snapshot(&mut report);
+        return report;
     }
     report.queued_frames =
         report.queued_samples / usize::from(report.layout.unwrap_or(Layout::STEREO).channels);
@@ -443,6 +444,10 @@ impl Pipeline {
                         }
                         Ok(()) => {
                             if state.report.layout != Some(packet.layout) {
+                                #[cfg(not(windows))]
+                                if let Some(callback) = &state.callback {
+                                    callback.discard();
+                                }
                                 state.pcm.clear();
                                 state.report.queued_samples = 0;
                                 state.report.layout = Some(packet.layout);

@@ -171,6 +171,61 @@ impl Desktop {
                             });
                         });
                 });
+            } else if tab == 2 {
+                use crate::connection_settings::BinaryChoice;
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    if row.label == f::MINIMUM_BUFFER_MS.label
+                        || row.label == f::MAXIMUM_BUFFER_MS.label
+                    {
+                        ui.add_enabled_ui(draft.values.custom_audio_buffer, |ui| {
+                            let value = if row.label == f::MINIMUM_BUFFER_MS.label {
+                                &mut draft.audio_min
+                            } else {
+                                &mut draft.audio_max
+                            };
+                            ui.put(rect, egui::TextEdit::singleline(value).char_limit(6));
+                        });
+                    } else {
+                        let (choice, value, enabled) = if row.label == f::PLAYBACK_BUFFER.label {
+                            (
+                                BinaryChoice::AudioBuffer,
+                                &mut draft.values.custom_audio_buffer,
+                                true,
+                            )
+                        } else if row.label == f::AUDIO_FORMAT.label {
+                            (
+                                BinaryChoice::AudioCodec,
+                                &mut draft.values.allow_raw_audio,
+                                self.transport == connection::Mode::Bud,
+                            )
+                        } else {
+                            (
+                                BinaryChoice::Speakers,
+                                &mut draft.values.experimental_surround_audio,
+                                self.transport == connection::Mode::Bud,
+                            )
+                        };
+                        let labels = choice.labels();
+                        ui.add_enabled_ui(enabled, |ui| {
+                            egui::ComboBox::from_id_salt(row.label)
+                                .width(400.)
+                                .selected_text(labels[usize::from(*value)])
+                                .show_ui(ui, |ui| {
+                                    for (index, text) in labels.into_iter().enumerate() {
+                                        ui.selectable_value(value, index == 1, text);
+                                    }
+                                });
+                        });
+                    }
+                });
+            } else if row.label == f::SESSION_MENU.label {
+                ui.put(
+                    rect,
+                    egui::Checkbox::new(
+                        &mut draft.values.native_core.hide_session_button,
+                        row.control_text,
+                    ),
+                );
             } else if tab == 0 && row.label != f::TCP_TLS_QOS.label {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     use crate::connection_settings::RouteMode;
@@ -328,6 +383,8 @@ impl Desktop {
             pending.stun_urls = draft.stun_urls.clone();
             pending.turn_urls = draft.turn_urls.clone();
             pending.ttl = draft.ttl.clone();
+            pending.audio_min = draft.audio_min.clone();
+            pending.audio_max = draft.audio_max.clone();
             self.ui_state.network = Some(pending);
             self.ui_state.feedback = crate::network_settings::SAVING.into();
             let settings = self.settings.clone();
