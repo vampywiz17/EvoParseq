@@ -1596,6 +1596,9 @@ fn process_viewport_command(
         }
         ViewportCommand::RequestPaste => {
             actions_requested.push(ActionRequested::Paste);
+            // eframe executes this deferred action after the app update. Keep
+            // its resulting Paste event moving even while a video is static.
+            egui_ctx.request_repaint();
         }
     }
 }
