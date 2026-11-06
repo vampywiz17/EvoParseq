@@ -4,8 +4,12 @@ on:
   push:
     branches:
       - '**'
+      - '!legacy'
 
   pull_request:
+    branches:
+      - '**'
+      - '!legacy'
     types: [opened, synchronize, reopened]
 
   workflow_dispatch:
@@ -19,6 +23,8 @@ concurrency:
 
 jobs:
   sonarqube:
+    # Also exclude a manual dispatch explicitly targeted at legacy.
+    if: github.ref != 'refs/heads/legacy'
     name: SonarQube
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -37,7 +43,13 @@ jobs:
           key: ${{ runner.os }}-sonar
           restore-keys: ${{ runner.os }}-sonar
 
-      - name: SonarQube Scan
+      - name: SonarQube Scan and required Quality Gate
         uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304
+        with:
+          # A successful upload is insufficient: fail on a red gate or timeout.
+          # The project's configured Sonar way gate owns the quality thresholds.
+          args: >-
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=600
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
