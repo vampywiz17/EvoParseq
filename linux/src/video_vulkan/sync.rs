@@ -103,8 +103,25 @@ impl Sync {
 }
 impl Drop for Sync {
     fn drop(&mut self) {
-        // Session teardown drains decode and graphics before the final owner
-        // is dropped; callbacks also retain this object through their submit.
+        // A callback can retain these semaphores beyond Session teardown.
+        // Its last owner must also drain any later render submission. This
+        // wait happens only at teardown, never in the per-picture path.
+        if self.context.wait_graphics().is_err() {
+            struct Retired {
+                _context: Arc<Context>,
+                _semaphores: [vk::Semaphore; 2],
+            }
+            static RETIRED: std::sync::OnceLock<Mutex<Vec<Retired>>> = std::sync::OnceLock::new();
+            RETIRED
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(Retired {
+                    _context: self.context.clone(),
+                    _semaphores: [self.decode, self.graphics],
+                });
+            return;
+        }
         unsafe {
             self.context.raw.destroy_semaphore(self.decode, None);
             self.context.raw.destroy_semaphore(self.graphics, None);

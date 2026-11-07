@@ -15,7 +15,7 @@ with existing binary swapchain/relay waits and timeline signal values preserved.
 The caller retains semaphore ownership and attaches dependencies immediately
 before the intended submit. No private fields are accessed by the application.
 
-Modified upstream files: src/vulkan/mod.rs, adapter.rs, semaphore_list.rs.
+Vulkan synchronization changes: src/vulkan/mod.rs, adapter.rs, semaphore_list.rs.
 The latter's CPU-only submit-structure tests also run in Linux video_contract.
 
 Unused upstream examples, their development-only dependencies, and DX12/Metal/GLES
