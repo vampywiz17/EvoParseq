@@ -103,3 +103,49 @@ mod tests {
         assert_eq!(v.map(1680, 1080), Some((800, 600)));
     }
 }
+
+/// Initial native client size: stream pixels at display scale, reduced to fit
+/// the monitor. This is not a host-resolution request or a recurring resize.
+pub fn stream_window_size(
+    source: (u32, u32),
+    pixels_per_point: f32,
+    monitor: (f32, f32),
+) -> Option<(f32, f32)> {
+    if source.0 == 0
+        || source.1 == 0
+        || source.0 > 16384
+        || source.1 > 16384
+        || !pixels_per_point.is_finite()
+        || pixels_per_point <= 0.
+        || !monitor.0.is_finite()
+        || !monitor.1.is_finite()
+        || monitor.0 <= 0.
+        || monitor.1 <= 0.
+    {
+        return None;
+    }
+    let width = source.0 as f32 / pixels_per_point;
+    let height = source.1 as f32 / pixels_per_point;
+    // Wayland does not expose the exact usable desktop work area. Leave room
+    // for the system panel and native decorations rather than assuming none.
+    let scale = (monitor.0 * 0.9 / width)
+        .min(monitor.1 * 0.9 / height)
+        .min(1.);
+    Some((width * scale, height * scale))
+}
+#[cfg(test)]
+mod stream_window_tests {
+    use super::*;
+    #[test]
+    fn source_aspect_and_dpi_are_preserved_without_exceeding_the_monitor() {
+        assert_eq!(
+            stream_window_size((1280, 720), 2., (1920., 1080.)),
+            Some((640., 360.))
+        );
+        let (w, h) = stream_window_size((2560, 1440), 1., (1366., 768.)).unwrap();
+        assert!(w <= 1366. * 0.9 && h <= 768. * 0.9);
+        assert!((w / h - 16. / 9.).abs() < 0.001);
+        assert!(stream_window_size((0, 1080), 1., (1920., 1080.)).is_none());
+        assert!(stream_window_size((1920, 1080), f32::NAN, (1920., 1080.)).is_none());
+    }
+}

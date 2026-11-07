@@ -8,7 +8,7 @@ use std::{
 };
 
 const API: &str = "https://api.github.com/repos/vampywiz17/EvoParseq/releases/latest";
-pub const REPOSITORY: &str = "https://github.com/vampywiz17/EvoParseq";
+pub const REPOSITORY: &str = crate::about::REPOSITORY;
 const MAX_METADATA: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,14 +69,14 @@ pub enum Mode {
 impl Mode {
     pub fn title(self) -> &'static str {
         match self {
-            Self::About => "About EvoParseq",
-            Self::Updates => "EvoParseq - Updates",
+            Self::About => crate::about::TITLE,
+            Self::Updates => crate::about::UPDATES_TITLE,
         }
     }
     pub fn heading(self) -> &'static str {
         match self {
-            Self::About => "EvoParseq",
-            Self::Updates => "Updates",
+            Self::About => crate::about::HEADING,
+            Self::Updates => crate::about::UPDATES_HEADING,
         }
     }
 }
@@ -93,10 +93,16 @@ pub struct Content {
 }
 pub fn content(mode: Mode, view: &View) -> Content {
     if mode == Mode::About {
+        let info = crate::about::content(
+            env!("CARGO_PKG_VERSION"),
+            "Windows x64",
+            RTX_CREDIT,
+            MIGRATION,
+        );
         return Content {
-            version: format!("Version {} | Windows x64\r\nNative Rust core", env!("CARGO_PKG_VERSION")),
-            status: "Independent client for compatible, unmodified Parsec hosts.".into(),
-            notes: format!("Networking, GPU video, audio and input are handled by the native Rust client. No Parsec WebAssembly core is bundled, loaded or executed.\r\n\r\nProject: {REPOSITORY}\r\n\r\nEvoParseq is an independent community project, not affiliated with or endorsed by Parsec/Unity or lowlat.\r\n\r\nThanks to nomi-san/lowlat for inspiration and the reused open-source components. Original license and attribution notices are included with the application.\r\nhttps://github.com/nomi-san/lowlat\r\n\r\n{RTX_CREDIT}\r\n\r\n{MIGRATION}"),
+            version: info.version,
+            status: info.status,
+            notes: info.notes,
         };
     }
     Content {

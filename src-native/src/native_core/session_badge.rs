@@ -12,7 +12,7 @@ use windows_sys::Win32::{
     UI::{Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
 };
 
-pub(super) const SIZE: i32 = 48;
+pub(super) const SIZE: i32 = crate::app_style::session::BADGE_SIZE;
 const SUBCLASS: usize = 1;
 
 #[derive(Clone, Copy)]
@@ -28,10 +28,8 @@ struct Badge {
 }
 
 fn bounded(position: POINT, width: i32, height: i32) -> POINT {
-    POINT {
-        x: position.x.clamp(0, (width - SIZE).max(0)),
-        y: position.y.clamp(0, (height - SIZE).max(0)),
-    }
+    let [x, y] = crate::app_style::session::bounded([position.x, position.y], [width, height]);
+    POINT { x, y }
 }
 unsafe fn screen_point(hwnd: HWND, lp: LPARAM) -> POINT {
     let mut point = POINT {
@@ -107,7 +105,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         let owner = (*(lp as *const CREATESTRUCTW)).lpCreateParams as HWND;
         let state = Box::new(Badge {
             owner,
-            position: POINT { x: 16, y: 16 },
+            position: POINT {
+                x: crate::app_style::session::BADGE_START[0],
+                y: crate::app_style::session::BADGE_START[1],
+            },
             drag: None,
         });
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
@@ -182,7 +183,7 @@ pub(super) unsafe fn install(window: &crate::window::Window) {
         DestroyWindow(badge);
         return;
     }
-    SetLayeredWindowAttributes(badge, 0, 200, LWA_ALPHA);
+    SetLayeredWindowAttributes(badge, 0, crate::app_style::session::BADGE_ALPHA, LWA_ALPHA);
     window
         .native_session_button
         .store(badge as usize, Ordering::Release);

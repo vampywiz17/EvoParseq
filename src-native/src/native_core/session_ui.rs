@@ -797,17 +797,7 @@ pub unsafe fn toggle(
         [24, 199, 370, 44],
     );
     update_displays(hwnd, p);
-    for (i, label) in [
-        "Resolution",
-        "Bandwidth (Mbps)",
-        "Frame rate (FPS)",
-        "Frame pacing",
-        "Orientation",
-        "Immersive mode",
-    ]
-    .iter()
-    .enumerate()
-    {
+    for (i, label) in crate::app_style::forms::SESSION_LABELS.iter().enumerate() {
         control(
             hwnd,
             p,
@@ -850,7 +840,7 @@ pub unsafe fn toggle(
         p,
         25,
         470,
-        &["Disabled", "Mouse", "Keyboard", "Mouse + keyboard"],
+        &crate::input_state::IMMERSIVE_LABELS,
         match video.immersive {
             1 => "Mouse + keyboard",
             2 => "Keyboard",
@@ -932,7 +922,13 @@ pub unsafe fn toggle(
     for (id, label, x, y, w) in [
         (SETTINGS, "Settings", 24, 838, 178),
         (APPLY, "Apply", 214, 838, 178),
-        (DISCONNECT, "Disconnect", 24, 888, 178),
+        (
+            DISCONNECT,
+            crate::app_style::session::DISCONNECT,
+            crate::app_style::session::DISCONNECT_RECT[0],
+            crate::app_style::session::DISCONNECT_RECT[1],
+            crate::app_style::session::DISCONNECT_RECT[2],
+        ),
         (CLOSE, "Close", 214, 888, 178),
         (HIDE_BUTTON, "Hide button", 24, 938, 178),
         (SECURE_ATTENTION, "Send Ctrl+Alt+Del", 214, 938, 178),

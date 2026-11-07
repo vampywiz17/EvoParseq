@@ -1,10 +1,22 @@
 //! One bounded UI-to-session handoff for controllers, keyboards and pointing devices.
 use crate::{desktop_input, gamepad};
 use std::{collections::VecDeque, sync::Mutex};
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "desktop-telemetry")),
+    derive(Copy)
+)]
 pub enum Event {
     Controller(gamepad::Event),
     Desktop(desktop_input::Event),
+    #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
+    Session(crate::session_controls::Command),
+}
+#[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
+impl From<crate::session_controls::Command> for Event {
+    fn from(command: crate::session_controls::Command) -> Self {
+        Self::Session(command)
+    }
 }
 impl From<gamepad::Event> for Event {
     fn from(e: gamepad::Event) -> Self {
@@ -25,23 +37,23 @@ impl Inbox {
         if q.1 {
             return;
         }
-        match (q.0.back_mut(), event) {
+        match (q.0.back_mut(), &event) {
             (
                 Some(Event::Controller(gamepad::Event::Axes(id, old, hat))),
                 Event::Controller(gamepad::Event::Axes(next, state, nhat)),
-            ) if *id == next
-                && *hat == nhat
+            ) if *id == *next
+                && *hat == *nhat
                 && (old.lt == 0) == (state.lt == 0)
                 && (old.rt == 0) == (state.rt == 0) =>
             {
-                *old = state;
+                *old = *state;
                 return;
             }
             (
                 Some(Event::Desktop(desktop_input::Event::Pointer(old))),
                 Event::Desktop(desktop_input::Event::Pointer(next)),
             ) => {
-                if old.merge(next) {
+                if old.merge(*next) {
                     return;
                 }
             }

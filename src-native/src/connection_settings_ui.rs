@@ -26,7 +26,7 @@ use windows_sys::Win32::{
 pub const OPEN: usize = 4100;
 pub const ABOUT: usize = crate::updater_ui::ABOUT;
 // Give the large heading and subtitle enough space, including font overhang.
-const HEADER_EXTRA: i32 = 20;
+const HEADER_EXTRA: i32 = crate::app_style::settings::HEADER_EXTRA;
 const SAVE: usize = 4101;
 const BACK: usize = 4102;
 
@@ -52,10 +52,10 @@ const BUD_EXTRA: i32 = if cfg!(feature = "bud") { 94 } else { 0 };
 #[cfg(feature = "vendor-video")]
 const ZERO_COPY: usize = 4120;
 const BG: u32 = crate::branding::BACKGROUND;
-const FIELD: u32 = 0x00212121;
-const FG: u32 = 0x00eeeeee;
-const MUTED: u32 = 0x00bcbcbc;
-const ACCENT: u32 = 0x00ffbb00;
+const FIELD: u32 = crate::branding::colorref(crate::app_style::SETTINGS_FIELD);
+const FG: u32 = crate::branding::colorref(crate::app_style::SETTINGS_TEXT);
+const MUTED: u32 = crate::branding::colorref(crate::app_style::SETTINGS_MUTED);
+const ACCENT: u32 = crate::branding::colorref(crate::app_style::SETTINGS_ACCENT);
 const CUSTOM: u8 = 1;
 const CLOUDFLARE: u8 = 2;
 const HELP: usize = 4200;
@@ -143,7 +143,7 @@ pub unsafe fn install_menu(parent: HWND) {
         menu,
         MF_STRING,
         crate::stats_ui::OPEN,
-        wide("Connection stats").as_ptr(),
+        wide(crate::app_style::forms::MENU_STATS).as_ptr(),
     );
     crate::updater_ui::append_help(menu);
     SetMenu(parent, menu);
@@ -170,9 +170,9 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         ai_hint: null_mut(),
         background: CreateSolidBrush(BG),
         field: CreateSolidBrush(FIELD),
-        font: font(16, 400),
-        heading: font(46, 300),
-        small: font(13, 400),
+        font: font(crate::app_style::settings::BODY, 400),
+        heading: font(crate::app_style::settings::HEADING, 300),
+        small: font(crate::app_style::settings::SMALL, 400),
         items: Vec::new(),
         building_tab: None,
         scroll: 0,
@@ -223,7 +223,7 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         "STATIC",
         "Settings",
         0,
-        [0, 24, 820, 64],
+        crate::app_style::settings::TITLE_RECT,
         0,
         0,
         page.heading,
@@ -232,20 +232,40 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         hwnd,
         page,
         "STATIC",
-        "Customize your connection, video and audio playback.",
+        crate::app_style::settings::SUBTITLE,
         0,
-        [4, 88, 816, 24],
+        crate::app_style::settings::SUBTITLE_RECT,
         0,
         0,
         page.font,
     );
     for (id, label, rect) in [
-        (NETWORK_TAB, "Network", [0, 142, 120, 40]),
-        (VIDEO_TAB, "Video", [132, 142, 120, 40]),
-        (AUDIO_TAB, "Audio", [264, 142, 120, 40]),
-        (INPUT_TAB, "Input", [396, 142, 120, 40]),
-        (BACK, "Back", [550, 142, 110, 40]),
-        (SAVE, "Save settings", [676, 142, 144, 40]),
+        (
+            NETWORK_TAB,
+            crate::app_style::SETTINGS_TABS[0],
+            crate::app_style::settings::TABS[0],
+        ),
+        (
+            VIDEO_TAB,
+            crate::app_style::SETTINGS_TABS[1],
+            crate::app_style::settings::TABS[1],
+        ),
+        (
+            AUDIO_TAB,
+            crate::app_style::SETTINGS_TABS[2],
+            crate::app_style::settings::TABS[2],
+        ),
+        (
+            INPUT_TAB,
+            crate::app_style::SETTINGS_TABS[3],
+            crate::app_style::settings::TABS[3],
+        ),
+        (
+            BACK,
+            crate::app_style::settings::BACK_TEXT,
+            crate::app_style::settings::BACK,
+        ),
+        (SAVE, "Save settings", crate::app_style::settings::SAVE),
     ] {
         add(
             hwnd,
@@ -271,10 +291,27 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         page.font,
     );
     page.building_tab = Some(Tab::Network);
-    row(hwnd, page, "STUN servers",
-        "Discover a direct route. One stun: URL per line.\nLeave blank to use the default discovery server.",
-        STUN, &s.stun_urls.join("\r\n"), 242, 76, 0, ES_MULTILINE as u32 | ES_WANTRETURN as u32 | ES_AUTOVSCROLL as u32 | WS_CLIPCHILDREN);
-    row_label(hwnd, page, "Connection route", "Choose automatic routing, direct-only or TURN relay.\nDirect-only is intended for LAN or VPN connections.", 344, 0, 40);
+    row(
+        hwnd,
+        page,
+        crate::app_style::forms::STUN_SERVERS.label,
+        crate::app_style::forms::STUN_SERVERS.help,
+        STUN,
+        &s.stun_urls.join("\r\n"),
+        242,
+        76,
+        0,
+        ES_MULTILINE as u32 | ES_WANTRETURN as u32 | ES_AUTOVSCROLL as u32 | WS_CLIPCHILDREN,
+    );
+    row_label(
+        hwnd,
+        page,
+        crate::app_style::forms::CONNECTION_ROUTE.label,
+        crate::app_style::forms::CONNECTION_ROUTE.help,
+        344,
+        0,
+        40,
+    );
     choice(
         hwnd,
         page,
@@ -286,8 +323,8 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     row_label(
         hwnd,
         page,
-        "TURN provider",
-        "An optional relay when a direct connection is unavailable.",
+        crate::app_style::forms::TURN_PROVIDER.label,
+        crate::app_style::forms::TURN_PROVIDER.help,
         418,
         0,
         40,
@@ -317,15 +354,23 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         usize::from(s.provider == "cloudflare"),
         0,
     );
-    row(hwnd, page, "TURN servers",
-        "coturn, eturnal, ExpressTURN and other providers.\nUDP, TCP or TLS; e.g. turns:host:443. One URL per line.",
-        TURN, &s.turn_urls.join("\r\n"), 502, 76, CUSTOM,
-        ES_MULTILINE as u32 | ES_WANTRETURN as u32 | ES_AUTOVSCROLL as u32 | WS_CLIPCHILDREN);
     row(
         hwnd,
         page,
-        "Username",
-        "The username supplied by your TURN provider.",
+        crate::app_style::forms::TURN_SERVERS.label,
+        crate::app_style::forms::TURN_SERVERS.help,
+        TURN,
+        &s.turn_urls.join("\r\n"),
+        502,
+        76,
+        CUSTOM,
+        ES_MULTILINE as u32 | ES_WANTRETURN as u32 | ES_AUTOVSCROLL as u32 | WS_CLIPCHILDREN,
+    );
+    row(
+        hwnd,
+        page,
+        crate::app_style::forms::USERNAME.label,
+        crate::app_style::forms::USERNAME.help,
         USERNAME,
         &s.custom_username,
         608,
@@ -336,8 +381,8 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     row(
         hwnd,
         page,
-        "Password",
-        "Leave blank to keep your saved password.",
+        crate::app_style::forms::PASSWORD.label,
+        crate::app_style::forms::PASSWORD.help,
         PASSWORD,
         "",
         688,
@@ -359,8 +404,8 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     row(
         hwnd,
         page,
-        "TURN Key ID",
-        "The key ID from your Cloudflare TURN configuration.",
+        crate::app_style::forms::TURN_KEY_ID.label,
+        crate::app_style::forms::TURN_KEY_ID.help,
         KEY,
         &s.turn_key_id,
         502,
@@ -371,8 +416,8 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     row(
         hwnd,
         page,
-        "API token",
-        "Leave blank to keep your saved token.",
+        crate::app_style::forms::API_TOKEN.label,
+        crate::app_style::forms::API_TOKEN.help,
         TOKEN,
         "",
         582,
@@ -394,8 +439,8 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     row(
         hwnd,
         page,
-        "Credential lifetime",
-        "How long generated TURN credentials remain valid (seconds).",
+        crate::app_style::forms::CREDENTIAL_LIFETIME.label,
+        crate::app_style::forms::CREDENTIAL_LIFETIME.help,
         TTL,
         &s.ttl.to_string(),
         678,
@@ -406,8 +451,8 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     row_label(
         hwnd,
         page,
-        "Credential cache",
-        "Reuse valid credentials until you close EvoParseq.",
+        crate::app_style::forms::CREDENTIAL_CACHE.label,
+        crate::app_style::forms::CREDENTIAL_CACHE.help,
         758,
         CLOUDFLARE,
         24,
@@ -428,8 +473,8 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     row_label(
         hwnd,
         page,
-        "Video GPU",
-        "GPU for stream decoding and rendering.\nAutomatic uses Windows' default. Next connection.",
+        crate::app_style::forms::VIDEO_GPU.label,
+        crate::app_style::forms::VIDEO_GPU.help,
         242,
         0,
         40,
@@ -504,7 +549,15 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         })
         .unwrap_or(0);
     SendMessageW(gpu, CB_SETCURSEL, selected, 0);
-    row_label(hwnd, page, "Video format", "HEVC and 10-bit require compatible host encoding.\nThe host may select H.264; reconnect after changing.", 344, 0, 48);
+    row_label(
+        hwnd,
+        page,
+        crate::app_style::forms::VIDEO_FORMAT.label,
+        crate::app_style::forms::VIDEO_FORMAT.help,
+        344,
+        0,
+        48,
+    );
     choice(
         hwnd,
         page,
@@ -516,8 +569,8 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     row_label(
         hwnd,
         page,
-        "Display timing",
-        crate::settings_model::DISPLAY_TIMING_HINT,
+        crate::app_style::forms::DISPLAY_TIMING.label,
+        crate::app_style::forms::DISPLAY_TIMING.help,
         626,
         0,
         60,
@@ -548,14 +601,22 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     SendMessageW(timing, CB_SETCURSEL, selection, 0);
 
     {
-        row_label(hwnd, page, "Chroma", "NVIDIA tested; Intel not live-validated. AMD unavailable.\nHEVC 8/10-bit; requires compatible host and GPU.\nNormal GPU rendering; host may send 4:2:0 instead.", 438, 0, 60);
+        row_label(
+            hwnd,
+            page,
+            crate::app_style::forms::CHROMA.label,
+            crate::app_style::forms::CHROMA.help,
+            438,
+            0,
+            60,
+        );
         binary_choice(hwnd, page, CHROMA_444, 438);
         check(hwnd, CHROMA_444, s.experimental_chroma_444);
         row_label(
             hwnd,
             page,
-            "Session menu",
-            "Ctrl+Shift+M opens the menu even when its button is hidden.\nApplies after saving.",
+            crate::app_style::forms::SESSION_MENU.label,
+            crate::app_style::forms::SESSION_MENU.help,
             834,
             0,
             48,
@@ -573,7 +634,15 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         );
         check(hwnd, HIDE_SESSION_BUTTON, s.native_core.hide_session_button);
     }
-    page.ai_hint = row_label(hwnd, page, "AI upscaling (experimental)", "", 924, 0, 64);
+    page.ai_hint = row_label(
+        hwnd,
+        page,
+        crate::app_style::forms::AI_UPSCALING_EXPERIMENTAL.label,
+        crate::app_style::forms::AI_UPSCALING_EXPERIMENTAL.help,
+        924,
+        0,
+        64,
+    );
     let ai = add(
         hwnd,
         page,
@@ -589,19 +658,27 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     page.building_tab = Some(Tab::Network);
     #[cfg(feature = "bud")]
     {
-        row_label(hwnd, page, "Transport", "WebRTC or BUD: direct UDP or TURN over UDP/TLS/TCP.\nUses the TURN URLs above. Reconnect after changing.", 844, 0, 40);
+        row_label(
+            hwnd,
+            page,
+            crate::app_style::forms::TRANSPORT.label,
+            crate::app_style::forms::TRANSPORT.help,
+            crate::app_style::settings::TRANSPORT_Y,
+            0,
+            40,
+        );
         let transport = add(
             hwnd,
             page,
             "COMBOBOX",
             "",
             CBS_DROPDOWNLIST as u32 | WS_VSCROLL | WS_TABSTOP,
-            [420, 844, 400, 160],
+            crate::app_style::settings::field(crate::app_style::settings::TRANSPORT_Y, 160),
             BUD,
             0,
             page.font,
         );
-        for label in ["WebRTC", "BUD"] {
+        for label in crate::app_style::settings::TRANSPORT_CHOICES {
             SendMessageW(transport, CB_ADDSTRING, 0, wide(label).as_ptr() as isize);
         }
         controls::combo(transport);
@@ -611,8 +688,15 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     {
         page.building_tab = Some(Tab::Video);
         let y = 532;
-        let hint = "HEVC 4:2:0: NV12 (8-bit) or P010 (10-bit).\nRequires driver support; otherwise MF. Reconnect to apply.";
-        row_label(hwnd, page, "Video presentation", hint, y, 0, 40);
+        row_label(
+            hwnd,
+            page,
+            crate::app_style::forms::VIDEO_PRESENTATION.label,
+            crate::app_style::forms::VIDEO_PRESENTATION.help,
+            y,
+            0,
+            40,
+        );
         binary_choice(hwnd, page, ZERO_COPY, 532);
         check(hwnd, ZERO_COPY, s.experimental_zero_copy);
     }
@@ -620,15 +704,23 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     row_label(
         hwnd,
         page,
-        crate::settings_model::TCP_QOS_LABEL,
-        crate::settings_model::TCP_QOS_HINT,
+        crate::app_style::forms::TCP_TLS_QOS.label,
+        crate::app_style::forms::TCP_TLS_QOS.help,
         844 + BUD_EXTRA,
         0,
         60,
     );
     binary_choice(hwnd, page, TCP_QOS, 844 + BUD_EXTRA);
     check(hwnd, TCP_QOS, s.experimental_tcp_qos);
-    row_label(hwnd, page, "Event log", "Log connection changes and decoder errors.\nSaved beside settings.json; no credentials or media payloads.\nApplies immediately after saving.", 938 + BUD_EXTRA, 0, 60);
+    row_label(
+        hwnd,
+        page,
+        crate::app_style::forms::EVENT_LOG.label,
+        crate::app_style::forms::EVENT_LOG.help,
+        938 + BUD_EXTRA,
+        0,
+        60,
+    );
     add(
         hwnd,
         page,
@@ -642,21 +734,73 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     );
     check(hwnd, EVENT_LOG, s.event_logging);
     page.building_tab = Some(Tab::Audio);
-    row_label(hwnd, page, "Playback buffer", "Custom limits apply only when enabled.\nOff uses the core's limits (normally 75 / 150 ms).", 242, 0, 48);
+    row_label(
+        hwnd,
+        page,
+        crate::app_style::forms::PLAYBACK_BUFFER.label,
+        crate::app_style::forms::PLAYBACK_BUFFER.help,
+        242,
+        0,
+        48,
+    );
     binary_choice(hwnd, page, AUDIO_CUSTOM, 242);
     check(hwnd, AUDIO_CUSTOM, s.custom_audio_buffer);
-    row(hwnd, page, "Minimum buffer (ms)", "PCM reserve before starting or refilling playback.\nSmaller values can increase audible gaps.", AUDIO_MIN,
-        &s.audio_min_buffer_ms.to_string(), 344, 36, 0, ES_NUMBER as u32);
-    row(hwnd, page, "Maximum buffer (ms)", "Local PCM plus audio queued on the Windows device.\n0 <= minimum <= maximum <= 500; maximum above zero.", AUDIO_MAX,
-        &s.audio_max_buffer_ms.to_string(), 438, 36, 0, ES_NUMBER as u32);
-    row_label(hwnd, page, "Audio format", "RAW: BUD only; host must also enable RAW.\n48 kHz stereo PCM uses about 1.54 Mbps before overhead.\nThe actual codec is shown in Connection stats.", 532, 0, 60);
+    row(
+        hwnd,
+        page,
+        crate::app_style::forms::MINIMUM_BUFFER_MS.label,
+        crate::app_style::forms::MINIMUM_BUFFER_MS.help,
+        AUDIO_MIN,
+        &s.audio_min_buffer_ms.to_string(),
+        344,
+        36,
+        0,
+        ES_NUMBER as u32,
+    );
+    row(
+        hwnd,
+        page,
+        crate::app_style::forms::MAXIMUM_BUFFER_MS.label,
+        crate::app_style::forms::MAXIMUM_BUFFER_MS.help,
+        AUDIO_MAX,
+        &s.audio_max_buffer_ms.to_string(),
+        438,
+        36,
+        0,
+        ES_NUMBER as u32,
+    );
+    row_label(
+        hwnd,
+        page,
+        crate::app_style::forms::AUDIO_FORMAT.label,
+        crate::app_style::forms::AUDIO_FORMAT.help,
+        532,
+        0,
+        60,
+    );
     binary_choice(hwnd, page, AUDIO_RAW, 532);
     check(hwnd, AUDIO_RAW, s.allow_raw_audio);
-    row_label(hwnd, page, "Speaker layout", "Experimental: match the Windows output's 5.1 or 7.1 layout.\nSynthetic tests only; no live host/client validation.\nBUD only; stereo fallback. Reconnect to apply.", 630, 0, 68);
+    row_label(
+        hwnd,
+        page,
+        crate::app_style::forms::SPEAKER_LAYOUT.label,
+        crate::app_style::forms::SPEAKER_LAYOUT.help,
+        630,
+        0,
+        68,
+    );
     binary_choice(hwnd, page, AUDIO_SURROUND, 630);
     check(hwnd, AUDIO_SURROUND, s.experimental_surround_audio);
     page.building_tab = Some(Tab::Input);
-    row_label(hwnd, page, "Input mode", "Standard input or experimental USB HID over BUD.\nMouse and keyboard can be selected independently.", 242, 0, 48);
+    row_label(
+        hwnd,
+        page,
+        crate::app_style::forms::INPUT_MODE.label,
+        crate::app_style::forms::INPUT_MODE.help,
+        242,
+        0,
+        48,
+    );
     choice(
         hwnd,
         page,
@@ -665,8 +809,24 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         &InputMode::LABELS,
         InputMode::current(&s) as usize,
     );
-    row_label(hwnd, page, "HID requirements", "Enable USB/Yubikey passthrough on the host.\nHID mouse uses the primary display only.\nUse the same keyboard layout on host and client.", 354, 0, 64);
-    row_label(hwnd,page,"Compatibility","Absolute desktop and relative camera movement.\nCamera mode follows the host cursor state.\nKeyboard layout is not switched automatically.",466,0,64);
+    row_label(
+        hwnd,
+        page,
+        crate::app_style::forms::HID_REQUIREMENTS.label,
+        crate::app_style::forms::HID_REQUIREMENTS.help,
+        354,
+        0,
+        64,
+    );
+    row_label(
+        hwnd,
+        page,
+        crate::app_style::forms::COMPATIBILITY.label,
+        crate::app_style::forms::COMPATIBILITY.help,
+        466,
+        0,
+        64,
+    );
 
     page.building_tab = None;
     add(hwnd, page, "STATIC",
@@ -740,7 +900,7 @@ unsafe fn row_label(
         "STATIC",
         label,
         0,
-        [0, y + 2, 392, 24],
+        crate::app_style::settings::label(y),
         0,
         group,
         page.font,
@@ -751,7 +911,7 @@ unsafe fn row_label(
         "STATIC",
         help,
         0,
-        [0, y + 32, 392, help_height],
+        crate::app_style::settings::help(y, help_height),
         HELP,
         group,
         page.small,

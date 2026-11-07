@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=EvoParseq
+Comment=Parsec client preview for Wayland
+Exec=evoparseq-linux
+Icon=io.github.vampywiz17.EvoParseq
+Categories=Network;RemoteAccess;
+Terminal=false

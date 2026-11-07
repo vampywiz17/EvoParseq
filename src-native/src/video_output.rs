@@ -7,6 +7,14 @@ use std::time::{Duration, Instant};
 pub const MAX_FRAMES: usize = 32;
 pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 
+/// Direct encoded-video delivery boundary for Linux native frontends and
+/// host-side transport tests. The transport must not depend on a UI toolkit.
+#[cfg(target_os = "linux")]
+pub trait NativeSink: Send + Sync {
+    fn submit(&self, bytes: &[u8], info: crate::video_stream::PacketInfo) -> bool;
+    fn stop(&self);
+}
+
 /// Describe original YUV surfaces without inferring compositor/scanout behavior.
 pub fn original_surface_status(ten_bit: bool) -> &'static str {
     if ten_bit {
@@ -246,6 +254,13 @@ pub struct Snapshot {
     pub hardware_decode: Option<bool>,
     /// Observed on the latest decoded output, not a capability/configuration flag.
     pub d3d11_decoder_surface: Option<bool>,
+    /// Platform decoder surface reported by its native backend.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_decoder_surface: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_graphics_wait: Option<Timing>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_decode_wait: Option<Timing>,
     pub frames_queued: u64,
     pub frames_dropped: u64,
     pub frames_submitted: u64,

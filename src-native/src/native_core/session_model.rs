@@ -1,11 +1,9 @@
 //! Shared session commands and presentation state, independent of window APIs.
 //! Native views own their controls and notifications; media workers stay separate.
-use super::{
-    host_displays::Displays,
-    profile::{Video, MAX_BANDWIDTH_MBPS, MAX_FPS},
-};
+use super::{host_displays::Displays, profile::Video};
 #[cfg(test)]
-use crate::session_preferences::{number, resolution};
+use crate::session_preferences::{number, resolution, MAX_BANDWIDTH_MBPS, MAX_FPS};
+#[cfg(test)]
 use serde_json::Value;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -73,39 +71,7 @@ impl Event {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum Command {
-    Apply(Video),
-    SelectDisplay(String),
-    RefreshDisplays,
-    Disconnect,
-    HideButton,
-    SecureAttention,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Status {
-    Applied,
-    Failed,
-    Confirmed,
-    Waiting,
-    Unconfirmed,
-    AttentionSent,
-    AttentionFailed,
-}
-
-impl Status {
-    pub fn text(self) -> &'static str {
-        match self {
-            Self::Applied | Self::Confirmed => "",
-            Self::Failed => "Could not apply or save settings. See the event log.",
-            Self::Waiting => "Applying settings...",
-            Self::Unconfirmed => "Host did not confirm the requested settings. See the event log.",
-            Self::AttentionSent => "Ctrl+Alt+Del requested from the host.",
-            Self::AttentionFailed => "Could not send Ctrl+Alt+Del. See the event log.",
-        }
-    }
-}
+pub use crate::session_controls::{Command, Status};
 
 pub use crate::session_preferences::{
     current_choice, resolution_text, PanelFields, BANDWIDTH_CHOICES, FPS_CHOICES, HOST_RESOLUTION,
@@ -146,38 +112,7 @@ pub trait View {
     }
 }
 
-/// Host preferences, not the actual decoded stream or capture confirmation.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct HostVideo {
-    pub bandwidth_mbps: Option<u32>,
-    pub fps: Option<u32>,
-    pub constant_fps: Option<bool>,
-    pub rotated: Option<bool>,
-}
-impl HostVideo {
-    pub fn from_report(report: &Value) -> Self {
-        let number = |key: &str, max| {
-            report[key]
-                .as_u64()
-                .and_then(|n| u32::try_from(n).ok())
-                .filter(|n| (1..=max).contains(n))
-        };
-        Self {
-            bandwidth_mbps: number("bandwidth_mbps", MAX_BANDWIDTH_MBPS),
-            fps: number("fps", MAX_FPS),
-            constant_fps: report["constant_fps"].as_bool(),
-            rotated: report["rotated"].as_bool(),
-        }
-    }
-
-    fn panel_video(self, mut saved: Video) -> Video {
-        saved.bandwidth_mbps = Some(saved.bandwidth_mbps.or(self.bandwidth_mbps).unwrap_or(10));
-        saved.fps = Some(saved.fps.or(self.fps).unwrap_or(60));
-        saved.constant_fps = Some(saved.constant_fps.or(self.constant_fps).unwrap_or(false));
-        saved.rotated = Some(saved.rotated.or(self.rotated).unwrap_or(false));
-        saved
-    }
-}
+pub use crate::session_preferences::HostVideo;
 
 /// Keeps the existing lock/atomic boundaries; no new queue, worker or polling.
 #[derive(Default)]

@@ -1,7 +1,6 @@
 # EvoParseq for Android TV
 
-Android dev release: **0.9.6-dev.5** on `dev`. Shared Android development is also
-maintained on `codex/linux-flatpak`. First live device: Xiaomi TV Box S
+Android dev release: **0.9.6-dev.5** on `dev`. Windows, Android and Linux development now share the `dev` branch. First live device: Xiaomi TV Box S
 (3rd Gen) EU, Android 14 (32-bit ARM userspace). Google TV / Android TV interface,
 D-pad navigation, two-factor sign-in and shared Rust account/session logic.
 

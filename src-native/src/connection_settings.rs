@@ -102,12 +102,12 @@ impl GpuPreference {
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub native_core: crate::native_core::profile::Profile,
-    #[cfg(feature = "bud")]
+    #[cfg(any(feature = "bud", target_os = "linux"))]
     #[serde(alias = "experimentalBud")]
     pub bud: bool,
-    #[cfg(feature = "bud")]
+    #[cfg(any(feature = "bud", target_os = "linux"))]
     pub experimental_hid_mouse: bool,
-    #[cfg(feature = "bud")]
+    #[cfg(any(feature = "bud", target_os = "linux"))]
     pub experimental_hid_keyboard: bool,
     pub prefer_hevc: bool,
     pub presentation_mode: PresentationMode,
@@ -126,7 +126,7 @@ pub struct Settings {
     #[serde(alias = "experimentalRawAudio")]
     pub allow_raw_audio: bool,
     pub experimental_surround_audio: bool,
-    #[cfg(feature = "vendor-video")]
+    #[cfg(any(feature = "vendor-video", target_os = "linux"))]
     pub experimental_zero_copy: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub video_gpu: Option<GpuPreference>,
@@ -173,11 +173,11 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             native_core: Default::default(),
-            #[cfg(feature = "bud")]
+            #[cfg(any(feature = "bud", target_os = "linux"))]
             bud: false,
-            #[cfg(feature = "bud")]
+            #[cfg(any(feature = "bud", target_os = "linux"))]
             experimental_hid_mouse: false,
-            #[cfg(feature = "bud")]
+            #[cfg(any(feature = "bud", target_os = "linux"))]
             experimental_hid_keyboard: false,
             prefer_hevc: false,
             presentation_mode: PresentationMode::Automatic,
@@ -193,7 +193,7 @@ impl Default for Settings {
             audio_max_buffer_ms: 150,
             allow_raw_audio: false,
             experimental_surround_audio: false,
-            #[cfg(feature = "vendor-video")]
+            #[cfg(any(feature = "vendor-video", target_os = "linux"))]
             experimental_zero_copy: false,
             video_gpu: None,
             provider: "cloudflare".into(),
@@ -406,6 +406,16 @@ impl Manager {
         state
     }
 
+    /// Read only the small shared video preferences, without cloning protected credentials.
+    pub fn native_video(&self) -> crate::native_core::profile::Video {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .0
+            .native_core
+            .video
+            .clone()
+    }
     pub fn native_session_button_hidden(&self) -> bool {
         self.state
             .lock()
@@ -477,7 +487,10 @@ impl Manager {
             Ok(())
         })
     }
-    fn update_local(&self, update: impl FnOnce(&mut Settings) -> Result<()>) -> Result<()> {
+    pub(crate) fn update_local(
+        &self,
+        update: impl FnOnce(&mut Settings) -> Result<()>,
+    ) -> Result<()> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         anyhow::ensure!(
             state.1.is_none(),
@@ -500,7 +513,10 @@ impl Manager {
         self.resolve_settings(&settings).await
     }
     /// Explicit BUD adapter: freeze preferences and credentials together.
-    #[cfg(all(windows, feature = "bud"))]
+    #[cfg(any(
+        all(windows, feature = "bud"),
+        all(target_os = "linux", feature = "desktop-telemetry")
+    ))]
     pub async fn resolve_bud(&self) -> Result<(Settings, Vec<RTCIceServer>)> {
         let (settings, error) = self.view();
         if error.is_some() {
@@ -514,7 +530,10 @@ impl Manager {
         Ok((settings, servers))
     }
 
-    #[cfg(all(windows, feature = "bud"))]
+    #[cfg(any(
+        all(windows, feature = "bud"),
+        all(target_os = "linux", feature = "desktop-telemetry")
+    ))]
     pub async fn resolve_bud_relay(&self, settings: &Settings) -> Result<Vec<RTCIceServer>> {
         if settings.stun_only {
             bail!("TURN is disabled by STUN-only settings");
@@ -587,6 +606,7 @@ impl Manager {
     }
 }
 
+#[cfg(windows)]
 fn atomic_write(path: &std::path::Path, raw: &[u8]) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
@@ -618,6 +638,37 @@ fn atomic_write(path: &std::path::Path, raw: &[u8]) -> Result<()> {
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(temporary);
+    }
+    result
+}
+
+#[cfg(target_os = "linux")]
+fn atomic_write(path: &std::path::Path, raw: &[u8]) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random)
+        .map_err(|_| anyhow::anyhow!("Cannot allocate settings transaction"))?;
+    let name: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    let temporary = path.with_file_name(format!("settings-{name}.tmp"));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)
+        .context("Cannot write settings.json")?;
+    let result = (|| -> Result<()> {
+        file.write_all(raw)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temporary, path)
+            .context("Cannot replace settings.json; existing settings were preserved")?;
+        if let Some(parent) = path.parent() {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
     }
     result
 }
@@ -996,5 +1047,135 @@ mod runtime_consent_tests {
         );
         std::fs::remove_file(dir.join("settings.json")).unwrap();
         std::fs::remove_dir(dir).unwrap();
+    }
+}
+
+/// Compound choices retain the existing settings schema and transport rules.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoFormat {
+    H264,
+    Hevc8,
+    Hevc10,
+}
+impl VideoFormat {
+    pub const ALL: [Self; 3] = [Self::H264, Self::Hevc8, Self::Hevc10];
+    pub const LABELS: [&'static str; 3] = [
+        "H.264",
+        "H.265 / HEVC (8-bit)",
+        "H.265 / HEVC (10-bit, experimental)",
+    ];
+    pub fn current(s: &Settings) -> Self {
+        if !s.prefer_hevc {
+            Self::H264
+        } else if s.experimental_ten_bit {
+            Self::Hevc10
+        } else {
+            Self::Hevc8
+        }
+    }
+    pub fn apply(self, s: &mut Settings) {
+        s.prefer_hevc = self != Self::H264;
+        // Keep a dormant preference when HEVC is disabled, as older settings do.
+        if self != Self::H264 {
+            s.experimental_ten_bit = self == Self::Hevc10;
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteMode {
+    Automatic,
+    DirectOnly,
+    ForceRelay,
+}
+impl RouteMode {
+    pub const ALL: [Self; 3] = [Self::Automatic, Self::DirectOnly, Self::ForceRelay];
+    pub const LABELS: [&'static str; 3] = [
+        "Automatic (direct or TURN)",
+        "Direct only (STUN / LAN / VPN)",
+        "Force TURN relay",
+    ];
+    pub fn current(s: &Settings) -> Self {
+        if s.stun_only {
+            Self::DirectOnly
+        } else if s.force_relay {
+            Self::ForceRelay
+        } else {
+            Self::Automatic
+        }
+    }
+    pub fn apply(self, s: &mut Settings) {
+        s.stun_only = self == Self::DirectOnly;
+        s.force_relay = self == Self::ForceRelay;
+    }
+}
+
+pub enum BinaryChoice {
+    TcpQos,
+    Chroma,
+    Rendering,
+    AudioBuffer,
+    AudioCodec,
+    Speakers,
+}
+impl BinaryChoice {
+    pub fn labels(self) -> [&'static str; 2] {
+        match self {
+            Self::TcpQos => ["Off (default)", "Audio/video QoS (experimental)"],
+            Self::Chroma => ["4:2:0", "Prefer 4:4:4 (experimental)"],
+            Self::Rendering => ["Normal GPU rendering", "Zero copy (experimental, HEVC)"],
+            Self::AudioBuffer => ["Default (core limits)", "Custom limits"],
+            Self::AudioCodec => ["Opus", "Allow raw PCM (BUD)"],
+            Self::Speakers => ["Stereo", "Match output layout (experimental, BUD)"],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputMode {
+    Standard,
+    HidMouse,
+    HidKeyboard,
+    HidBoth,
+}
+impl InputMode {
+    pub const ALL: [Self; 4] = [
+        Self::Standard,
+        Self::HidMouse,
+        Self::HidKeyboard,
+        Self::HidBoth,
+    ];
+    pub const LABELS: [&'static str; 4] = [
+        "Standard input",
+        "USB HID mouse (experimental)",
+        "USB HID keyboard (experimental)",
+        "USB HID mouse + keyboard (experimental)",
+    ];
+    pub fn current(s: &Settings) -> Self {
+        #[cfg(feature = "bud")]
+        {
+            match (s.experimental_hid_mouse, s.experimental_hid_keyboard) {
+                (false, false) => Self::Standard,
+                (true, false) => Self::HidMouse,
+                (false, true) => Self::HidKeyboard,
+                (true, true) => Self::HidBoth,
+            }
+        }
+        #[cfg(not(feature = "bud"))]
+        {
+            let _ = s;
+            Self::Standard
+        }
+    }
+    pub fn apply(self, s: &mut Settings) {
+        #[cfg(feature = "bud")]
+        {
+            s.experimental_hid_mouse = matches!(self, Self::HidMouse | Self::HidBoth);
+            s.experimental_hid_keyboard = matches!(self, Self::HidKeyboard | Self::HidBoth);
+        }
+        #[cfg(not(feature = "bud"))]
+        {
+            let _ = (self, s);
+        }
     }
 }

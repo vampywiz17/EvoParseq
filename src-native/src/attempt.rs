@@ -139,7 +139,7 @@ struct Progress {
 }
 
 struct Completion {
-    #[cfg(windows)]
+    #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
     telemetry: Option<(Arc<crate::stats::Shared>, u64)>,
     #[cfg(windows)]
     timing_active: bool,
@@ -156,6 +156,10 @@ struct Completion {
     media_ingress: crate::media_ingress::Ingress,
     video_stream: Arc<Mutex<crate::video_stream::Inspector>>,
     audio_stream: Option<crate::audio_stream::Pipeline>,
+    #[cfg(target_os = "linux")]
+    linux_video: Option<Arc<dyn crate::video_output::NativeSink>>,
+    #[cfg(target_os = "linux")]
+    linux_consumer: Option<std::thread::Thread>,
     #[cfg(any(windows, target_os = "android"))]
     video_output: Option<Arc<native_video::Pipeline>>,
 }
@@ -163,11 +167,13 @@ struct Completion {
 enum Delivery {
     Queued,
     EmptyMessage,
-    #[cfg(windows)]
+    #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
     Timing(Option<(Arc<crate::stats::Shared>, u64)>),
     Audio(Option<crate::audio_stream::Sender>),
     Video {
         inspector: Arc<Mutex<crate::video_stream::Inspector>>,
+        #[cfg(target_os = "linux")]
+        linux_pipeline: Option<Arc<dyn crate::video_output::NativeSink>>,
         #[cfg(any(windows, target_os = "android"))]
         pipeline: Option<Arc<native_video::Pipeline>>,
     },
@@ -177,7 +183,7 @@ impl Delivery {
         match self {
             Self::Queued => None,
             Self::EmptyMessage => Some(false),
-            #[cfg(windows)]
+            #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
             Self::Timing(link) => {
                 if let Some((bus, generation)) = link {
                     bus.host_timing.receive(generation, bytes);
@@ -187,6 +193,8 @@ impl Delivery {
             Self::Audio(audio) => Some(!audio.is_some_and(|sender| sender.submit(bytes))),
             Self::Video {
                 inspector,
+                #[cfg(target_os = "linux")]
+                linux_pipeline,
                 #[cfg(any(windows, target_os = "android"))]
                 pipeline,
             } => {
@@ -198,7 +206,11 @@ impl Delivery {
                 if let (Some(pipeline), Some(info)) = (pipeline, info) {
                     return Some(!pipeline.submit(bytes, info));
                 }
-                #[cfg(not(any(windows, target_os = "android")))]
+                #[cfg(target_os = "linux")]
+                if let (Some(pipeline), Some(info)) = (linux_pipeline, info) {
+                    return Some(!pipeline.submit(bytes, info));
+                }
+                #[cfg(not(any(windows, target_os = "android", target_os = "linux")))]
                 let _ = info;
                 Some(true)
             }
@@ -208,7 +220,7 @@ impl Delivery {
 
 impl Drop for Completion {
     fn drop(&mut self) {
-        #[cfg(windows)]
+        #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
         if let Some((bus, generation)) = &self.telemetry {
             bus.finish(*generation);
         }
@@ -309,7 +321,7 @@ impl Completion {
                 return Some(Delivery::EmptyMessage);
             }
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
         if channel == 0 && self.discard_unavailable_media && crate::frame_timing::is_report(bytes) {
             return Some(Delivery::Timing(self.telemetry.clone()));
         }
@@ -317,6 +329,8 @@ impl Completion {
             if channel == 1 {
                 return Some(Delivery::Video {
                     inspector: self.video_stream.clone(),
+                    #[cfg(target_os = "linux")]
+                    linux_pipeline: self.linux_video.clone(),
                     #[cfg(any(windows, target_os = "android"))]
                     pipeline: self.video_output.clone(),
                 });
@@ -344,6 +358,10 @@ impl Completion {
         }
         self.message_bytes += bytes.len();
         self.messages.push_back((channel, text, bytes));
+        #[cfg(target_os = "linux")]
+        if let Some(consumer) = &self.linux_consumer {
+            consumer.unpark();
+        }
         true
     }
 
@@ -391,10 +409,10 @@ async fn read_channel(
                 None
             }
             Ok(Some((len, text))) => {
-                #[cfg(windows)]
+                #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
                 let timing =
                     native_mode && id == 0 && crate::frame_timing::is_report(&buffer[..len]);
-                #[cfg(not(windows))]
+                #[cfg(not(any(windows, all(target_os = "linux", feature = "desktop-telemetry"))))]
                 let timing = false;
                 let payload = (queue_receipts && !timing && !text && len <= MAX_CHANNEL_MESSAGE)
                     .then(|| Bytes::copy_from_slice(&buffer[..len]));
@@ -484,7 +502,7 @@ pub enum StunProvider {
     Cloudflare,
 }
 impl StunProvider {
-    fn server(self) -> Option<(&'static str, &'static str)> {
+    pub(crate) fn server(self) -> Option<(&'static str, &'static str)> {
         match self {
             Self::None => None,
             // Audited constructor in the pinned public parsec.js (150-104a).
@@ -534,7 +552,7 @@ impl Attempt {
             video_stream.configure(config.video_protocol.clone());
         }
         let completion = Arc::new(Mutex::new(Completion {
-            #[cfg(windows)]
+            #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
             telemetry: None,
             #[cfg(windows)]
             timing_active: false,
@@ -558,6 +576,10 @@ impl Attempt {
             #[cfg(any(windows, target_os = "android"))]
             video_output: None,
             audio_stream: None,
+            #[cfg(target_os = "linux")]
+            linux_video: None,
+            #[cfg(target_os = "linux")]
+            linux_consumer: None,
         }));
         let finished = Arc::new((Mutex::new(false), Condvar::new()));
         let shared = completion.clone();
@@ -627,6 +649,10 @@ impl Attempt {
         // prevents the old worker from writing into retired output callbacks.
         let mut state = self.completion.lock().unwrap_or_else(|e| e.into_inner());
         state.cancelled = true;
+        #[cfg(target_os = "linux")]
+        if let Some(pipeline) = &state.linux_video {
+            pipeline.stop();
+        }
         #[cfg(any(windows, target_os = "android"))]
         if let Some(pipeline) = &state.video_output {
             pipeline.stop();
@@ -699,6 +725,21 @@ impl Attempt {
             .control_ready
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn video_snapshot(&self) -> crate::video_stream::Snapshot {
+        let inspector = self
+            .completion
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .video_stream
+            .clone();
+        let snapshot = inspector
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshot();
+        snapshot
+    }
+
     #[cfg(windows)]
     pub fn start_video(&self, window: Arc<crate::window::Window>) {
         {
@@ -727,15 +768,38 @@ impl Attempt {
         state.video_output = Some(video);
     }
 
-    #[cfg(target_os = "android")]
-    pub fn start_native_media(&self, video: Arc<crate::video_android::Pipeline>, maximum_ms: u32) {
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    pub fn start_native_media(
+        &self,
+        #[cfg(target_os = "linux")] video: Option<Arc<dyn crate::video_output::NativeSink>>,
+        #[cfg(target_os = "linux")] audio_budget: Option<u32>,
+        #[cfg(target_os = "android")] video: Arc<crate::video_android::Pipeline>,
+        #[cfg(target_os = "android")] maximum_ms: u32,
+    ) {
         let mut state = self.completion.lock().unwrap_or_else(|e| e.into_inner());
-        state.audio_stream = Some(crate::audio_stream::Pipeline::start_with_budget(Some(
-            maximum_ms,
-        )));
-        state.video_output = Some(video);
+        #[cfg(target_os = "android")]
+        let audio_budget = Some(maximum_ms);
+        state.audio_stream = Some(crate::audio_stream::Pipeline::start_with_budget(
+            audio_budget,
+        ));
+        #[cfg(target_os = "linux")]
+        {
+            state.linux_video = video;
+            state.linux_consumer = Some(std::thread::current());
+        }
+        #[cfg(target_os = "android")]
+        {
+            state.video_output = Some(video);
+        }
     }
 
+    #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
+    pub fn set_linux_telemetry(&self, bus: Arc<crate::stats::Shared>, generation: u64) {
+        self.completion
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .telemetry = Some((bus, generation));
+    }
     pub fn audio_receiver(&self) -> Option<crate::audio_stream::NativeReceiver> {
         self.completion
             .lock()
@@ -751,13 +815,13 @@ impl Attempt {
         Some(message)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, target_os = "linux"))]
     pub fn snapshot(&self) -> serde_json::Value {
         let state = self.completion.lock().unwrap_or_else(|e| e.into_inner());
         let mut snapshot = serde_json::json!({ "offer_ready": state.progress.ready, "mid":state.progress.mid, "peer_closed": state.progress.closed, "failed": state.progress.failed, "failure_stage": state.progress.failure_stage, "negotiated_channels": state.progress.channels, "channels_open": state.progress.open_mask.count_ones(), "transport_connected":state.progress.transport_connected, "local_candidates":state.progress.local_candidates, "remote_candidates":state.progress.remote_candidates, "messages_received":state.progress.messages_received, "worker_finished": *self.finished.0.lock().unwrap_or_else(|e| e.into_inner()), "host_connected": false,
         "local_description_set":state.progress.local_description_set,"remote_description_set":state.progress.remote_description_set,"sync_received":state.progress.sync_received,"transport_states":state.progress.transport_states,"transport_states_before_close":state.progress.transport_states_before_close,"transport_states_at_failure":state.progress.transport_states_at_failure,
         "local_host_candidates":state.progress.local_host_candidates,"local_srflx_candidates":state.progress.local_srflx_candidates,
-        "data_channel_only":true,"legacy_rsa_1024_enabled":state.progress.legacy_rsa_1024,"ice_servers_configured":state.progress.stun_provider.server().is_some(),"stun_provider":state.progress.stun_provider.server().map(|(name, _)| name),"network_types":["udp4"],"connection_deadline_seconds":30,"connection_deadline_scope":"establishment-only","connection_established":state.progress.connection_established,
+        "data_channel_only":true,"network_types":["udp4"],"connection_deadline_seconds":30,"connection_deadline_scope":"establishment-only","connection_established":state.progress.connection_established,
         "channel_receive_api":"detached","unavailable_media_bypasses_control_queue":state.discard_unavailable_media,"queued_messages":state.messages.len(),"queued_message_bytes":state.message_bytes,"channel_message_limit_bytes":MAX_CHANNEL_MESSAGE,
         "channel_messages_received":state.progress.channel_messages_received,
         "channel_bytes_received":state.progress.channel_bytes_received,
@@ -768,22 +832,28 @@ impl Attempt {
             serde_json::json!(state.progress.local_candidates.saturating_sub(
                 state.progress.local_host_candidates + state.progress.local_srflx_candidates
             ));
-        snapshot["relay_only_policy"] = serde_json::json!(state.progress.relay_only);
-        snapshot["relay_only_connectivity"] =
-            serde_json::json!(state.progress.relay_only_connectivity);
-        snapshot["ice_gathering_policy"] = serde_json::json!(if state.progress.relay_only {
-            "relay"
-        } else {
-            "all"
-        });
         snapshot["local_gathering_complete"] =
             serde_json::json!(state.progress.local_gathering_complete);
         snapshot["local_sync_queued"] = serde_json::json!(state.progress.local_sync_queued);
 
-        snapshot["ice_servers_configured"] =
-            serde_json::json!(state.progress.resolved_ice_servers.map(|count| count != 0));
-        snapshot["resolved_ice_server_entries"] =
-            serde_json::json!(state.progress.resolved_ice_servers);
+        #[cfg(test)]
+        {
+            snapshot["relay_only_policy"] = serde_json::json!(state.progress.relay_only);
+            snapshot["relay_only_connectivity"] =
+                serde_json::json!(state.progress.relay_only_connectivity);
+            snapshot["ice_gathering_policy"] = serde_json::json!(if state.progress.relay_only {
+                "relay"
+            } else {
+                "all"
+            });
+            snapshot["ice_servers_configured"] =
+                serde_json::json!(state.progress.resolved_ice_servers.map(|count| count != 0));
+            snapshot["resolved_ice_server_entries"] =
+                serde_json::json!(state.progress.resolved_ice_servers);
+            snapshot["legacy_rsa_1024_enabled"] = serde_json::json!(state.progress.legacy_rsa_1024);
+            snapshot["stun_provider"] =
+                serde_json::json!(state.progress.stun_provider.server().map(|(name, _)| name));
+        }
         snapshot
     }
 
@@ -882,7 +952,11 @@ fn worker(
                 && config.ten_bit
                 && crate::video_windows::hevc_ten_bit_available(gpu.as_ref());
         }
-        #[cfg(not(any(windows, target_os = "android")))]
+        #[cfg(not(any(
+            windows,
+            target_os = "android",
+            all(target_os = "linux", feature = "desktop-telemetry")
+        )))]
         {
             config.allow_hevc = false;
         }
@@ -1009,7 +1083,7 @@ fn worker(
         });
     }
     let callback_state = shared.clone();
-    #[cfg(windows)]
+    #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
     {
         let state = shared.clone();
         let weak = Arc::downgrade(&peer);
@@ -1026,6 +1100,10 @@ fn worker(
                 let Some((bus, generation)) = link else {
                     continue;
                 };
+                #[cfg(target_os = "linux")]
+                if !bus.sample_requested() {
+                    continue;
+                }
                 let Some(peer) = weak.upgrade() else {
                     break;
                 };
@@ -1042,7 +1120,12 @@ fn worker(
                     }
                 }
                 // Reuse the existing 1 Hz statistics task.
+                #[cfg(windows)]
                 if !bus.requested() {
+                    continue;
+                }
+                #[cfg(target_os = "linux")]
+                if !bus.sample_requested() {
                     continue;
                 }
                 let (video, inspector) = {
@@ -1058,7 +1141,11 @@ fn worker(
                         sample.audio_layout = report.layout;
                         sample.audio_decoded_queue_ms = Some(report.queued_frames as f64 / 48.0);
                     }
-                    (s.video_output.clone(), s.video_stream.clone())
+                    #[cfg(windows)]
+                    let video = s.video_output.clone();
+                    #[cfg(target_os = "linux")]
+                    let video: Option<crate::video_output::Snapshot> = None;
+                    (video, s.video_stream.clone())
                 };
                 let framing = inspector
                     .lock()
@@ -1067,7 +1154,14 @@ fn worker(
                 sample.profile = framing.sps_profile_idc;
                 sample.codec = framing.codec;
                 sample.hevc_advertised = framing.hevc_advertised;
-                sample.video = video.map(|v| v.snapshot());
+                #[cfg(windows)]
+                {
+                    sample.video = video.map(|v| v.snapshot());
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    sample.video = video;
+                }
                 bus.publish(generation, sample);
             }
         });
@@ -1828,7 +1922,7 @@ mod tests {
 
     fn empty_completion() -> Completion {
         Completion {
-            #[cfg(windows)]
+            #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
             telemetry: None,
             #[cfg(windows)]
             timing_active: false,
@@ -1846,7 +1940,77 @@ mod tests {
             #[cfg(any(windows, target_os = "android"))]
             video_output: None,
             audio_stream: None,
+            #[cfg(target_os = "linux")]
+            linux_video: None,
+            #[cfg(target_os = "linux")]
+            linux_consumer: None,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_control_receipt_wakes_the_existing_consumer() {
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            ready_tx.send(std::thread::current()).unwrap();
+            std::thread::park();
+            done_tx.send(()).unwrap();
+        });
+        let consumer = ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let mut state = empty_completion();
+        state.linux_consumer = Some(consumer.clone());
+        assert!(state.queue_received(0, false, Bytes::from_static(b"fixture-control")));
+        let result = done_rx.recv_timeout(Duration::from_secs(5));
+        // Always release the fixture thread, including a regression failure.
+        consumer.unpark();
+        worker.join().unwrap();
+        result.unwrap();
+        assert_eq!(state.messages.len(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_detached_video_reaches_playback_without_entering_control_receipts() {
+        #[derive(Default)]
+        struct Sink {
+            stopped: std::sync::atomic::AtomicBool,
+            packets: Mutex<Vec<Vec<u8>>>,
+        }
+        impl crate::video_output::NativeSink for Sink {
+            fn submit(&self, bytes: &[u8], _: crate::video_stream::PacketInfo) -> bool {
+                if self.stopped.load(Ordering::Acquire) {
+                    return false;
+                }
+                self.packets.lock().unwrap().push(bytes.to_vec());
+                true
+            }
+            fn stop(&self) {
+                self.stopped.store(true, Ordering::Release);
+            }
+        }
+        let playback = Arc::new(Sink::default());
+        let mut state = empty_completion();
+        state.discard_unavailable_media = true;
+        state.linux_video = Some(playback.clone());
+        // Minimal Annex-B parameter/IDR fixture; no GPU or real host required.
+        let bytes = [
+            0, 0, 1, 0x67, 100, 0, 41, 0, 0, 1, 0x68, 0xee, 0, 0, 1, 0x65, 0x88,
+        ];
+        let delivery = state.prepare_receive(1, false, &bytes).unwrap();
+        assert_eq!(delivery.submit(&bytes), Some(false));
+        assert!(state.messages.is_empty());
+        assert_eq!(*playback.packets.lock().unwrap(), vec![bytes.to_vec()]);
+        let pipeline = state.linux_video.take().unwrap();
+        pipeline.stop();
+        assert_eq!(
+            Delivery::Video {
+                inspector: state.video_stream.clone(),
+                linux_pipeline: Some(pipeline)
+            }
+            .submit(&bytes),
+            Some(true)
+        );
     }
 
     #[cfg(windows)]

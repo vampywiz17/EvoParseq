@@ -120,3 +120,24 @@ Platform adapters use Microsoft's documented
 and Android's documented
 [controller events](https://developer.android.com/games/sdk/game-controller/controller-input).
 Synthetic wire/lifecycle tests do not establish stock-host live compatibility.
+
+## Linux audio and input adapters
+
+- PipeWire 0.8 Rust bindings use the public stream, registry, metadata and SPA raw
+  audio APIs: https://pipewire.pages.freedesktop.org/pipewire-rs/pipewire/
+  Speaker positions follow SPA audio channel definitions; unpositioned/unknown
+  output layouts never imply surround capability.
+- SDL2's public GameController API supplies Linux device state and motor output;
+  the Freedesktop 25.08 runtime provides SDL2-compat/SDL3. Shared Rust retains
+  controller activation, dead zones, reports and lifecycle. No SDL video backend,
+  application controller thread, host input driver or mapping SDK is bundled.
+  https://wiki.libsdl.org/SDL2/CategoryGameController
+- Wayland keyboard shortcut inhibition is the documented optional extension in
+  wayland-protocols, not a global keyboard hook or private compositor API:
+  https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1.xml
+  Its active/inactive events are authoritative; the compositor may retain
+  reserved shortcuts. Unsupported keyboard choices are disabled.
+- Clipboard uses the existing eframe/egui-winit Wayland adapter. The shared text
+  policy retains Windows' bounds, UTF-8 truncation, echo suppression and focus
+  revocation. Linux synchronizes on activation/paste; it does not monitor the
+  background clipboard or record its contents.

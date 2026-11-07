@@ -1,5 +1,8 @@
 //! Explicit BUD lifecycle. RTC attempts never enter this adapter.
+pub(crate) use crate::bud_routes::native_attempt_id;
+#[cfg(test)]
 use crate::bud_routes::turn_relays;
+use crate::bud_routes::{relay_route, route};
 use anyhow::{ensure, Context, Result};
 use evoparseq_bud::{
     bud::{Event, Outcome, Route, Session},
@@ -409,51 +412,6 @@ fn complete_offer(state: &Mutex<State>, cancel: &AtomicBool, offer: Value) -> Re
         "native account offer send failed"
     );
     Ok(true)
-}
-
-// Force TURN starts on the selected relay carrier; otherwise try direct UDP first.
-async fn route(
-    manager: &crate::connection_settings::Manager,
-) -> Result<(
-    Route,
-    Option<VecDeque<Route>>,
-    crate::connection_settings::Settings,
-)> {
-    let (settings, servers) = manager.resolve_bud().await?;
-    if settings.force_relay {
-        let mut routes = turn_relays(servers).await?;
-        let first = routes
-            .pop_front()
-            .context("BUD requires a supported TURN URL")?;
-        return Ok((first, Some(routes), settings));
-    }
-
-    let mut stun = Vec::new();
-    for server in servers {
-        for raw in server.urls {
-            let url = webrtc::ice::url::Url::parse_url(&raw)?;
-            if url.scheme == webrtc::ice::url::SchemeType::Stun
-                && url.proto == webrtc::ice::url::ProtoType::Udp
-            {
-                stun.extend(
-                    tokio::net::lookup_host((url.host.as_str(), url.port))
-                        .await?
-                        .filter(|a| a.is_ipv4()),
-                );
-            }
-        }
-    }
-    Ok((Route::Direct { stun }, None, settings))
-}
-
-async fn relay_route(
-    manager: &crate::connection_settings::Manager,
-    settings: &crate::connection_settings::Settings,
-) -> Result<VecDeque<Route>> {
-    if settings.stun_only || (settings.provider == "custom" && settings.turn_urls.is_empty()) {
-        return Ok(VecDeque::new());
-    }
-    turn_relays(manager.resolve_bud_relay(settings).await?).await
 }
 
 fn log_route_attempt(route: &Route) {
@@ -925,7 +883,7 @@ fn run(
             continue;
         }
         ensure!(!ended, "BUD transport ended");
-        if pumped.video_messages >= 8 || pumped.audio_messages >= 8 {
+        if pumped.more_pending() {
             continue;
         }
         // Packet arrivals unpark this consumer; this timeout only checks lifecycle/stats.
@@ -947,23 +905,6 @@ fn native_close(text: &str, attempt: &str) -> bool {
     serde_json::from_str::<Value>(text).is_ok_and(|value| {
         value["action"] == "close" && value["payload"]["attempt_id"].as_str() == Some(attempt)
     })
-}
-
-pub(crate) fn native_attempt_id() -> Result<String> {
-    let mut random = [0u8; 24];
-    getrandom::fill(&mut random).map_err(|_| anyhow::anyhow!("BUD attempt entropy unavailable"))?;
-    Ok(random
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|part| {
-            format!(
-                "{:02x}{:02x}{:02x}{:02x}",
-                part[0], part[1], part[2], part[3]
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("-"))
 }
 
 #[cfg(test)]

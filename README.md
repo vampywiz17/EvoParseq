@@ -26,13 +26,65 @@ requires no browser, WebView or helper executable.
 **This is an independent community project, not affiliated with or endorsed by
 Parsec, Unity or lowlat.** A Parsec account and a compatible host are required.
 
-**This is the development branch (0.9.6-dev.5): Windows plus an Android TV preview.**
-Download [**v0.9.6-dev.5**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6-dev.5)
-for Windows ZIPs and the signed Android TV APK. Windows previews are installed
-manually; signed Android builds can check the prerelease channel in Settings > Updates.
-The stable Windows client is [**EvoParseq v0.9.5**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.5)
-on `main`. This branch adds controller support on Windows and Android TV;
-these additions are not included in the stable Windows release.
+**This is the development branch: Windows, Android TV and experimental Linux Flatpak support.**
+The latest stable Windows/Android release is
+[**EvoParseq v0.9.6**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6)
+on `main`. The last published dev release,
+[**v0.9.6-dev.5**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6-dev.5),
+contains Windows ZIPs and the signed Android TV APK, but not Linux.
+The Linux preview is **0.1.17** and is now developed here on `dev`; download its
+Flatpak from successful [dev Linux CI runs](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Adev).
+Windows previews are installed manually; signed Android builds can check the
+prerelease channel in Settings > Updates. Platform capabilities differ; see below.
+
+## Linux Flatpak preview
+
+- **Wayland + Vulkan:** egui desktop UI follows the Windows client's shared
+  wording, logical dimensions and layout, with native desktop window decorations.
+  Login/computer picker and Settings have fixed sizes; the stream is resizable
+  and uses centered aspect fitting. Connection stats is a separate fixed-size native window.
+- **Shared Rust core:** account/2FA, discovery, session preferences, settings,
+  WebRTC/BUD, media ingress, normal input and diagnostic models are reused.
+  Linux adapters provide Vulkan Video/Vulkan, PipeWire, Wayland input and
+  Secret portal credential protection.
+- **Playback:** WebRTC and explicit BUD selection, progressive H.264 or capability-gated HEVC Main 8-bit 4:2:0
+  and stereo WebRTC Opus or BUD Opus/PCM with optional matched 5.1/7.1 output. Original NV12 decoder surfaces feed the same-device Vulkan
+  presentation shader; no application-side decoded-image copy or CPU readback.
+  Shader conversion still costs GPU work: this is GPU-resident rendering,
+  **not the application's Zero copy mode**.
+- **Controls:** normal or opt-in BUD HID mouse/keyboard, controllers/rumble,
+  focused text clipboard, orientation and immersive input. A
+  draggable session icon, host display selection, resolution/bitrate/FPS/pacing
+  requests, fullscreen, local PipeWire mute/volume and Disconnect. Host settings
+  replies and Apply confirmation use the shared Rust models.
+- **Diagnostics:** live overlay and Connection stats, with four Overview cards
+  in a 2-by-2 layout. CPU/RSS are sampled at most once per second and only while
+  Connection stats is open. No GPU utilization sampler or extra render pass is
+  introduced; unavailable measurements remain explicitly unavailable.
+- **Updates:** Help → About and GitHub Flatpak checks; verified Linux packages open
+  in the system installer for user confirmation. CI artifacts must first be
+  published as versioned release assets to be discoverable.
+- **Network:** shared Windows STUN/custom TURN/Cloudflare configuration,
+  direct-only and Force TURN for WebRTC and BUD; protected relay secrets and
+  optional in-memory Cloudflare credentials. Windows-only TCP/TLS QoS stays disabled.
+- **Persistence:** Windows-compatible `settings.json` schema and encrypted
+  remembered sessions through the Linux Secret portal. Passwords and 2FA codes
+  are never saved; protected credentials are not portable between platforms.
+
+Linux currently requires a working Wayland desktop, PipeWire and a driver
+exposing the necessary Vulkan Video H.264 decode and sampleable NV12 surfaces.
+A Flatpak runtime cannot add missing GPU/kernel capabilities. Intel HD 520
+H.264 and HEVC 8-bit playback have been reported working on the maintainer's HP EliteBook 840 G3; that does not
+establish support on every Skylake system or driver. The package defaults to
+`ANV_DEBUG=video-decode` for Mesa Intel's experimental video path.
+
+**Not yet integrated on Linux:** 10-bit/4:4:4 playback, the application's
+Zero copy mode, AI upscaling, runtime GPU switching, verified VRR control and simultaneous multi-display windows.
+The full Settings layout is present; unimplemented controls remain disabled.
+
+See [Linux installation, current scope and diagnostics](linux/README.md) and
+the [video-path audit](linux/VIDEO_PATH.md). The Windows feature list below
+should not be read as Linux feature parity.
 
 ## Android TV preview
 

@@ -1,0 +1,54 @@
+name: EvoParseq Linux Flatpak
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths: ['linux/**', '.github/workflows/linux-flatpak.yml', 'src-native/**', 'assets/evoparseq.svg', 'assets/evoparseq.png']
+
+permissions:
+  contents: read
+
+jobs:
+  flatpak:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Prepare locked offline sources
+        run: |
+          stage="$RUNNER_TEMP/linux-flatpak-src"
+          mkdir -p "$stage"
+          git archive HEAD linux .cargo assets/evoparseq.svg assets/evoparseq.png LICENSE src-native | tar -x -C "$stage"
+          cd "$stage"
+          rustfmt --edition 2024 --config skip_children=true --check linux/src/telemetry.rs linux/src/resources_linux.rs linux/src/secure_storage.rs linux/src/settings_linux.rs linux/src/main.rs linux/src/launcher.rs linux/src/desktop_linux.rs linux/src/native_loop.rs linux/src/session_overlay.rs linux/src/desktop_ui.rs linux/src/information_linux.rs linux/src/window_mode.rs linux/src/cursor_theme.rs linux/src/video_probe.rs linux/src/connection.rs linux/src/network_tests.rs linux/src/video_profile.rs linux/src/audio_pipewire.rs linux/src/audio_device.rs linux/src/gamepad_linux.rs linux/src/wayland_keys.rs linux/src/playback.rs linux/src/video_vulkan/*.rs linux/tests/video_contract.rs
+          cargo vendor --manifest-path linux/Cargo.toml --locked --versioned-dirs vendor > .cargo/config.toml
+      - name: Install Flatpak SDK
+        run: |
+          # input-device permission needs Flatpak >= 1.15.6. The project's
+          # upstream-maintained PPA supplies current Flatpak on Ubuntu LTS.
+          sudo add-apt-repository --yes ppa:flatpak/stable
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder librsvg2-common
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 org.freedesktop.Sdk.Extension.rust-stable//25.08 org.freedesktop.Sdk.Extension.llvm21//25.08
+      - name: Build and bundle
+        working-directory: ${{ runner.temp }}/linux-flatpak-src
+        run: |
+          flatpak-builder --user --force-clean --repo="$RUNNER_TEMP/flatpak-repo" "$RUNNER_TEMP/flatpak-build" linux/flatpak/io.github.vampywiz17.EvoParseq.yml
+          test -s "$RUNNER_TEMP/flatpak-build/files/share/icons/Adwaita/cursors/default"
+          test -s "$RUNNER_TEMP/flatpak-build/files/share/icons/Adwaita/cursors/text"
+          test -s "$RUNNER_TEMP/flatpak-build/files/share/icons/Adwaita/cursors/ew-resize"
+          flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo "$RUNNER_TEMP/flatpak-repo" "$RUNNER_TEMP/EvoParseq-Linux.flatpak" io.github.vampywiz17.EvoParseq
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' linux/Cargo.toml | head -n1)
+          mv "$RUNNER_TEMP/EvoParseq-Linux.flatpak" "$RUNNER_TEMP/EvoParseq-Linux-v${version}-x86_64.flatpak"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EvoParseq-Linux-Flatpak
+          path: ${{ runner.temp }}/EvoParseq-Linux-v*-x86_64.flatpak
+          if-no-files-found: error
