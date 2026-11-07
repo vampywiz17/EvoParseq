@@ -583,3 +583,78 @@ fn hevc_packets_keep_their_codec_through_the_existing_queue() {
         1
     );
 }
+
+#[path = "../vendor/wgpu-hal/src/vulkan/semaphore_list.rs"]
+mod semaphore_submit_contract;
+
+#[test]
+fn linux_gpu_backpressure_keeps_compressed_references_in_order() {
+    let playback = playback::Playback::new(eframe::egui::Context::default());
+    let fixture = include_bytes!("data/h264-40-frames.bin");
+    let mut remaining = fixture.as_slice();
+    let mut packets = Vec::new();
+    let mut inspector = video_stream::Inspector::default();
+    for _ in 0..3 {
+        let size = u32::from_le_bytes(remaining[..4].try_into().unwrap()) as usize;
+        let bytes = &remaining[4..4 + size];
+        playback
+            .submit_packet(bytes, inspector.receive(bytes).unwrap())
+            .unwrap();
+        packets.push(bytes);
+        remaining = &remaining[4 + size..];
+    }
+    // All submission slots busy: do not pop, drop, or restart the decoder.
+    assert_eq!(
+        playback
+            .decode_pending_limited(0, |_, _, _| panic!("GPU busy"))
+            .unwrap(),
+        0
+    );
+    let mut parser = lowlat_decode::h264::Stream::new();
+    let mut index = 0;
+    for budget in [1, 0, 2] {
+        let count = playback
+            .decode_pending_limited(budget, |bytes, _, _| {
+                assert_eq!(bytes, packets[index]);
+                assert_eq!(
+                    parser.read(bytes).unwrap(),
+                    lowlat_decode::h264::Read::Picture
+                );
+                parser.finish().unwrap();
+                assert!(output::latest(&mut parser.dpb).is_some());
+                index += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(count, budget);
+    }
+    assert_eq!(index, 3);
+    assert_eq!(
+        playback
+            .decode_pending_limited(2, |_, _, _| panic!("Already consumed"))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn linux_gpu_wakeup_is_one_shot_and_only_polled_when_deferred() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    let playback = playback::Playback::new(eframe::egui::Context::default());
+    let ready = Arc::new(AtomicBool::new(false));
+    let polls = Arc::new(AtomicUsize::new(0));
+    let (r, p) = (ready.clone(), polls.clone());
+    playback.defer_gpu(move || {
+        p.fetch_add(1, Ordering::Relaxed);
+        r.load(Ordering::Relaxed)
+    });
+    playback.poll_gpu();
+    assert_eq!(polls.load(Ordering::Relaxed), 1);
+    ready.store(true, Ordering::Relaxed);
+    playback.poll_gpu();
+    playback.poll_gpu();
+    assert_eq!(polls.load(Ordering::Relaxed), 2);
+}

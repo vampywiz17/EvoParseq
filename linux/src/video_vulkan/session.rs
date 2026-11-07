@@ -10,6 +10,7 @@ const MAX_INPUT: u64 = 8 * 1024 * 1024;
 pub struct Session {
     resources: Option<Box<Resources>>,
     pub textures: Vec<wgpu::Texture>,
+    pub sync: Option<Arc<super::sync::Sync>>,
     pub size: (u32, u32),
     alignment: u64,
     initialized: bool,
@@ -29,17 +30,25 @@ pub struct Session {
 
 struct Resources {
     context: Arc<Context>,
+    sync: Option<Arc<super::sync::Sync>>,
     session: vk::VideoSessionKHR,
     parameters: vk::VideoSessionParametersKHR,
     session_memory: Vec<vk::DeviceMemory>,
     images: Vec<Arc<Image>>,
+    jobs: Vec<Submission>,
+    active: usize,
+    completed: u64,
+    pool: vk::CommandPool,
+}
+
+struct Submission {
     buffer: vk::Buffer,
     buffer_memory: vk::DeviceMemory,
-    pool: vk::CommandPool,
     command: vk::CommandBuffer,
     fence: vk::Fence,
     query: vk::QueryPool,
     pending: bool,
+    started: std::time::Instant,
 }
 
 struct Image {
@@ -61,32 +70,78 @@ impl Drop for Image {
     }
 }
 impl Resources {
-    fn new(context: Arc<Context>) -> Self {
-        Self {
+    fn new(context: Arc<Context>) -> Result<Self> {
+        let sync = if context.timeline_sync {
+            Some(super::sync::Sync::new(context.clone())?)
+        } else {
+            None
+        };
+        Ok(Self {
             context,
+            sync,
             session: vk::VideoSessionKHR::null(),
             parameters: vk::VideoSessionParametersKHR::null(),
             session_memory: Vec::new(),
             images: Vec::new(),
-            buffer: vk::Buffer::null(),
-            buffer_memory: vk::DeviceMemory::null(),
+            jobs: Vec::new(),
+            active: 0,
+            completed: 0,
             pool: vk::CommandPool::null(),
-            command: vk::CommandBuffer::null(),
-            fence: vk::Fence::null(),
-            query: vk::QueryPool::null(),
-            pending: false,
-        }
+        })
     }
 
-    fn wait(&mut self) -> Result<()> {
-        if self.pending {
-            unsafe {
-                self.context
-                    .raw
-                    .wait_for_fences(&[self.fence], true, WAIT_NS)?
+    fn reap(&mut self, block: bool) -> Result<()> {
+        for job in &mut self.jobs {
+            if !job.pending {
+                continue;
+            }
+            let done = unsafe {
+                if block {
+                    self.context
+                        .raw
+                        .wait_for_fences(&[job.fence], true, WAIT_NS)?;
+                    true
+                } else {
+                    self.context.raw.get_fence_status(job.fence)?
+                }
             };
-            self.pending = false;
+            if !done {
+                ensure!(
+                    job.started.elapsed() < std::time::Duration::from_nanos(WAIT_NS),
+                    "Vulkan decode completion timeout"
+                );
+                continue;
+            }
+            if job.query != vk::QueryPool::null() {
+                let mut status = vk::QueryResultStatusKHR::NOT_READY;
+                unsafe {
+                    self.context.raw.get_query_pool_results(
+                        job.query,
+                        0,
+                        std::slice::from_mut(&mut status),
+                        vk::QueryResultFlags::WITH_STATUS_KHR,
+                    )?;
+                }
+                ensure!(
+                    status.as_raw() > 0,
+                    "Vulkan decoder rejected the picture: {status:?}"
+                );
+            }
+            job.pending = false;
+            self.completed += 1;
         }
+        Ok(())
+    }
+    fn wait(&mut self) -> Result<()> {
+        self.reap(true)
+    }
+    fn select(&mut self) -> Result<()> {
+        self.reap(false)?;
+        self.active = self
+            .jobs
+            .iter()
+            .position(|job| !job.pending)
+            .context("Vulkan submission ring is busy")?;
         Ok(())
     }
 }
@@ -96,8 +151,12 @@ impl Drop for Resources {
         // Only destroyed after all decode and graphics submissions completed.
         unsafe {
             let raw = &self.context.raw;
-            raw.destroy_fence(self.fence, None);
-            raw.destroy_query_pool(self.query, None);
+            for job in &self.jobs {
+                raw.destroy_fence(job.fence, None);
+                raw.destroy_query_pool(job.query, None);
+                raw.destroy_buffer(job.buffer, None);
+                raw.free_memory(job.buffer_memory, None);
+            }
             raw.destroy_command_pool(self.pool, None);
             self.context
                 .video
@@ -106,8 +165,6 @@ impl Drop for Resources {
             for memory in &self.session_memory {
                 raw.free_memory(*memory, None);
             }
-            raw.destroy_buffer(self.buffer, None);
-            raw.free_memory(self.buffer_memory, None);
         }
     }
 }
@@ -132,10 +189,26 @@ impl Drop for Session {
 }
 
 impl Session {
+    pub fn available(&mut self) -> Result<usize> {
+        let resources = self.resources.as_mut().context("Video session closed")?;
+        resources.reap(false)?;
+        Ok(resources.jobs.iter().filter(|job| !job.pending).count())
+    }
+    pub fn finish(&mut self) -> Result<()> {
+        self.resources
+            .as_mut()
+            .context("Video session closed")?
+            .wait()
+    }
+    pub fn completed(&self) -> u64 {
+        self.resources.as_ref().map_or(0, |r| r.completed)
+    }
     pub fn new(context: Arc<Context>, sps: &Sps) -> Result<Self> {
         parameters::sps(sps, &parameters::scaling(&sps.scaling))?;
+        let resources = Box::new(Resources::new(context)?);
         let mut result = Self {
-            resources: Some(Box::new(Resources::new(context))),
+            sync: resources.sync.clone(),
+            resources: Some(resources),
             textures: Vec::new(),
             size: (sps.coded_width(), sps.coded_height()),
             alignment: 1,
@@ -157,8 +230,10 @@ impl Session {
         header: &super::hevc_parameters::Header,
     ) -> Result<Self> {
         super::hevc_parameters::validate(sps)?;
+        let resources = Box::new(Resources::new(context)?);
         let mut result = Self {
-            resources: Some(Box::new(Resources::new(context))),
+            sync: resources.sync.clone(),
+            resources: Some(resources),
             textures: Vec::new(),
             size: (sps.width, sps.height),
             alignment: 1,
@@ -323,18 +398,6 @@ impl Session {
                 .video
                 .bind_video_session_memory(resources.session, &bindings)?
         };
-        if context.decode_status {
-            let mut query_profile = profile;
-            resources.query = unsafe {
-                raw.create_query_pool(
-                    &vk::QueryPoolCreateInfo::default()
-                        .query_type(vk::QueryType::RESULT_STATUS_ONLY_KHR)
-                        .query_count(1)
-                        .push_next(&mut query_profile),
-                    None,
-                )?
-            };
-        }
         let profiles = [profile];
         let usage = crate::video_profile::surface_usage();
         let formats = unsafe { crate::video_profile::formats(&video, context.physical, &profile)? };
@@ -463,30 +526,6 @@ impl Session {
         );
         context.queue.submit([encoder.finish()]);
         context.wait_graphics()?;
-        let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
-        resources.buffer = unsafe {
-            raw.create_buffer(
-                &vk::BufferCreateInfo::default()
-                    .size(MAX_INPUT)
-                    .usage(vk::BufferUsageFlags::VIDEO_DECODE_SRC_KHR)
-                    .push_next(&mut list),
-                None,
-            )?
-        };
-        let requirement = unsafe { raw.get_buffer_memory_requirements(resources.buffer) };
-        resources.buffer_memory = unsafe {
-            raw.allocate_memory(
-                &vk::MemoryAllocateInfo::default()
-                    .allocation_size(requirement.size)
-                    .memory_type_index(context.memory_type(
-                        requirement.memory_type_bits,
-                        vk::MemoryPropertyFlags::HOST_VISIBLE
-                            | vk::MemoryPropertyFlags::HOST_COHERENT,
-                    )?),
-                None,
-            )?
-        };
-        unsafe { raw.bind_buffer_memory(resources.buffer, resources.buffer_memory, 0)? };
         resources.pool = unsafe {
             raw.create_command_pool(
                 &vk::CommandPoolCreateInfo::default()
@@ -495,15 +534,72 @@ impl Session {
                 None,
             )?
         };
-        resources.command = unsafe {
-            raw.allocate_command_buffers(
-                &vk::CommandBufferAllocateInfo::default()
-                    .command_pool(resources.pool)
-                    .level(vk::CommandBufferLevel::PRIMARY)
-                    .command_buffer_count(1),
-            )?
-        }[0];
-        resources.fence = unsafe { raw.create_fence(&Default::default(), None)? };
+        for _ in 0..if self.sync.is_some() { 2 } else { 1 } {
+            resources.jobs.push(Submission {
+                buffer: vk::Buffer::null(),
+                buffer_memory: vk::DeviceMemory::null(),
+                command: vk::CommandBuffer::null(),
+                fence: vk::Fence::null(),
+                query: vk::QueryPool::null(),
+                pending: false,
+                started: std::time::Instant::now(),
+            });
+            resources.active = resources.jobs.len() - 1;
+            if context.decode_status {
+                let mut query_profile = profile;
+                resources.jobs[resources.active].query = unsafe {
+                    raw.create_query_pool(
+                        &vk::QueryPoolCreateInfo::default()
+                            .query_type(vk::QueryType::RESULT_STATUS_ONLY_KHR)
+                            .query_count(1)
+                            .push_next(&mut query_profile),
+                        None,
+                    )?
+                };
+            }
+            let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
+            resources.jobs[resources.active].buffer = unsafe {
+                raw.create_buffer(
+                    &vk::BufferCreateInfo::default()
+                        .size(MAX_INPUT)
+                        .usage(vk::BufferUsageFlags::VIDEO_DECODE_SRC_KHR)
+                        .push_next(&mut list),
+                    None,
+                )?
+            };
+            let requirement = unsafe {
+                raw.get_buffer_memory_requirements(resources.jobs[resources.active].buffer)
+            };
+            resources.jobs[resources.active].buffer_memory = unsafe {
+                raw.allocate_memory(
+                    &vk::MemoryAllocateInfo::default()
+                        .allocation_size(requirement.size)
+                        .memory_type_index(context.memory_type(
+                            requirement.memory_type_bits,
+                            vk::MemoryPropertyFlags::HOST_VISIBLE
+                                | vk::MemoryPropertyFlags::HOST_COHERENT,
+                        )?),
+                    None,
+                )?
+            };
+            unsafe {
+                raw.bind_buffer_memory(
+                    resources.jobs[resources.active].buffer,
+                    resources.jobs[resources.active].buffer_memory,
+                    0,
+                )?
+            };
+            resources.jobs[resources.active].command = unsafe {
+                raw.allocate_command_buffers(
+                    &vk::CommandBufferAllocateInfo::default()
+                        .command_pool(resources.pool)
+                        .level(vk::CommandBufferLevel::PRIMARY)
+                        .command_buffer_count(1),
+                )?
+            }[0];
+            resources.jobs[resources.active].fence =
+                unsafe { raw.create_fence(&Default::default(), None)? };
+        }
         Ok(())
     }
 
@@ -564,12 +660,14 @@ impl Session {
             .context("No free Vulkan DPB slot")?;
         self.slot_ids[job.current.slot] = Some(free);
         let resources = self.resources.as_mut().context("Video session closed")?;
-        resources.wait()?;
-        let context = resources.context.clone();
-        let graphics_started = std::time::Instant::now();
-        let graphics_result = context.wait_graphics();
-        self.graphics_wait.record(graphics_started.elapsed());
-        graphics_result?;
+        if self.sync.is_none() {
+            resources.wait()?;
+            let started = std::time::Instant::now();
+            let result = resources.context.wait_graphics();
+            self.graphics_wait.record(started.elapsed());
+            result?;
+        }
+        resources.select()?;
         let size = (bytes.len() as u64).div_ceil(self.alignment) * self.alignment;
         ensure!(
             size > 0 && size <= MAX_INPUT,
@@ -688,7 +786,7 @@ impl Session {
             .std_picture_info(&picture_info)
             .slice_offsets(&offsets);
         let decode = vk::VideoDecodeInfoKHR::default()
-            .src_buffer(resources.buffer)
+            .src_buffer(resources.jobs[resources.active].buffer)
             .src_buffer_offset(0)
             .src_buffer_range(size)
             .dst_picture_resource(target)
@@ -802,11 +900,14 @@ impl Session {
             .context("No free HEVC DPB slot")?;
         self.slot_ids[job.current.slot] = Some(free);
         let resources = self.resources.as_mut().context("Video session closed")?;
-        resources.wait()?;
-        let started = std::time::Instant::now();
-        let wait = resources.context.wait_graphics();
-        self.graphics_wait.record(started.elapsed());
-        wait?;
+        if self.sync.is_none() {
+            resources.wait()?;
+            let started = std::time::Instant::now();
+            let result = resources.context.wait_graphics();
+            self.graphics_wait.record(started.elapsed());
+            result?;
+        }
+        resources.select()?;
         let size = (bytes.len() as u64).div_ceil(self.alignment) * self.alignment;
         ensure!(
             size > 0 && size <= MAX_INPUT,
@@ -881,7 +982,7 @@ impl Session {
             .std_picture_info(&picture_info)
             .slice_segment_offsets(&offsets);
         let decode = vk::VideoDecodeInfoKHR::default()
-            .src_buffer(resources.buffer)
+            .src_buffer(resources.jobs[resources.active].buffer)
             .src_buffer_range(size)
             .dst_picture_resource(target)
             .setup_reference_slot(&target_slot)
@@ -915,7 +1016,7 @@ impl Session {
         );
         unsafe {
             let mapped = raw.map_memory(
-                resources.buffer_memory,
+                resources.jobs[resources.active].buffer_memory,
                 0,
                 size,
                 vk::MemoryMapFlags::empty(),
@@ -926,10 +1027,13 @@ impl Session {
                 0,
                 size as usize - bytes.len(),
             );
-            raw.unmap_memory(resources.buffer_memory);
-            raw.reset_command_buffer(resources.command, vk::CommandBufferResetFlags::empty())?;
+            raw.unmap_memory(resources.jobs[resources.active].buffer_memory);
+            raw.reset_command_buffer(
+                resources.jobs[resources.active].command,
+                vk::CommandBufferResetFlags::empty(),
+            )?;
             raw.begin_command_buffer(
-                resources.command,
+                resources.jobs[resources.active].command,
                 &vk::CommandBufferBeginInfo::default()
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
             )?;
@@ -954,7 +1058,7 @@ impl Session {
                 })
                 .collect();
             raw.cmd_pipeline_barrier(
-                resources.command,
+                resources.jobs[resources.active].command,
                 vk::PipelineStageFlags::ALL_COMMANDS,
                 vk::PipelineStageFlags::ALL_COMMANDS,
                 vk::DependencyFlags::empty(),
@@ -962,11 +1066,16 @@ impl Session {
                 &[],
                 &barriers,
             );
-            if resources.query != vk::QueryPool::null() {
-                raw.cmd_reset_query_pool(resources.command, resources.query, 0, 1);
+            if resources.jobs[resources.active].query != vk::QueryPool::null() {
+                raw.cmd_reset_query_pool(
+                    resources.jobs[resources.active].command,
+                    resources.jobs[resources.active].query,
+                    0,
+                    1,
+                );
             }
             context.video.cmd_begin_video_coding(
-                resources.command,
+                resources.jobs[resources.active].command,
                 &vk::VideoBeginCodingInfoKHR::default()
                     .video_session(resources.session)
                     .video_session_parameters(resources.parameters)
@@ -974,26 +1083,33 @@ impl Session {
             );
             if !self.initialized {
                 context.video.cmd_control_video_coding(
-                    resources.command,
+                    resources.jobs[resources.active].command,
                     &vk::VideoCodingControlInfoKHR::default()
                         .flags(vk::VideoCodingControlFlagsKHR::RESET),
                 );
             }
-            if resources.query != vk::QueryPool::null() {
+            if resources.jobs[resources.active].query != vk::QueryPool::null() {
                 raw.cmd_begin_query(
-                    resources.command,
-                    resources.query,
+                    resources.jobs[resources.active].command,
+                    resources.jobs[resources.active].query,
                     0,
                     vk::QueryControlFlags::empty(),
                 );
             }
-            context.video.cmd_decode_video(resources.command, &decode);
-            if resources.query != vk::QueryPool::null() {
-                raw.cmd_end_query(resources.command, resources.query, 0);
-            }
             context
                 .video
-                .cmd_end_video_coding(resources.command, &Default::default());
+                .cmd_decode_video(resources.jobs[resources.active].command, &decode);
+            if resources.jobs[resources.active].query != vk::QueryPool::null() {
+                raw.cmd_end_query(
+                    resources.jobs[resources.active].command,
+                    resources.jobs[resources.active].query,
+                    0,
+                );
+            }
+            context.video.cmd_end_video_coding(
+                resources.jobs[resources.active].command,
+                &Default::default(),
+            );
             let barriers: Vec<_> = barriers
                 .iter()
                 .map(|barrier| vk::ImageMemoryBarrier {
@@ -1005,7 +1121,7 @@ impl Session {
                 })
                 .collect();
             raw.cmd_pipeline_barrier(
-                resources.command,
+                resources.jobs[resources.active].command,
                 vk::PipelineStageFlags::ALL_COMMANDS,
                 vk::PipelineStageFlags::ALL_COMMANDS,
                 vk::DependencyFlags::empty(),
@@ -1013,34 +1129,44 @@ impl Session {
                 &[],
                 &barriers,
             );
-            raw.end_command_buffer(resources.command)?;
-            raw.reset_fences(&[resources.fence])?;
-            let commands = [resources.command];
+            raw.end_command_buffer(resources.jobs[resources.active].command)?;
+            raw.reset_fences(&[resources.jobs[resources.active].fence])?;
+            let commands = [resources.jobs[resources.active].command];
+            let waits = self.sync.as_ref().map(|sync| [sync.graphics]);
+            let signals = self.sync.as_ref().map(|sync| [sync.decode]);
+            let wait_values = self.sync.as_ref().map(|sync| [sync.graphics_value()]);
+            let signal_values = self.sync.as_ref().map(|sync| [sync.next_decode()]);
+            let stages = [vk::PipelineStageFlags::ALL_COMMANDS];
+            let mut timeline = vk::TimelineSemaphoreSubmitInfo::default();
+            let mut submit = vk::SubmitInfo::default().command_buffers(&commands);
+            if let (Some(waits), Some(signals), Some(wv), Some(sv)) =
+                (&waits, &signals, &wait_values, &signal_values)
+            {
+                timeline = timeline
+                    .wait_semaphore_values(wv)
+                    .signal_semaphore_values(sv);
+                submit = submit
+                    .wait_semaphores(waits)
+                    .wait_dst_stage_mask(&stages)
+                    .signal_semaphores(signals)
+                    .push_next(&mut timeline);
+            }
             raw.queue_submit(
                 context.decode_queue,
-                &[vk::SubmitInfo::default().command_buffers(&commands)],
-                resources.fence,
+                &[submit],
+                resources.jobs[resources.active].fence,
             )?;
-            resources.pending = true;
+            if let (Some(sync), Some(values)) = (&self.sync, signal_values) {
+                sync.submitted(values[0]);
+            }
+            resources.jobs[resources.active].started = std::time::Instant::now();
+            resources.jobs[resources.active].pending = true;
         }
-        let decode_started = std::time::Instant::now();
-        let decode_result = resources.wait();
-        self.decode_wait.record(decode_started.elapsed());
-        decode_result.context("Vulkan decode completion timeout")?;
-        if resources.query != vk::QueryPool::null() {
-            let mut status = vk::QueryResultStatusKHR::NOT_READY;
-            unsafe {
-                raw.get_query_pool_results(
-                    resources.query,
-                    0,
-                    std::slice::from_mut(&mut status),
-                    vk::QueryResultFlags::WITH_STATUS_KHR,
-                )?
-            };
-            ensure!(
-                status.as_raw() > 0,
-                "Vulkan decoder rejected the picture: {status:?}"
-            );
+        if self.sync.is_none() {
+            let started = std::time::Instant::now();
+            let result = resources.wait();
+            self.decode_wait.record(started.elapsed());
+            result.context("Vulkan decode completion timeout")?;
         }
         self.initialized = true;
         Ok(())

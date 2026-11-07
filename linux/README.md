@@ -1,6 +1,6 @@
 # EvoParseq Linux Flatpak preview
 
-Current preview: **0.1.17**, developed on `dev`. This is an
+Current preview: **0.1.18**, developed on `dev`. This is an
 experimental Linux client for unmodified Parsec hosts, not a stable release.
 Windows and Android TV feature availability differs; see the [root README](../README.md).
 
@@ -377,3 +377,24 @@ playback has **not** been validated by this change.
 
 See the [branch cleanup review](AUDIT.md) for retained tests/dependencies and
 platform-boundary checks.
+
+## GPU synchronization (0.1.18)
+
+On timeline-capable Vulkan devices, decode and the existing presentation pass
+exchange same-device timeline semaphore signals. Two bounded compressed-input /
+command-buffer slots are retired by nonblocking fence/status queries; the UI
+leaves compressed references in the existing ingress queue while both are busy.
+GPU decode completion (not command submission) advances the native decoded count.
+Images, DPB mapping and the NV12 presentation shader are unchanged. There is no
+additional decoded-image copy, readback, render pass, worker or periodic timer.
+Graphics-to-decode synchronization conservatively covers the preceding video
+presentation, including repeated redraws. It does not yet overlap a decode which
+reads reference surfaces with a render of those same surfaces in another layout.
+
+The Linux-only wgpu-hal 27.0.4 patch adds external semaphore waits; the Linux-only
+egui-wgpu submit hook attaches waits/signals immediately around the actual render
+submission, after surface acquisition and preparation. CPU waits remain for
+initialization, parameter/format changes and teardown, and the original synchronous
+path is retained when timeline semaphores are unavailable. CPU wall-clock wait
+statistics are not GPU execution-time measurements. Reduced CPU usage or latency
+must be established on physical hardware; no speedup is asserted from compilation.

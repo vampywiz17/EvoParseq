@@ -1,6 +1,6 @@
 [package]
 name = "evoparseq-linux"
-version = "0.1.17"
+version = "0.1.18"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -50,6 +50,7 @@ strip = true
 lto = "thin"
 
 [patch.crates-io]
+wgpu-hal = { path = "vendor/wgpu-hal" }
 webrtc-util = { path = "../src-native/vendor/webrtc-util-0.12.0" }
 egui-winit = { path = "vendor/egui-winit" }
 egui-wgpu = { path = "vendor/egui-wgpu" }

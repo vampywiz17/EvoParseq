@@ -4,6 +4,7 @@ mod hevc_parameters;
 mod output;
 mod parameters;
 mod session;
+mod sync;
 
 use anyhow::{Context as _, Result, ensure};
 pub use device::{Context, create};
@@ -25,6 +26,7 @@ pub struct Decoder {
     presentation: Option<((u32, u32), [u32; 4], bool, u8)>,
     srgb: bool,
     pub decoded: u64,
+    completed_in_session: u64,
     presented: std::cell::Cell<u64>,
     profile: Option<u8>,
     output_depth: Option<u8>,
@@ -33,6 +35,7 @@ pub struct Decoder {
 struct Frame {
     pipeline: Arc<wgpu::RenderPipeline>,
     bindings: wgpu::BindGroup,
+    sync: Option<Arc<sync::Sync>>,
     size: (u32, u32),
 }
 
@@ -136,6 +139,7 @@ impl Decoder {
             presentation: None,
             srgb: format.is_srgb(),
             decoded: 0,
+            completed_in_session: 0,
             presented: std::cell::Cell::new(0),
             profile: None,
             output_depth: match format {
@@ -149,6 +153,34 @@ impl Decoder {
         }
     }
 
+    /// Nonblocking retirement. The two native submission slots bound CPU/GPU
+    /// lead without dropping compressed references or blocking the UI thread.
+    pub fn defer_backlog(&self, playback: &crate::playback::Playback) {
+        if let Some(sync) = self
+            .session
+            .as_ref()
+            .and_then(|session| session.sync.as_ref())
+        {
+            sync.defer_backlog(playback);
+        }
+    }
+    pub fn available(&mut self) -> Result<usize> {
+        let count = match &mut self.session {
+            Some(session) => session.available()?,
+            None => 1,
+        };
+        self.poll()?;
+        Ok(count)
+    }
+    fn poll(&mut self) -> Result<()> {
+        if let Some(session) = &mut self.session {
+            session.available()?;
+            let done = session.completed();
+            self.decoded += done - self.completed_in_session;
+            self.completed_in_session = done;
+        }
+        Ok(())
+    }
     pub fn submit_oriented(
         &mut self,
         bytes: &[u8],
@@ -158,7 +190,7 @@ impl Decoder {
         ensure!(rotation <= 3, "Invalid video rotation");
         use crate::video_stream::Codec;
         ensure!(
-            self.decoded == 0 || self.codec == codec,
+            self.session.is_none() || self.codec == codec,
             "Unexpected video codec change"
         );
         self.codec = codec;
@@ -169,6 +201,13 @@ impl Decoder {
                     .read(bytes)
                     .map_err(|e| anyhow::anyhow!("H.264 parsing: {e:?}"))?;
                 if read == Read::FormatChanged {
+                    if let Some(session) = &mut self.session {
+                        session.finish()?;
+                    }
+                    if let Some(session) = &self.session {
+                        self.decoded += session.completed() - self.completed_in_session;
+                    }
+                    self.completed_in_session = 0;
                     self.frame = None;
                     self.frames.clear();
                     self.presentation = None;
@@ -218,6 +257,13 @@ impl Decoder {
                     .read(bytes)
                     .map_err(|e| anyhow::anyhow!("HEVC parsing: {e:?}"))?;
                 if read == lowlat_decode::hevc::Read::FormatChanged {
+                    if let Some(session) = &mut self.session {
+                        session.finish()?;
+                    }
+                    if let Some(session) = &self.session {
+                        self.decoded += session.completed() - self.completed_in_session;
+                    }
+                    self.completed_in_session = 0;
                     self.frame = None;
                     self.frames.clear();
                     self.presentation = None;
@@ -328,6 +374,7 @@ impl Decoder {
                 self.frames.push(Arc::new(Frame {
                     pipeline: self.pipeline.clone(),
                     bindings,
+                    sync: session.sync.clone(),
                     size: if rotation & 1 != 0 {
                         (visible.1, visible.0)
                     } else {
@@ -345,7 +392,7 @@ impl Decoder {
                     .clone(),
             );
         }
-        self.decoded += 1;
+        self.poll()?;
         Ok(())
     }
 
@@ -442,6 +489,17 @@ impl Drop for Decoder {
 struct Present(Arc<Frame>);
 
 impl egui_wgpu::CallbackTrait for Present {
+    fn before_submit(&self, queue: &wgpu::Queue) {
+        if let Some(sync) = &self.0.sync {
+            sync.before_submit(queue);
+        }
+    }
+    fn after_submit(&self) {
+        if let Some(sync) = &self.0.sync {
+            sync.after_submit();
+        }
+    }
+
     fn paint(
         &self,
         _info: egui::PaintCallbackInfo,

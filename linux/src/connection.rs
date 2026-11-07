@@ -598,6 +598,7 @@ fn observe(
         if playback.stopped() {
             return Ok(format!("{mode} stream disconnected"));
         }
+        playback.poll_gpu();
         let (ready, video, more_pending, wait) = poll(&mut signaling_closed)?;
         connected |= ready;
         let now = Instant::now();

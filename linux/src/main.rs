@@ -390,9 +390,13 @@ impl eframe::App for Desktop {
             match playback
                 .resume_if_ready(ctx.input(|input| input.focused))
                 .and_then(|_| {
-                    playback.decode_pending_oriented(|bytes, codec, rotation| {
-                        decoder.submit_oriented(bytes, codec, rotation)
-                    })
+                    let available = decoder.available()?;
+                    let consumed = playback
+                        .decode_pending_limited(available, |bytes, codec, rotation| {
+                            decoder.submit_oriented(bytes, codec, rotation)
+                        })?;
+                    decoder.defer_backlog(playback);
+                    Ok(consumed)
                 }) {
                 Err(error) => {
                     playback.stop();

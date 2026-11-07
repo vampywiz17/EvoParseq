@@ -35,7 +35,10 @@ impl Pending {
     }
 }
 
+type GpuWake = Box<dyn Fn() -> bool + Send + Sync>;
+
 pub struct Playback {
+    gpu_wakeup: Mutex<Option<GpuWake>>,
     stopped: AtomicBool,
     hevc: AtomicBool,
     packets: Mutex<Pending>,
@@ -54,8 +57,34 @@ pub struct Playback {
 }
 
 impl Playback {
+    pub fn has_queued_video(&self) -> bool {
+        self.packets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .queue
+            .report
+            .queue_depth
+            > 0
+    }
+    pub fn defer_gpu(&self, ready: impl Fn() -> bool + Send + Sync + 'static) {
+        let mut wake = self.gpu_wakeup.lock().unwrap_or_else(|e| e.into_inner());
+        if wake.is_none() {
+            *wake = Some(Box::new(ready));
+        }
+    }
+    /// Existing transport/control loop only; no new worker, timer or render.
+    /// Poll exclusively while bounded GPU backpressure left compressed input.
+    pub fn poll_gpu(&self) {
+        let mut wake = self.gpu_wakeup.lock().unwrap_or_else(|e| e.into_inner());
+        if wake.as_ref().is_some_and(|ready| ready()) {
+            *wake = None;
+            self.ui.request_repaint();
+        }
+    }
+
     pub fn new(ui: eframe::egui::Context) -> Arc<Self> {
         Arc::new(Self {
+            gpu_wakeup: Mutex::new(None),
             stopped: AtomicBool::new(false),
             hevc: AtomicBool::new(false),
             packets: Mutex::new(Pending::default()),
@@ -321,8 +350,17 @@ impl Playback {
     ) -> Result<usize> {
         self.decode_pending_oriented(|bytes, codec, _| decode(bytes, codec))
     }
+    #[cfg(test)]
     pub fn decode_pending_oriented(
         &self,
+        decode: impl FnMut(&[u8], crate::video_stream::Codec, u8) -> Result<()>,
+    ) -> Result<usize> {
+        self.decode_pending_limited(usize::MAX, decode)
+    }
+
+    pub fn decode_pending_limited(
+        &self,
+        limit: usize,
         mut decode: impl FnMut(&[u8], crate::video_stream::Codec, u8) -> Result<()>,
     ) -> Result<usize> {
         let pending = self
@@ -333,7 +371,7 @@ impl Playback {
             .report
             .queue_depth;
         let mut consumed = 0;
-        for _ in 0..pending {
+        for _ in 0..pending.min(limit) {
             if self.stopped() {
                 break;
             }

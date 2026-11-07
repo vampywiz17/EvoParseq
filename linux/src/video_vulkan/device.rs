@@ -13,6 +13,7 @@ pub struct Context {
     pub decode_family: u32,
     pub hevc: bool,
     pub decode_status: bool,
+    pub timeline_sync: bool,
     pub decode_queue: vk::Queue,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -183,6 +184,12 @@ unsafe fn create_on(instance: &wgpu::Instance, adapter: &wgpu::Adapter) -> Resul
         );
     }
     let names: Vec<_> = required.iter().map(|name| name.as_ptr()).collect();
+    // HAL enables this feature when supported (also used for its own fences).
+    // Preserve the synchronous path on devices without timeline semaphores.
+    let mut timeline = vk::PhysicalDeviceTimelineSemaphoreFeatures::default();
+    let mut queried = vk::PhysicalDeviceFeatures2::default().push_next(&mut timeline);
+    unsafe { raw_instance.get_physical_device_features2(physical, &mut queried) };
+    let timeline_sync = timeline.timeline_semaphore != 0;
     let mut physical_features = hal_adapter.physical_device_features(&required, features);
     let info = physical_features.add_to_device_create(
         vk::DeviceCreateInfo::default()
@@ -227,6 +234,7 @@ unsafe fn create_on(instance: &wgpu::Instance, adapter: &wgpu::Adapter) -> Resul
         physical,
         decode_family,
         hevc,
+        timeline_sync,
         decode_status: statuses[decode_family as usize].query_result_status_support != 0,
         decode_queue: unsafe { raw.get_device_queue(decode_family, 0) },
         properties: unsafe { raw_instance.get_physical_device_memory_properties(physical) },

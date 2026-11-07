@@ -582,9 +582,23 @@ impl Painter {
             profiling::scope!("Queue::submit");
             // wgpu doesn't document where vsync can happen. Maybe here?
             let start = web_time::Instant::now();
+            for primitive in clipped_primitives {
+                if let egui::epaint::Primitive::Callback(callback) = &primitive.primitive {
+                    if let Some(callback) = callback.callback.downcast_ref::<crate::Callback>() {
+                        callback.before_submit(&render_state.queue);
+                    }
+                }
+            }
             render_state
                 .queue
                 .submit(user_cmd_bufs.into_iter().chain([encoded]));
+            for primitive in clipped_primitives {
+                if let egui::epaint::Primitive::Callback(callback) = &primitive.primitive {
+                    if let Some(callback) = callback.callback.downcast_ref::<crate::Callback>() {
+                        callback.after_submit();
+                    }
+                }
+            }
             vsync_sec += start.elapsed().as_secs_f32();
         };
 

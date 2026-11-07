@@ -30,6 +30,13 @@ pub type CallbackResources = type_map::TypeMap;
 pub struct Callback(Box<dyn CallbackTrait>);
 
 impl Callback {
+    pub(crate) fn before_submit(&self, queue: &wgpu::Queue) {
+        self.0.before_submit(queue);
+    }
+    pub(crate) fn after_submit(&self) {
+        self.0.after_submit();
+    }
+
     /// Creates a new [`epaint::PaintCallback`] from a callback trait instance.
     pub fn new_paint_callback(
         rect: epaint::emath::Rect,
@@ -87,6 +94,12 @@ impl Callback {
 ///
 /// See the [`custom3d_wgpu`](https://github.com/emilk/egui/blob/main/crates/egui_demo_app/src/apps/custom3d_wgpu.rs) demo source for a detailed usage example.
 pub trait CallbackTrait: Send + Sync {
+    /// Linux native-video interop: called immediately around the actual queue
+    /// submit, after all preparation and surface acquisition have succeeded.
+    /// No GPU work or buffer mapping may be issued by these hooks.
+    fn before_submit(&self, _queue: &wgpu::Queue) {}
+    fn after_submit(&self) {}
+
     fn prepare(
         &self,
         _device: &wgpu::Device,
