@@ -122,7 +122,7 @@ unsafe fn collect(p: &Panel) -> Result<Video> {
         fps: &selected_field(p, 2),
         constant_fps: select(3) == 1,
         rotated: select(4) == 1,
-        immersive: crate::input_state::immersive_value(select(5)),
+        immersive: crate::input_state::immersive_value(select(5) as usize),
         fullscreen: SendMessageW(p.fullscreen, BM_GETCHECK, 0, 0) == BST_CHECKED as isize,
     }
     .parse()
