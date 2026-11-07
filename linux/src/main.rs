@@ -390,11 +390,14 @@ impl eframe::App for Desktop {
             match playback
                 .resume_if_ready(ctx.input(|input| input.focused))
                 .and_then(|_| {
-                    let available = decoder.available()?;
-                    let consumed = playback
-                        .decode_pending_limited(available, |bytes, codec, rotation| {
-                            decoder.submit_oriented(bytes, codec, rotation)
-                        })?;
+                    let available = std::cell::Cell::new(decoder.available()?);
+                    let consumed = playback.decode_pending_ready(
+                        || available.get() > 0,
+                        |bytes, codec, rotation| {
+                            available.set(decoder.submit_oriented(bytes, codec, rotation)?);
+                            Ok(())
+                        },
+                    )?;
                     decoder.defer_backlog(playback);
                     Ok(consumed)
                 }) {

@@ -398,3 +398,18 @@ initialization, parameter/format changes and teardown, and the original synchron
 path is retained when timeline semaphores are unavailable. CPU wall-clock wait
 statistics are not GPU execution-time measurements. Reduced CPU usage or latency
 must be established on physical hardware; no speedup is asserted from compilation.
+
+For an A/B comparison on the same device/stream, the existing CPU-synchronized
+path can be selected for one launch with:
+
+```sh
+flatpak run --env=EVOPARSEQ_VULKAN_CPU_SYNC=1 io.github.vampywiz17.EvoParseq
+```
+
+The normal launch uses GPU synchronization when supported. Compare the same
+codec, resolution, FPS, bitrate and window state; record CPU, decoded/presented
+FPS and latency together. Backpressure wakeups reuse the existing transport
+control loop and only query GPU progress while compressed input is deferred.
+The offline suite also includes a native/wgpu timeline interoperability fixture
+on a headless Vulkan adapter when available (software Vulkan is sufficient).
+This validates semaphore handoff, not hardware video decoding or display latency.

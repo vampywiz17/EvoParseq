@@ -358,9 +358,29 @@ impl Playback {
         self.decode_pending_limited(usize::MAX, decode)
     }
 
+    #[cfg(test)]
     pub fn decode_pending_limited(
         &self,
         limit: usize,
+        decode: impl FnMut(&[u8], crate::video_stream::Codec, u8) -> Result<()>,
+    ) -> Result<usize> {
+        let remaining = std::cell::Cell::new(limit);
+        self.decode_pending_ready(
+            || {
+                let count = remaining.get();
+                if count == 0 {
+                    false
+                } else {
+                    remaining.set(count - 1);
+                    true
+                }
+            },
+            decode,
+        )
+    }
+    pub fn decode_pending_ready(
+        &self,
+        mut ready: impl FnMut() -> bool,
         mut decode: impl FnMut(&[u8], crate::video_stream::Codec, u8) -> Result<()>,
     ) -> Result<usize> {
         let pending = self
@@ -371,7 +391,10 @@ impl Playback {
             .report
             .queue_depth;
         let mut consumed = 0;
-        for _ in 0..pending.min(limit) {
+        for _ in 0..pending {
+            if !ready() {
+                break;
+            }
             if self.stopped() {
                 break;
             }

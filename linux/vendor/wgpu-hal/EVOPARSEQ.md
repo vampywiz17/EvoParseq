@@ -10,11 +10,18 @@ continue to use their original dependencies.
 The Vulkan queue adds `add_wait_semaphore`, following the public upstream API:
 https://wgpu.rs/doc/wgpu_hal/vulkan/struct.Queue.html#method.add_wait_semaphore
 This is a small compatibility implementation for 27.0.4, not a wholesale upstream
-version upgrade or a claim of byte-identical backport. Other HAL backends remain
-unmodified. External waits are consumed by the next submit, with values aligned
+version upgrade or a claim of byte-identical backport. Only the Vulkan backend is distributed in this Linux-specific copy. External waits are consumed by the next submit, with values aligned
 with existing binary swapchain/relay waits and timeline signal values preserved.
 The caller retains semaphore ownership and attaches dependencies immediately
 before the intended submit. No private fields are accessed by the application.
 
 Modified upstream files: src/vulkan/mod.rs, adapter.rs, semaphore_list.rs.
 The latter's CPU-only submit-structure tests also run in Linux video_contract.
+
+Unused upstream examples, their development-only dependencies, and DX12/Metal/GLES
+backend sources are not distributed. This patch explicitly rejects those backend
+features and non-Linux targets; it is not a general replacement for upstream HAL.
+The no-op backend and common/Vulkan code remain because HAL uses their interfaces.
+Cargo.toml.orig records the original upstream manifest. The root Windows/Android
+builds continue to resolve their unmodified upstream crates.
+The two upstream documentation whitespace defects are normalized only.

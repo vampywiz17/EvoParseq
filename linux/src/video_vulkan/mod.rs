@@ -165,28 +165,22 @@ impl Decoder {
         }
     }
     pub fn available(&mut self) -> Result<usize> {
-        let count = match &mut self.session {
-            Some(session) => session.available()?,
-            None => 1,
-        };
-        self.poll()?;
-        Ok(count)
-    }
-    fn poll(&mut self) -> Result<()> {
         if let Some(session) = &mut self.session {
-            session.available()?;
+            let count = session.available()?;
             let done = session.completed();
             self.decoded += done - self.completed_in_session;
             self.completed_in_session = done;
+            Ok(count)
+        } else {
+            Ok(1)
         }
-        Ok(())
     }
     pub fn submit_oriented(
         &mut self,
         bytes: &[u8],
         codec: crate::video_stream::Codec,
         rotation: u8,
-    ) -> Result<()> {
+    ) -> Result<usize> {
         ensure!(rotation <= 3, "Invalid video rotation");
         use crate::video_stream::Codec;
         ensure!(
@@ -217,7 +211,7 @@ impl Decoder {
                         .map_err(|e| anyhow::anyhow!("H.264 format change: {e:?}"))?;
                 }
                 if read != Read::Picture {
-                    return Ok(());
+                    return self.available();
                 }
                 let job = stream.job().context("H.264 picture unavailable")?;
                 ensure!(
@@ -273,7 +267,7 @@ impl Decoder {
                         .map_err(|e| anyhow::anyhow!("HEVC format change: {e:?}"))?;
                 }
                 if read != lowlat_decode::hevc::Read::Picture {
-                    return Ok(());
+                    return self.available();
                 }
                 let job = stream.job().context("HEVC picture unavailable")?;
                 hevc_parameters::validate(&job.sps)?;
@@ -392,8 +386,7 @@ impl Decoder {
                     .clone(),
             );
         }
-        self.poll()?;
-        Ok(())
+        self.available()
     }
 
     /// CPU wall-clock waits, not GPU execution or scanout measurements.

@@ -240,6 +240,16 @@
     unused_qualifications
 )]
 
+#[cfg(any(
+    not(target_os = "linux"),
+    feature = "gles",
+    feature = "metal",
+    feature = "dx12"
+))]
+compile_error!(
+    "This EvoParseq path patch is Linux Vulkan-only; use upstream wgpu-hal for other backends."
+);
+
 extern crate alloc;
 extern crate wgpu_types as wgt;
 // Each of these backends needs `std` in some fashion; usually `std::thread` functions.
@@ -247,15 +257,6 @@ extern crate wgpu_types as wgt;
 #[macro_use]
 extern crate std;
 
-/// DirectX12 API internals.
-#[cfg(dx12)]
-pub mod dx12;
-/// GLES API internals.
-#[cfg(gles)]
-pub mod gles;
-/// Metal API internals.
-#[cfg(metal)]
-pub mod metal;
 /// A dummy API implementation.
 // TODO(https://github.com/gfx-rs/wgpu/issues/7120): this should have a cfg
 pub mod noop;
@@ -265,12 +266,6 @@ pub mod vulkan;
 
 pub mod auxil;
 pub mod api {
-    #[cfg(dx12)]
-    pub use super::dx12::Api as Dx12;
-    #[cfg(gles)]
-    pub use super::gles::Api as Gles;
-    #[cfg(metal)]
-    pub use super::metal::Api as Metal;
     pub use super::noop::Api as Noop;
     #[cfg(vulkan)]
     pub use super::vulkan::Api as Vulkan;

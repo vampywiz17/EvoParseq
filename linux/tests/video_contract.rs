@@ -1,3 +1,5 @@
+extern crate alloc;
+
 #[path = "../../src-native/src/desktop_input.rs"]
 mod desktop_input;
 #[path = "../../src-native/src/gamepad.rs"]
@@ -629,6 +631,35 @@ fn linux_gpu_backpressure_keeps_compressed_references_in_order() {
         assert_eq!(count, budget);
     }
     assert_eq!(index, 3);
+    // Readiness may be refreshed after each decode. A fast GPU can recycle
+    // the same bounded slot within one UI drain; capacity is not an FPS cap.
+    let retry = playback::Playback::new(eframe::egui::Context::default());
+    let mut inspector = video_stream::Inspector::default();
+    for bytes in &packets {
+        retry
+            .submit_packet(bytes, inspector.receive(bytes).unwrap())
+            .unwrap();
+    }
+    let free = std::cell::Cell::new(1);
+    let mut parser = lowlat_decode::h264::Stream::new();
+    assert_eq!(
+        retry
+            .decode_pending_ready(
+                || free.get() > 0,
+                |bytes, _, _| {
+                    assert_eq!(
+                        parser.read(bytes).unwrap(),
+                        lowlat_decode::h264::Read::Picture
+                    );
+                    parser.finish().unwrap();
+                    assert!(output::latest(&mut parser.dpb).is_some());
+                    free.set(1);
+                    Ok(())
+                }
+            )
+            .unwrap(),
+        3
+    );
     assert_eq!(
         playback
             .decode_pending_limited(2, |_, _, _| panic!("Already consumed"))
@@ -657,4 +688,111 @@ fn linux_gpu_wakeup_is_one_shot_and_only_polled_when_deferred() {
     playback.poll_gpu();
     playback.poll_gpu();
     assert_eq!(polls.load(Ordering::Relaxed), 2);
+}
+
+/// Exercises the actual patched HAL on a headless Vulkan adapter (including
+/// software Vulkan). No video decoding, image readback or production profile.
+#[test]
+fn linux_vulkan_native_and_wgpu_timeline_bridge() -> anyhow::Result<()> {
+    use ash::vk;
+    if unsafe { ash::Entry::load() }.is_err() {
+        eprintln!("Vulkan sync fixture not exercised: Vulkan loader unavailable");
+        return Ok(());
+    }
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::VULKAN,
+        ..Default::default()
+    });
+    let Some(adapter) = instance
+        .enumerate_adapters(wgpu::Backends::VULKAN)
+        .into_iter()
+        .next()
+    else {
+        eprintln!("Vulkan sync fixture not exercised: no Vulkan adapter");
+        return Ok(());
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+    let (device, queue) =
+        runtime.block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
+    let hal = unsafe { device.as_hal::<wgpu::hal::api::Vulkan>() }.unwrap();
+    let mut support = vk::PhysicalDeviceTimelineSemaphoreFeatures::default();
+    let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut support);
+    unsafe {
+        hal.shared_instance()
+            .raw_instance()
+            .get_physical_device_features2(hal.raw_physical_device(), &mut features);
+    }
+    if support.timeline_semaphore == 0
+        || unsafe {
+            hal.shared_instance()
+                .raw_instance()
+                .get_physical_device_properties(hal.raw_physical_device())
+        }
+        .api_version
+            < vk::API_VERSION_1_2
+    {
+        eprintln!("Vulkan sync fixture not exercised: timeline semaphores unavailable");
+        return Ok(());
+    }
+    let raw = hal.raw_device().clone();
+    let raw_queue = hal.raw_queue();
+    drop(hal);
+    let mut kind =
+        vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
+    let info = vk::SemaphoreCreateInfo::default().push_next(&mut kind);
+    let decoded = unsafe { raw.create_semaphore(&info, None)? };
+    let graphics = unsafe { raw.create_semaphore(&info, None)? };
+    let mut rendered = 0;
+    for picture in 1..=8u64 {
+        let waits = [graphics];
+        let signals = [decoded];
+        let wait_values = [rendered];
+        let signal_values = [picture];
+        let stages = [vk::PipelineStageFlags::ALL_COMMANDS];
+        let mut timeline = vk::TimelineSemaphoreSubmitInfo::default()
+            .wait_semaphore_values(&wait_values)
+            .signal_semaphore_values(&signal_values);
+        let native = vk::SubmitInfo::default()
+            .wait_semaphores(&waits)
+            .wait_dst_stage_mask(&stages)
+            .signal_semaphores(&signals)
+            .push_next(&mut timeline);
+        unsafe {
+            raw.queue_submit(raw_queue, &[native], vk::Fence::null())?;
+        }
+        // Some pictures have no render; some are redrawn twice. Repeated
+        // waits on an already-signalled timeline value must remain valid.
+        for _ in 0..if picture % 3 == 0 { 0 } else { 2 } {
+            rendered += 1;
+            let command = device.create_command_encoder(&Default::default()).finish();
+            {
+                let hal = unsafe { queue.as_hal::<wgpu::hal::api::Vulkan>() }.unwrap();
+                hal.add_wait_semaphore(
+                    decoded,
+                    Some(picture),
+                    vk::PipelineStageFlags::ALL_COMMANDS,
+                );
+                hal.add_signal_semaphore(graphics, Some(rendered));
+            }
+            queue.submit([command]);
+        }
+    }
+    device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: Some(std::time::Duration::from_secs(2)),
+    })?;
+    assert_eq!(unsafe { raw.get_semaphore_counter_value(decoded)? }, 8);
+    assert_eq!(
+        unsafe { raw.get_semaphore_counter_value(graphics)? },
+        rendered
+    );
+    unsafe {
+        raw.destroy_semaphore(decoded, None);
+        raw.destroy_semaphore(graphics, None);
+    }
+    eprintln!(
+        "Vulkan sync fixture exercised on {}",
+        adapter.get_info().name
+    );
+    Ok(())
 }

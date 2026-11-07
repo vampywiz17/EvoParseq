@@ -1,6 +1,3 @@
-#[cfg(dx12)]
-pub(super) mod dxgi;
-
 #[cfg(all(native, feature = "renderdoc"))]
 pub(super) mod renderdoc;
 

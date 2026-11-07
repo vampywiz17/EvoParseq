@@ -10,3 +10,11 @@ request reconfigures the existing surfaces through public wgpu Surface::configur
 there is no new decoder image, intermediate image, render pass or worker.
 0 restores the upstream default, 1/2 request that maximum presentation latency.
 This is a driver/compositor hint, not a measured queue depth or VRR claim.
+
+Native Vulkan video additionally uses paired CallbackTrait before_submit /
+after_submit hooks. The winit painter invokes these immediately around its
+existing Queue::submit, after preparation and successful surface acquisition.
+The video callback attaches GPU waits/signals only; it submits no work itself.
+Other callbacks retain default no-op hooks. Multiple callbacks for the same
+session are deduplicated until after that submission. No additional render pass,
+image or queue submission is introduced by the hooks.

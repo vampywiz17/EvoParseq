@@ -600,6 +600,15 @@ impl Session {
             resources.jobs[resources.active].fence =
                 unsafe { raw.create_fence(&Default::default(), None)? };
         }
+        crate::event_log::record(
+            "INFO",
+            "vulkan_video_initialized",
+            serde_json::json!({
+                "codec": if hevc { "HEVC" } else { "H.264" },
+                "gpu_timeline_sync": self.sync.is_some(),
+                "submission_slots": resources.jobs.len(),
+            }),
+        );
         Ok(())
     }
 
