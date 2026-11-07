@@ -2,8 +2,8 @@
 #[cfg(test)]
 use crate::turn_configuration::parse_cloudflare;
 use crate::turn_configuration::{cloudflare_request, validate_urls};
-use anyhow::{bail, Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
+use anyhow::{Context, Result, bail};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io::Write, path::PathBuf, sync::Mutex, time::Instant};
 
@@ -309,12 +309,14 @@ impl Settings {
     pub fn stun_servers(&self) -> Vec<RTCIceServer> {
         let urls = if self.stun_urls.is_empty() {
             // Preserve the old explicit Cloudflare STUN-only configuration.
-            vec![if self.stun_only && self.provider == "cloudflare" {
-                "stun:stun.cloudflare.com:3478"
-            } else {
-                PARSEC_STUN
-            }
-            .into()]
+            vec![
+                if self.stun_only && self.provider == "cloudflare" {
+                    "stun:stun.cloudflare.com:3478"
+                } else {
+                    PARSEC_STUN
+                }
+                .into(),
+            ]
         } else {
             self.stun_urls.clone()
         };
@@ -611,7 +613,7 @@ impl Manager {
 fn atomic_write(path: &std::path::Path, raw: &[u8]) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
     };
     let mut random = [0; 16];
     getrandom::fill(&mut random)
@@ -766,12 +768,16 @@ mod tests {
             PresentationMode::Automatic
         );
         assert!(PresentationMode::Vrr.low_latency());
-        assert!(PresentationMode::Vrr
-            .timing_status(true, true)
-            .contains("unverified"));
-        assert!(PresentationMode::Vrr
-            .timing_status(true, false)
-            .contains("unavailable"));
+        assert!(
+            PresentationMode::Vrr
+                .timing_status(true, true)
+                .contains("unverified")
+        );
+        assert!(
+            PresentationMode::Vrr
+                .timing_status(true, false)
+                .contains("unavailable")
+        );
     }
     use super::*;
 
@@ -902,9 +908,11 @@ mod tests {
             Manager::open(dir.file()).view().0.encrypted_custom_password,
             blob
         );
-        assert!(!String::from_utf8(std::fs::read(dir.file()).unwrap())
-            .unwrap()
-            .contains("synthetic-password"));
+        assert!(
+            !String::from_utf8(std::fs::read(dir.file()).unwrap())
+                .unwrap()
+                .contains("synthetic-password")
+        );
         let mut s = manager.view().0;
         s.stun_only = true;
         manager.save(s, "", "", true, false).unwrap();
@@ -962,9 +970,11 @@ mod tests {
         assert_eq!(servers[0].urls, ["turns:localhost:5349?transport=tcp"]);
         let request = server.await.unwrap();
         assert!(request.starts_with("POST /fixture HTTP/1.1"));
-        assert!(request
-            .to_ascii_lowercase()
-            .contains("authorization: bearer synthetic-token"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer synthetic-token")
+        );
         assert!(request.ends_with(r#"{"ttl":60}"#));
     }
 
@@ -1016,10 +1026,12 @@ mod tests {
         let servers = parse_cloudflare(br#"{"iceServers":[{"urls":["stun:stun.example.org"]},{"urls":["turn:example.org:3478?transport=udp","turn:example.org:3478?transport=tcp","turns:example.org:443?transport=tcp"],"username":"fixture","credential":"fixture-password"}]}"#).unwrap();
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].urls.len(), 3);
-        assert!(parse_cloudflare(
-            br#"{"iceServers":[{"urls":"turns:example.org","username":"fixture"}]}"#
-        )
-        .is_err());
+        assert!(
+            parse_cloudflare(
+                br#"{"iceServers":[{"urls":"turns:example.org","username":"fixture"}]}"#
+            )
+            .is_err()
+        );
     }
 }
 
@@ -1125,7 +1137,10 @@ impl BinaryChoice {
             #[cfg(not(target_os = "linux"))]
             Self::TcpQos => ["Off (default)", "Audio/video QoS (experimental)"],
             #[cfg(target_os = "linux")]
-            Self::TcpQos => ["Off (default)", "DSCP AF21 + socket priority (experimental)"],
+            Self::TcpQos => [
+                "Off (default)",
+                "DSCP AF21 + socket priority (experimental)",
+            ],
             Self::Chroma => ["4:2:0", "Prefer 4:4:4 (experimental)"],
             Self::Rendering => ["Normal GPU rendering", "Zero copy (experimental, HEVC)"],
             Self::AudioBuffer => ["Default (core limits)", "Custom limits"],
