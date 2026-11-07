@@ -18,3 +18,8 @@ The video callback attaches GPU waits/signals only; it submits no work itself.
 Other callbacks retain default no-op hooks. Multiple callbacks for the same
 session are deduplicated until after that submission. No additional render pass,
 image or queue submission is introduced by the hooks.
+
+The Linux-only prepare_submit hook first gathers all per-image readers in the
+existing render submission. before_submit then attaches their combined native
+semaphore dependencies once per session; after_submit retires the gathered set.
+This handles duplicate/clipped callbacks without duplicate timeline signals.

@@ -18,6 +18,8 @@ mod playback;
 mod session_controls;
 #[path = "../../src-native/src/session_preferences.rs"]
 mod session_preferences;
+#[path = "../src/video_vulkan/surface_usage.rs"]
+mod surface_usage;
 #[path = "../../src-native/src/viewport.rs"]
 mod viewport;
 
@@ -743,10 +745,14 @@ fn linux_vulkan_native_and_wgpu_timeline_bridge() -> anyhow::Result<()> {
     let decoded = unsafe { raw.create_semaphore(&info, None)? };
     let graphics = unsafe { raw.create_semaphore(&info, None)? };
     let mut rendered = 0;
+    let mut usage = surface_usage::Usage::default();
     for picture in 1..=8u64 {
+        let target = picture as usize % 3;
+        let reference = (target + 1) % 3;
+        let wait_graphics = usage.decode_wait(&[reference, target]);
         let waits = [graphics];
         let signals = [decoded];
-        let wait_values = [rendered];
+        let wait_values = [wait_graphics];
         let signal_values = [picture];
         let stages = [vk::PipelineStageFlags::ALL_COMMANDS];
         let mut timeline = vk::TimelineSemaphoreSubmitInfo::default()
@@ -760,21 +766,24 @@ fn linux_vulkan_native_and_wgpu_timeline_bridge() -> anyhow::Result<()> {
         unsafe {
             raw.queue_submit(raw_queue, &[native], vk::Fence::null())?;
         }
+        usage.decoded(picture);
+        usage.select(target);
         // Some pictures have no render; some are redrawn twice. Repeated
         // waits on an already-signalled timeline value must remain valid.
         for _ in 0..if picture % 3 == 0 { 0 } else { 2 } {
-            rendered += 1;
+            usage.prepare(target);
+            usage.prepare(target); // Clipped/repeated callback, still one signal.
+            let (ready, value) = usage.stage().unwrap();
+            assert!(usage.stage().is_none());
+            rendered = value;
             let command = device.create_command_encoder(&Default::default()).finish();
             {
                 let hal = unsafe { queue.as_hal::<wgpu::hal::api::Vulkan>() }.unwrap();
-                hal.add_wait_semaphore(
-                    decoded,
-                    Some(picture),
-                    vk::PipelineStageFlags::ALL_COMMANDS,
-                );
+                hal.add_wait_semaphore(decoded, Some(ready), vk::PipelineStageFlags::ALL_COMMANDS);
                 hal.add_signal_semaphore(graphics, Some(rendered));
             }
             queue.submit([command]);
+            usage.finish();
         }
     }
     device.poll(wgpu::PollType::Wait {
@@ -795,4 +804,74 @@ fn linux_vulkan_native_and_wgpu_timeline_bridge() -> anyhow::Result<()> {
         adapter.get_info().name
     );
     Ok(())
+}
+
+#[test]
+fn linux_selected_h264_surface_stays_leased_without_exhausting_the_dpb() {
+    let mut stream = lowlat_decode::h264::Stream::new();
+    let mut selection = output::Selection::default();
+    let mut selected = None;
+    let mut seen = 0u32;
+    let mut reused = false;
+    for _ in 0..3 {
+        // Includes IDR restarts with a retained output.
+        let mut bytes = include_bytes!("data/h264-40-frames.bin").as_slice();
+        while !bytes.is_empty() {
+            let size = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+            let unit = &bytes[4..4 + size];
+            bytes = &bytes[4 + size..];
+            assert_eq!(
+                stream.read(unit).unwrap(),
+                lowlat_decode::h264::Read::Picture
+            );
+            let target = stream.job().unwrap().current.slot;
+            assert_ne!(
+                Some(target),
+                selected,
+                "Selected output must not be overwritten"
+            );
+            reused |= seen & (1 << target) != 0;
+            seen |= 1 << target;
+            stream.finish().unwrap();
+            if let Some(slot) = selection.latest(&mut stream.dpb) {
+                selected = Some(slot);
+            }
+            assert!(selected.is_some());
+            assert!(selection.latest(&mut stream.dpb).is_none());
+        }
+    }
+    assert!(reused);
+    selection.clear(&mut stream.dpb);
+}
+
+#[test]
+fn linux_selected_hevc_surface_stays_leased_without_exhausting_the_dpb() {
+    for fixture in [
+        include_bytes!("data/hevc-40-frames.bin").as_slice(),
+        include_bytes!("data/hevc-nvenc-ll-8-frames.bin").as_slice(),
+    ] {
+        let mut stream = lowlat_decode::hevc::Stream::new();
+        let mut selection = output::Selection::default();
+        let mut selected = None;
+        for _ in 0..3 {
+            let mut bytes = fixture;
+            while !bytes.is_empty() {
+                let size = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+                let unit = &bytes[4..4 + size];
+                bytes = &bytes[4 + size..];
+                assert_eq!(
+                    stream.read(unit).unwrap(),
+                    lowlat_decode::hevc::Read::Picture
+                );
+                assert_ne!(Some(stream.job().unwrap().current.slot), selected);
+                stream.finish().unwrap();
+                if let Some(slot) = selection.latest(&mut stream.dpb) {
+                    selected = Some(slot);
+                }
+                assert!(selected.is_some());
+                assert!(selection.latest(&mut stream.dpb).is_none());
+            }
+        }
+        selection.clear(&mut stream.dpb);
+    }
 }

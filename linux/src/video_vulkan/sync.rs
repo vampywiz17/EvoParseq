@@ -7,30 +7,12 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-#[derive(Default)]
-struct State {
-    graphics: u64,
-    staged: bool,
-}
-impl State {
-    fn stage(&mut self) -> Option<u64> {
-        if self.staged {
-            return None;
-        }
-        self.graphics = self
-            .graphics
-            .checked_add(1)
-            .expect("GPU timeline exhausted");
-        self.staged = true;
-        Some(self.graphics)
-    }
-}
 pub struct Sync {
     context: Arc<Context>,
     pub decode: vk::Semaphore,
     pub graphics: vk::Semaphore,
     decoded: AtomicU64,
-    state: Mutex<State>,
+    state: Mutex<super::surface_usage::Usage>,
 }
 impl Sync {
     pub fn new(context: Arc<Context>) -> Result<Arc<Self>> {
@@ -50,7 +32,7 @@ impl Sync {
             decode,
             graphics,
             decoded: AtomicU64::new(0),
-            state: Mutex::new(State::default()),
+            state: Mutex::new(super::surface_usage::Usage::default()),
         }))
     }
     pub fn defer_backlog(self: &Arc<Self>, playback: &crate::playback::Playback) {
@@ -74,16 +56,39 @@ impl Sync {
             .expect("GPU timeline exhausted")
     }
     pub fn submitted(&self, value: u64) {
-        self.decoded.store(value, Ordering::Release);
-    }
-    pub fn graphics_value(&self) -> u64 {
         self.state
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .graphics
+            .decoded(value);
+        self.decoded.store(value, Ordering::Release);
+    }
+    pub fn graphics_value(&self, used: &[usize]) -> u64 {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .decode_wait(used)
+    }
+    pub fn select(&self, surface: usize) {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .select(surface);
+    }
+    pub fn selected(&self, surface: usize) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .selected(surface)
+    }
+    pub fn prepare_submit(&self, surface: usize) {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .prepare(surface);
     }
     pub fn before_submit(&self, queue: &wgpu::Queue) {
-        let Some(value) = self.state.lock().unwrap_or_else(|e| e.into_inner()).stage() else {
+        let Some((ready, value)) = self.state.lock().unwrap_or_else(|e| e.into_inner()).stage()
+        else {
             return;
         };
         // Called only from the Linux painter's immediate submit hook. No
@@ -92,13 +97,16 @@ impl Sync {
             unsafe { queue.as_hal::<wgpu::hal::api::Vulkan>() }.expect("Vulkan graphics queue");
         hal.add_wait_semaphore(
             self.decode,
-            Some(self.decoded.load(Ordering::Acquire)),
+            Some(ready),
             vk::PipelineStageFlags::ALL_COMMANDS,
         );
         hal.add_signal_semaphore(self.graphics, Some(value));
     }
     pub fn after_submit(&self) {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).staged = false;
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .finish();
     }
 }
 impl Drop for Sync {
@@ -126,17 +134,5 @@ impl Drop for Sync {
             self.context.raw.destroy_semaphore(self.decode, None);
             self.context.raw.destroy_semaphore(self.graphics, None);
         }
-    }
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn linux_sync_repeated_callbacks_signal_once_per_submission() {
-        let mut state = State::default();
-        assert_eq!(state.stage(), Some(1));
-        assert_eq!(state.stage(), None);
-        state.staged = false;
-        assert_eq!(state.stage(), Some(2));
     }
 }

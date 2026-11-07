@@ -606,6 +606,8 @@ impl Session {
             serde_json::json!({
                 "codec": if hevc { "HEVC" } else { "H.264" },
                 "gpu_timeline_sync": self.sync.is_some(),
+                "surface_tracking": self.sync.is_some(),
+                "selected_output_lease": true,
                 "submission_slots": resources.jobs.len(),
             }),
         );
@@ -1143,7 +1145,7 @@ impl Session {
             let commands = [resources.jobs[resources.active].command];
             let waits = self.sync.as_ref().map(|sync| [sync.graphics]);
             let signals = self.sync.as_ref().map(|sync| [sync.decode]);
-            let wait_values = self.sync.as_ref().map(|sync| [sync.graphics_value()]);
+            let wait_values = self.sync.as_ref().map(|sync| [sync.graphics_value(used)]);
             let signal_values = self.sync.as_ref().map(|sync| [sync.next_decode()]);
             let stages = [vk::PipelineStageFlags::ALL_COMMANDS];
             let mut timeline = vk::TimelineSemaphoreSubmitInfo::default();

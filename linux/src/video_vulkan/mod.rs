@@ -4,6 +4,7 @@ mod hevc_parameters;
 mod output;
 mod parameters;
 mod session;
+mod surface_usage;
 mod sync;
 
 use anyhow::{Context as _, Result, ensure};
@@ -21,6 +22,7 @@ pub struct Decoder {
     pipeline: Arc<wgpu::RenderPipeline>,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    selection: output::Selection,
     frame: Option<Arc<Frame>>,
     frames: Vec<Arc<Frame>>,
     presentation: Option<((u32, u32), [u32; 4], bool, u8)>,
@@ -36,6 +38,7 @@ struct Frame {
     pipeline: Arc<wgpu::RenderPipeline>,
     bindings: wgpu::BindGroup,
     sync: Option<Arc<sync::Sync>>,
+    surface: usize,
     size: (u32, u32),
 }
 
@@ -134,6 +137,7 @@ impl Decoder {
             pipeline,
             layout,
             sampler,
+            selection: output::Selection::default(),
             frame: None,
             frames: Vec::new(),
             presentation: None,
@@ -202,6 +206,7 @@ impl Decoder {
                         self.decoded += session.completed() - self.completed_in_session;
                     }
                     self.completed_in_session = 0;
+                    self.selection.clear(&mut stream.dpb);
                     self.frame = None;
                     self.frames.clear();
                     self.presentation = None;
@@ -235,7 +240,7 @@ impl Decoder {
                     result.0,
                     result.1,
                     result.2,
-                    output::latest(&mut stream.dpb),
+                    self.selection.latest(&mut stream.dpb),
                 )
             }
             Codec::Hevc => {
@@ -258,6 +263,7 @@ impl Decoder {
                         self.decoded += session.completed() - self.completed_in_session;
                     }
                     self.completed_in_session = 0;
+                    self.selection.clear(&mut stream.dpb);
                     self.frame = None;
                     self.frames.clear();
                     self.presentation = None;
@@ -292,11 +298,7 @@ impl Decoder {
                 stream
                     .finish()
                     .map_err(|e| anyhow::anyhow!("HEVC reference state: {e:?}"))?;
-                let mut output = None;
-                while let Some(next) = stream.next_output() {
-                    stream.dpb.taken(next.slot);
-                    output = Some(next.slot);
-                }
+                let output = self.selection.latest(&mut stream.dpb);
                 (result.0, result.1, result.2, output)
             }
         };
@@ -304,7 +306,7 @@ impl Decoder {
         let key = (visible, crop, full_range, rotation);
         if self.presentation != Some(key) {
             self.frames.clear();
-            for texture in &session.textures {
+            for (surface, texture) in session.textures.iter().enumerate() {
                 let y = texture.create_view(&wgpu::TextureViewDescriptor {
                     label: Some("Decode Y plane"),
                     format: Some(wgpu::TextureFormat::R8Unorm),
@@ -369,6 +371,7 @@ impl Decoder {
                     pipeline: self.pipeline.clone(),
                     bindings,
                     sync: session.sync.clone(),
+                    surface,
                     size: if rotation & 1 != 0 {
                         (visible.1, visible.0)
                     } else {
@@ -379,6 +382,9 @@ impl Decoder {
             self.presentation = Some(key);
         }
         if let Some(slot) = output {
+            if let Some(sync) = &session.sync {
+                sync.select(slot);
+            }
             self.frame = Some(
                 self.frames
                     .get(slot)
@@ -482,6 +488,12 @@ impl Drop for Decoder {
 struct Present(Arc<Frame>);
 
 impl egui_wgpu::CallbackTrait for Present {
+    fn prepare_submit(&self) {
+        if let Some(sync) = &self.0.sync {
+            sync.prepare_submit(self.0.surface);
+        }
+    }
+
     fn before_submit(&self, queue: &wgpu::Queue) {
         if let Some(sync) = &self.0.sync {
             sync.before_submit(queue);
@@ -499,6 +511,14 @@ impl egui_wgpu::CallbackTrait for Present {
         pass: &mut wgpu::RenderPass<'static>,
         _resources: &egui_wgpu::CallbackResources,
     ) {
+        if self
+            .0
+            .sync
+            .as_ref()
+            .is_some_and(|sync| !sync.selected(self.0.surface))
+        {
+            return;
+        }
         pass.set_pipeline(&self.0.pipeline);
         pass.set_bind_group(0, &self.0.bindings, &[]);
         pass.draw(0..3, 0..1);

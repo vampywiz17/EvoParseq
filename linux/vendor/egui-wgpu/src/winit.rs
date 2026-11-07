@@ -582,6 +582,15 @@ impl Painter {
             profiling::scope!("Queue::submit");
             // wgpu doesn't document where vsync can happen. Maybe here?
             let start = web_time::Instant::now();
+            // Gather all native readers before staging any dependencies. One
+            // session can have multiple/clipped callbacks in this submission.
+            for primitive in clipped_primitives {
+                if let egui::epaint::Primitive::Callback(callback) = &primitive.primitive {
+                    if let Some(callback) = callback.callback.downcast_ref::<crate::Callback>() {
+                        callback.prepare_submit();
+                    }
+                }
+            }
             for primitive in clipped_primitives {
                 if let egui::epaint::Primitive::Callback(callback) = &primitive.primitive {
                     if let Some(callback) = callback.callback.downcast_ref::<crate::Callback>() {

@@ -30,6 +30,10 @@ pub type CallbackResources = type_map::TypeMap;
 pub struct Callback(Box<dyn CallbackTrait>);
 
 impl Callback {
+    pub(crate) fn prepare_submit(&self) {
+        self.0.prepare_submit();
+    }
+
     pub(crate) fn before_submit(&self, queue: &wgpu::Queue) {
         self.0.before_submit(queue);
     }
@@ -97,6 +101,7 @@ pub trait CallbackTrait: Send + Sync {
     /// Linux native-video interop: called immediately around the actual queue
     /// submit, after all preparation and surface acquisition have succeeded.
     /// No GPU work or buffer mapping may be issued by these hooks.
+    fn prepare_submit(&self) {}
     fn before_submit(&self, _queue: &wgpu::Queue) {}
     fn after_submit(&self) {}
 

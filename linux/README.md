@@ -1,6 +1,6 @@
 # EvoParseq Linux Flatpak preview
 
-Current preview: **0.1.18**, developed on `dev`. This is an
+Current preview: **0.1.19**, developed on `dev`. This is an
 experimental Linux client for unmodified Parsec hosts, not a stable release.
 Windows and Android TV feature availability differs; see the [root README](../README.md).
 
@@ -413,3 +413,26 @@ control loop and only query GPU progress while compressed input is deferred.
 The offline suite also includes a native/wgpu timeline interoperability fixture
 on a headless Vulkan adapter when available (software Vulkan is sufficient).
 This validates semaphore handoff, not hardware video decoding or display latency.
+
+## Per-surface lifetime tracking (0.1.19)
+
+The existing two compressed-input/command/query slots are unchanged. The original
+18-image pool is also unchanged: the parser's existing spare output slot keeps
+exactly one selected picture leased until its replacement is selected. Intermediate
+outputs are released immediately; format changes release/drain the old selection.
+Reference ownership remains in the common parser, independently of selection.
+
+Each native image records its last decode/layout-transition timeline value and
+last submitted graphics-reader value. Decode waits only for readers of its actual
+references and destination. Rendering waits only for the selected image's latest
+decode/layout transition. A reference image cannot overlap sampling while its
+layout changes; no simultaneous-read shortcut or extra image copy is introduced.
+The submission hook gathers all video readers before attaching a single deduplicated
+wait/signal pair. Stale callbacks for an unselected image do not draw. Repeated and
+skipped presentation preserve the same bounded ownership rules.
+
+CPU fixtures exercise long H.264/HEVC sequences and IDR restarts while retaining
+one selected output; timeline policy tests cover unrelated images, reference-image
+transitions, duplicate/multiple readers and repeated redraw. The headless Vulkan
+handoff fixture consumes the same per-surface dependency plans as production.
+Hardware playback and performance still need live validation.
