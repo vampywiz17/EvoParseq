@@ -106,6 +106,7 @@ mod tests {
 
 /// Initial native client size: stream pixels at display scale, reduced to fit
 /// the monitor. This is not a host-resolution request or a recurring resize.
+#[cfg(any(target_os = "linux", test))]
 pub fn stream_window_size(
     source: (u32, u32),
     pixels_per_point: f32,

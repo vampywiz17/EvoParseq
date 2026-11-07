@@ -367,6 +367,7 @@ fn webrtc_security_rows(s: &Sample, row: &mut impl FnMut(&str, String)) {
         },
     );
 }
+#[cfg(test)]
 fn rows(
     s: &Sample,
     v: &Values,

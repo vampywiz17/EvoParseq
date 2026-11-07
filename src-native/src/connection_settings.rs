@@ -407,6 +407,7 @@ impl Manager {
     }
 
     /// Read only the small shared video preferences, without cloning protected credentials.
+    #[cfg(target_os = "linux")]
     pub fn native_video(&self) -> crate::native_core::profile::Video {
         self.state
             .lock()

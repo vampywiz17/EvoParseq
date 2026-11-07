@@ -29,12 +29,14 @@ pub fn absolute_motion(
     )))
 }
 
+#[cfg(any(target_os = "linux", test))]
 #[derive(Default)]
 pub struct Router {
     pub mouse: bool,
     pub keyboard: bool,
     pub(crate) relative: bool,
 }
+#[cfg(any(target_os = "linux", test))]
 impl Router {
     pub fn send(
         &mut self,

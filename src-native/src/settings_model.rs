@@ -3,8 +3,6 @@ use crate::connection_settings::{full_chroma_vendor_allowed, GpuPreference, Mana
 use anyhow::{Context, Result};
 use zeroize::Zeroizing;
 
-pub const TCP_QOS_LABEL: &str = "TCP/TLS QoS";
-pub const TCP_QOS_HINT: &str = "Windows outgoing TURN traffic only; network support varies.\nUnsupported or refused: continue unmarked.\nReconnect after changing.";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AiUpscaler {
     Unavailable,
@@ -58,7 +56,6 @@ impl AiUpscaler {
         }
     }
 }
-pub const DISPLAY_TIMING_HINT: &str = "Experimental: normal GPU rendering; reconnect to apply.\nVRR needs an enabled compatible monitor and driver.\nZero copy keeps Windows-managed timing.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -234,9 +231,6 @@ impl Form {
         }
     }
 }
-#[cfg(test)]
-use crate::network_settings::urls;
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,14 +8,63 @@ pub enum Kind {
 }
 #[derive(Clone, Copy)]
 pub struct SettingRow {
+    #[cfg_attr(
+        windows,
+        expect(
+            dead_code,
+            reason = "Consumed by the Linux adapter; Win32 reads label/help from this shared descriptor"
+        )
+    )]
     pub tab: usize,
+    #[cfg_attr(
+        windows,
+        expect(
+            dead_code,
+            reason = "Consumed by the Linux adapter; Win32 reads label/help from this shared descriptor"
+        )
+    )]
     pub group: u8,
     pub label: &'static str,
     pub help: &'static str,
+    #[cfg_attr(
+        windows,
+        expect(
+            dead_code,
+            reason = "Consumed by the Linux adapter; Win32 reads label/help from this shared descriptor"
+        )
+    )]
     pub y: i32,
+    #[cfg_attr(
+        windows,
+        expect(
+            dead_code,
+            reason = "Consumed by the Linux adapter; Win32 reads label/help from this shared descriptor"
+        )
+    )]
     pub help_height: i32,
+    #[cfg_attr(
+        windows,
+        expect(
+            dead_code,
+            reason = "Consumed by the Linux adapter; Win32 reads label/help from this shared descriptor"
+        )
+    )]
     pub field_height: i32,
+    #[cfg_attr(
+        windows,
+        expect(
+            dead_code,
+            reason = "Consumed by the Linux adapter; Win32 reads label/help from this shared descriptor"
+        )
+    )]
     pub kind: Kind,
+    #[cfg_attr(
+        windows,
+        expect(
+            dead_code,
+            reason = "Consumed by the Linux adapter; Win32 reads label/help from this shared descriptor"
+        )
+    )]
     pub control_text: &'static str,
 }
 pub const STUN_SERVERS:SettingRow=SettingRow{tab:0,group:0,label:"STUN servers",help:"Discover a direct route. One stun: URL per line.\nLeave blank to use the default discovery server.",y:242,help_height:48,field_height:76,kind:Kind::Edit,control_text:""};
@@ -158,6 +207,7 @@ pub const SPEAKER_LAYOUT:SettingRow=SettingRow{tab:2,group:0,label:"Speaker layo
 pub const INPUT_MODE:SettingRow=SettingRow{tab:3,group:0,label:"Input mode",help:"Standard input or experimental USB HID over BUD.\nMouse and keyboard can be selected independently.",y:242,help_height:48,field_height:32,kind:Kind::Choice,control_text:""};
 pub const HID_REQUIREMENTS:SettingRow=SettingRow{tab:3,group:0,label:"HID requirements",help:"Enable USB/Yubikey passthrough on the host.\nHID mouse uses the primary display only.\nUse the same keyboard layout on host and client.",y:354,help_height:64,field_height:32,kind:Kind::Info,control_text:""};
 pub const COMPATIBILITY:SettingRow=SettingRow{tab:3,group:0,label:"Compatibility",help:"Absolute desktop and relative camera movement.\nCamera mode follows the host cursor state.\nKeyboard layout is not switched automatically.",y:466,help_height:64,field_height:32,kind:Kind::Info,control_text:""};
+#[cfg(target_os = "linux")]
 pub const SETTINGS: &[SettingRow] = &[
     STUN_SERVERS,
     CONNECTION_ROUTE,
@@ -189,11 +239,13 @@ pub const SETTINGS: &[SettingRow] = &[
     COMPATIBILITY,
 ];
 
+#[cfg(target_os = "linux")]
 pub struct StatRow {
     pub label: &'static str,
     pub tab: usize,
     pub section: bool,
 }
+#[cfg(target_os = "linux")]
 pub const STATS_TABS: [&str; 5] = ["Overview", "Network", "Video", "Audio", "Timings"];
 pub const STAT_NETWORK: &str = "NETWORK";
 pub const STAT_ROUTE: &str = "Route";
@@ -269,6 +321,7 @@ pub const STAT_AUDIO_REPORT_AGE: &str = "Audio report age";
 pub const STAT_AUDIO_TIMING: &str = "Audio timing";
 pub const STAT_INVALID_TIMING_REPORTS: &str = "Invalid timing reports";
 pub const STAT_UNKNOWN_TIMING_FORMATS: &str = "Unknown timing formats";
+#[cfg(target_os = "linux")]
 pub const STATS: &[StatRow] = &[
     StatRow {
         label: STAT_NETWORK,
@@ -642,6 +695,7 @@ pub const STATS: &[StatRow] = &[
     },
 ];
 
+#[cfg(target_os = "linux")]
 pub const MENU_SETTINGS: &str = "Settings";
 pub const MENU_STATS: &str = "Connection stats";
 pub const MENU_HELP: &str = "Help";
@@ -655,6 +709,7 @@ pub const SESSION_LABELS: [&str; 6] = [
     "Orientation",
     "Immersive mode",
 ];
+#[cfg(target_os = "linux")]
 pub const SESSION_ACTIONS: [(&str, [i32; 4]); 6] = [
     ("Settings", [24, 838, 178, 36]),
     ("Apply", [214, 838, 178, 36]),
@@ -663,6 +718,7 @@ pub const SESSION_ACTIONS: [(&str, [i32; 4]); 6] = [
     ("Hide button", [24, 938, 178, 36]),
     ("Send Ctrl+Alt+Del", [214, 938, 178, 36]),
 ];
+#[cfg(target_os = "linux")]
 pub const SESSION_METRICS: &str = "Decode CPU N/A | Encode N/A\nRTT N/A | RX N/A | D/P N/A/N/A fps";
 
 pub const STAT_SAMPLE_RATE: &str = "Sample rate";
@@ -673,6 +729,7 @@ pub const STAT_MEMORY_RESIDENT_PRIVATE: &str = "Memory resident (private)";
 
 pub const STAT_MEMORY_COMMITTED_PRIVATE: &str = "Memory committed (private)";
 
+#[cfg(target_os = "linux")]
 pub fn additional_stats(tab: usize) -> Vec<String> {
     let mut rows = Vec::new();
     match tab {

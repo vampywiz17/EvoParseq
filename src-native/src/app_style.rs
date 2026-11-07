@@ -18,10 +18,13 @@ pub const SETTINGS_TABS: [&str; 4] = ["Network", "Video", "Audio", "Input"];
 /// Canonical Windows desktop geometry, in logical pixels: [x, y, width, height].
 /// Platform adapters convert these rectangles; they must not invent new layouts.
 pub mod desktop {
+    #[cfg(target_os = "linux")]
     pub const WINDOW: [i32; 2] = [744, 551];
+    #[cfg(target_os = "linux")]
     pub const SETTINGS_WINDOW: [i32; 2] = [984, 721];
     pub const BODY: i32 = 17;
     pub const HEADING: i32 = 32;
+    #[cfg(target_os = "linux")]
     pub const CANVAS: [i32; 2] = [728, 551];
     pub const LOGO: [i32; 4] = [32, 24, 40, 46];
     pub const WORDMARK: [[i32; 4]; 2] = [[84, 24, 68, 46], [152, 24, 180, 46]];
@@ -32,6 +35,7 @@ pub mod desktop {
     pub const PEER: [i32; 4] = [200, 366, 496, 32];
     pub const REMEMBER: [i32; 4] = [250, 322, 450, 30];
     pub const REMEMBER_WINDOWS: &str = "Remember sign-in for this Windows user";
+    #[cfg(target_os = "linux")]
     pub const REMEMBER_LINUX: &str = "Remember sign-in for this Linux user";
     pub const LOGIN: [i32; 4] = [490, 370, 206, 40];
     pub const ACTIONS: [[i32; 4]; 3] =
@@ -60,11 +64,13 @@ pub mod desktop {
 }
 
 pub mod settings {
+    #[cfg(target_os = "linux")]
     pub const WIDTH: i32 = 820;
     pub const BODY: i32 = 16;
     pub const SMALL: i32 = 13;
     pub const HEADING: i32 = 46;
     pub const HEADER_EXTRA: i32 = 20;
+    #[cfg(target_os = "linux")]
     pub const TITLE: &str = "Settings";
     pub const SUBTITLE: &str = "Customize your connection, video and audio playback.";
     pub const TITLE_RECT: [i32; 4] = [0, 24, 820, 64];
@@ -78,6 +84,7 @@ pub mod settings {
     pub const BACK: [i32; 4] = [550, 142, 110, 40];
     pub const SAVE: [i32; 4] = [676, 142, 144, 40];
     pub const BACK_TEXT: &str = "Back";
+    #[cfg(target_os = "linux")]
     pub const NETWORK_RECT: [i32; 4] = [0, 204, 820, 25];
     pub const TRANSPORT_Y: i32 = 844;
     pub const TRANSPORT_CHOICES: [&str; 2] = ["WebRTC", "BUD"];
@@ -90,6 +97,7 @@ pub mod settings {
     pub const fn field(y: i32, height: i32) -> [i32; 4] {
         [420, y, 400, height]
     }
+    #[cfg(target_os = "linux")]
     pub const fn positioned(mut rect: [i32; 4]) -> [i32; 4] {
         if rect[1] >= 88 {
             rect[1] += HEADER_EXTRA;
@@ -100,11 +108,13 @@ pub mod settings {
 
 pub mod session {
     pub const BADGE_SIZE: i32 = 48;
+    #[cfg(target_os = "linux")]
     pub const BADGE_ICON: i32 = 32;
     pub const BADGE_ALPHA: u8 = 200;
     pub const BADGE_START: [i32; 2] = [16, 16];
     pub const DISCONNECT: &str = "Disconnect";
     pub const DISCONNECT_RECT: [i32; 4] = [24, 888, 178, 36];
+    #[cfg(target_os = "linux")]
     pub const PANEL_WIDTH: i32 = 420;
     pub fn bounded(position: [i32; 2], size: [i32; 2]) -> [i32; 2] {
         [

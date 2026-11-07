@@ -85,11 +85,13 @@ pub(crate) fn send_local(
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 #[derive(Default)]
 pub struct State {
     last: String,
     pending: Option<Pending>,
 }
+#[cfg(any(target_os = "linux", test))]
 impl State {
     pub fn receive(&mut self, text: &str, allowed: bool, write: impl FnMut(&str) -> bool) {
         receive(
@@ -114,6 +116,7 @@ impl State {
             Ok(())
         }
     }
+    #[cfg(target_os = "linux")]
     pub fn revoke(&mut self) {
         self.pending = None;
     }

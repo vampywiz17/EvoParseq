@@ -1,13 +1,18 @@
 //! Shared desktop network form buffers and normalization. Secrets are replacement
 //! buffers only: saved secrets are never decrypted into widgets.
-use crate::connection_settings::{Manager, Settings};
+#[cfg(target_os = "linux")]
+use crate::connection_settings::Manager;
+use crate::connection_settings::Settings;
 use anyhow::{Context, Result};
+#[cfg(target_os = "linux")]
 use zeroize::Zeroizing;
 
 pub const NOTICE: &str = "ICE chooses the route automatically unless Force TURN relay is enabled.\nChanges apply to your next connection.";
+#[cfg(target_os = "linux")]
 pub const SAVING: &str = "Saving settings...";
 pub const SAVED: &str = "Settings saved. They apply on your next connection.";
 
+#[cfg(target_os = "linux")]
 pub struct Draft {
     pub values: Settings,
     pub stun_urls: String,
@@ -20,6 +25,7 @@ pub struct Draft {
     pub forget_password: bool,
     pub forget_token: bool,
 }
+#[cfg(target_os = "linux")]
 impl Draft {
     pub fn new(values: Settings) -> Self {
         Self {
@@ -82,7 +88,7 @@ pub fn urls(text: &str) -> Vec<String> {
         })
         .collect()
 }
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use crate::connection_settings::RouteMode;
