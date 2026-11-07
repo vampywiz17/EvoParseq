@@ -1,4 +1,6 @@
 //! Bounded compressed-video queue; decoder resources belong to one worker.
+// Parts of this shared model serve only the Windows decoder and controls.
+#![cfg_attr(not(windows), allow(dead_code))]
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -6,6 +8,10 @@ use std::time::{Duration, Instant};
 // Allow bounded headroom while Media Foundation initializes its first device.
 pub const MAX_FRAMES: usize = 32;
 pub const MAX_BYTES: usize = 8 * 1024 * 1024;
+/// Largest access unit once a BUD session has rebuilt the encoder: the BUD
+/// receive ring (lowlat-core RING_SLOTS = 4000) times its fragment body
+/// (message CAPACITY = 1193). WebRTC keeps the MAX_CHANNEL_MESSAGE bound.
+pub const MAX_FRAME_BYTES: usize = 4000 * 1193;
 
 /// Describe original YUV surfaces without inferring compositor/scanout behavior.
 pub fn original_surface_status(ten_bit: bool) -> &'static str {
@@ -309,6 +315,8 @@ pub struct Queue {
     pub reset_generation: u64,
     pub stream_generation: u64,
     recovery_started: Option<Instant>,
+    /// Per-transport input bound; widened only by a BUD `encoder_rebuilt`.
+    pub max_frame_bytes: usize,
     recovery_attempts: u8,
     optional_setup: bool,
     request_pending: bool,
@@ -333,6 +341,7 @@ impl Default for Queue {
             reset_generation: 0,
             stream_generation: 0,
             recovery_started: None,
+            max_frame_bytes: crate::control::MAX_CHANNEL_MESSAGE,
             recovery_attempts: 0,
             optional_setup: false,
             request_pending: false,
@@ -421,9 +430,10 @@ impl Queue {
             self.recycle(bytes);
             return false;
         }
-        if bytes.len() > crate::control::MAX_CHANNEL_MESSAGE {
+        if bytes.len() > self.max_frame_bytes {
             self.fail("video-input-too-large", None);
             self.report.frames_dropped += 1;
+            self.recycle(bytes);
             return false;
         }
         if self.frames.len() >= MAX_FRAMES
@@ -518,6 +528,7 @@ impl Queue {
             return false;
         }
         self.clear();
+        self.max_frame_bytes = MAX_FRAME_BYTES;
         self.stream_generation = self.stream_generation.wrapping_add(1);
         self.reset_generation = self.reset_generation.wrapping_add(1);
         self.report.codec = None;
@@ -603,6 +614,23 @@ impl Queue {
             self.recovery_started = Some(now);
             self.request_pending = true;
         }
+    }
+
+    /// Display-layer backpressure flushed queued frames; wait for a fresh key
+    /// picture without consuming the fatal decoder-error retry budget.
+    #[cfg(target_os = "macos")]
+    pub fn drop_backlog(&mut self, now: Instant) {
+        if self.stopped || self.report.failure_stage.is_some() {
+            return;
+        }
+        self.reset_generation = self.reset_generation.wrapping_add(1);
+        self.clear();
+        self.report.recovery_reason = Some("display_layer_backlog");
+        self.report.waiting_for_idr = true;
+        self.report.recovering = true;
+        self.report.decoder_initialized = false;
+        self.recovery_started = Some(now);
+        self.request_pending = true;
     }
 
     pub fn check_recovery(&mut self, now: Instant) {
@@ -1268,6 +1296,9 @@ mod tests {
             false,
             0
         ));
+        let mut q = Queue::default();
+        assert!(q.encoder_rebuilt(Instant::now()));
+        assert!(!q.submit(&vec![0; MAX_FRAME_BYTES + 1], true, false, 0));
         assert_eq!(q.report.queue_bytes, 0);
         assert!(!serde_json::to_string(&q.report)
             .unwrap()

@@ -18,6 +18,7 @@ pub struct State {
 }
 
 /// Finite, clamped, rescaled dead zone; both platforms use the same rule.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn stick(value: f32, flat: f32) -> i16 {
     if !value.is_finite() || !flat.is_finite() {
         return 0;
@@ -27,6 +28,7 @@ pub fn stick(value: f32, flat: f32) -> i16 {
     let v = v.signum() * ((v.abs() - flat).max(0.) / (1. - flat));
     (v * if v < 0. { 32768. } else { 32767. }).round() as i16
 }
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn trigger(value: f32, flat: f32) -> u8 {
     if !value.is_finite() || !flat.is_finite() {
         return 0;
@@ -272,7 +274,7 @@ mod events {
 #[cfg(any(target_os = "android", test))]
 pub use events::Event;
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 pub mod polling {
     use super::*;
     use std::time::{Duration, Instant};

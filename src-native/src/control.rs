@@ -113,7 +113,7 @@ fn cursor_payload(bytes: &[u8]) -> Result<(usize, usize)> {
 }
 
 /// A scheduling hint from validated host metadata, never from button state.
-#[cfg(all(windows, feature = "bud"))]
+#[cfg(all(any(windows, target_os = "macos"), feature = "bud"))]
 pub(crate) fn cursor_capture(bytes: &[u8]) -> Option<bool> {
     if bytes.get(12) != Some(&9) {
         return None;
@@ -244,7 +244,7 @@ mod tests {
             assert_eq!(frame.last(), Some(&0));
         }
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn refresh_request_preserves_startup_codec_flags_and_primary_stream() {
         for allow_hevc in [false, true] {
@@ -389,7 +389,7 @@ mod tests {
         );
     }
 
-    #[cfg(all(windows, feature = "bud"))]
+    #[cfg(all(any(windows, target_os = "macos"), feature = "bud"))]
     #[test]
     fn cursor_wakeup_uses_validated_host_capture_flags_only() {
         let mut frame = vec![0; 34];

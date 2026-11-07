@@ -67,3 +67,27 @@ through explicit Android cfg gates, with libc's Android ABI declarations (API 29
 Windows cfg selection and IO remain unchanged. No new network implementation,
 frame copy or media decoder is added. Direct UDP is the first exposed Android
 route; the application has not exposed Android TURN configuration yet.
+
+## macOS backend
+
+`src/macos` adds a macOS system layer beside `src/linux` and `src/windows`:
+IPv4/IPv6 UDP sockets with DSCP EF, a `poll(2)` wait with a non-blocking pipe
+wake, `getifaddrs` interface discovery, plain `sendmsg` without segmentation
+offload, and the nonblocking TCP carrier for turn-stream. TCP/TLS QoS marking is
+not applied on macOS; the shared guard reports it as not applied.
+
+The dual-stack socket refuses the IPv4-level options (`IP_TOS`, `IP_PKTINFO`,
+`IP_DONTFRAG`, `IP_TTL`). Each IPv4 send therefore carries `IP_TOS` as a control
+message, and a pinned IPv4 source rides `IP_PKTINFO`; IPv6 sends keep the
+socket's `IPV6_TCLASS`. `IPV6_DONTFRAG` and `IPV6_UNICAST_HOPS` cover both
+families. Receives use one `recvmsg` per datagram and report the arrival address
+from `IPV6_PKTINFO`; the batched `recvmsg_x` is not in the public SDK and is not
+used. macOS lets a dual-stack bind share a port another socket holds for
+`0.0.0.0`, which then keeps the IPv4 datagrams, so the bind first holds the port
+with an IPv4 socket and closes it once `[::]` is bound.
+
+The module set and public API are unchanged. Outside `src/macos`, `lib.rs`,
+`addrs.rs` and `socket.rs` extend their platform conditions, `send.rs` starts
+offload off on macOS, and `stream_io.rs` treats `EINPROGRESS` as a pending
+connect there. The crate's tests run on macOS in CI; there only 127.0.0.1 is a
+local loopback address, and the offload tests hold the per-datagram path.

@@ -6,11 +6,11 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 pub trait NetworkSettings: Send + Sync {
     fn resolve(&self) -> BoxFuture<'_, Result<RTCConfiguration>>;
     fn tcp_qos(&self) -> bool;
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     fn video_gpu(&self) -> Option<crate::connection_settings::GpuPreference>;
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 impl NetworkSettings for crate::connection_settings::Manager {
     fn resolve(&self) -> BoxFuture<'_, Result<RTCConfiguration>> {
         Box::pin(self.resolve_configuration())

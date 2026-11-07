@@ -203,6 +203,7 @@ fn snapshot(shared: &Mutex<State>) -> Snapshot {
 
 impl NativeReceiver {
     #[cfg(not(windows))]
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub fn callback_reader(&self) -> Result<CallbackReader> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.callback.is_some() {
@@ -217,6 +218,7 @@ impl NativeReceiver {
         Ok(reader)
     }
     #[cfg(not(windows))]
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub fn snapshot(&self) -> Snapshot {
         snapshot(&self.state)
     }

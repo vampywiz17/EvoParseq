@@ -6,7 +6,7 @@ publish = false
 license = "MIT"
 
 [workspace]
-members = ["vendor/lowlat-client", "vendor/lowlat-net", "vendor/lowlat-core", "vendor/lowlat-crypto"]
+members = ["vendor/lowlat-client", "vendor/lowlat-net", "vendor/lowlat-core", "vendor/lowlat-common", "vendor/lowlat-crypto"]
 resolver = "2"
 
 [features]
@@ -27,4 +27,5 @@ rustls = { version = "0.23.46", default-features = false, features = ["ring", "s
 
 [patch."https://github.com/nomi-san/lowlat"]
 lowlat-core = { path = "vendor/lowlat-core" }
+lowlat-common = { path = "vendor/lowlat-common" }
 lowlat-crypto = { path = "vendor/lowlat-crypto" }

@@ -1,5 +1,6 @@
 //! Wait-free ownership handoff replacing the mutex PCM queue for pull outputs.
 //! Only the native callback reads Ready blocks; only the Opus worker publishes.
+#![cfg_attr(target_os = "macos", allow(dead_code))]
 use super::{Layout, Snapshot, RECYCLED_BUFFERS};
 use rtrb::{Consumer, Producer, PushError, RingBuffer};
 use std::sync::{
