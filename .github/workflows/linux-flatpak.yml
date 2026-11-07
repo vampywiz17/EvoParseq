@@ -9,15 +9,19 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: linux-flatpak-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   flatpak:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt
       - name: Prepare locked offline sources
@@ -47,7 +51,7 @@ jobs:
           flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo "$RUNNER_TEMP/flatpak-repo" "$RUNNER_TEMP/EvoParseq-Linux.flatpak" io.github.vampywiz17.EvoParseq
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' linux/Cargo.toml | head -n1)
           mv "$RUNNER_TEMP/EvoParseq-Linux.flatpak" "$RUNNER_TEMP/EvoParseq-Linux-v${version}-x86_64.flatpak"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: EvoParseq-Linux-Flatpak
           path: ${{ runner.temp }}/EvoParseq-Linux-v*-x86_64.flatpak

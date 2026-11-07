@@ -1075,11 +1075,22 @@ mod tests {
         let button = loop {
             let button = window.native_session_button.load(Ordering::Acquire) as HWND;
             if !button.is_null() {
-                break button;
+                // The handle is published before install() finishes its initial
+                // raise(). Wait for placement before measuring a drag delta.
+                let placed = unsafe {
+                    let mut origin = POINT { x: 16, y: 16 };
+                    let mut rect = RECT::default();
+                    ClientToScreen(window.handle(), &mut origin) != 0
+                        && GetWindowRect(button, &mut rect) != 0
+                        && (rect.left, rect.top) == (origin.x, origin.y)
+                };
+                if placed {
+                    break button;
+                }
             }
             assert!(
                 std::time::Instant::now() < button_deadline,
-                "Session button did not open"
+                "Session button did not reach its initial position"
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         };
