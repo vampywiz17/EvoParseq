@@ -60,7 +60,7 @@ pub type IpFilterFn = Box<dyn (Fn(IpAddr) -> bool) + Send + Sync>;
 pub struct AgentConfig {
     /// Local opt-in UDP > TLS > TCP TURN gathering policy.
     pub prefer_turn_udp: bool,
-    /// Optional outgoing TURN TCP/TLS QoS, default off.
+    /// Optional outgoing TURN TCP/TLS QoS, default off. Linux also marks native UDP sockets.
     pub turn_tcp_qos: bool,
     /// Project extension: retain discovery candidates, but use only local
     /// relays for connectivity and data. Not an address-privacy policy.
