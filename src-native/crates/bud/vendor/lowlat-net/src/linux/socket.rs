@@ -62,7 +62,7 @@ impl Socket {
         })
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "turn-stream"))]
     pub fn linux_qos(&self, requested: bool) {
         evoparseq_socket_qos::Flow::new(&self.fd, requested, "BUD/UDP");
     }

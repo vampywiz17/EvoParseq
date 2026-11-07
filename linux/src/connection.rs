@@ -462,6 +462,7 @@ fn run_bud(
                     preferences.allow_raw_audio,
                     layout,
                 )?;
+                session.set_linux_qos(preferences.experimental_tcp_qos);
                 session.enable_hid_input(hid.mouse, hid.keyboard);
                 session.wake_consumer(std::thread::current());
                 let credentials = session.offer(&wire_id, route)?;
