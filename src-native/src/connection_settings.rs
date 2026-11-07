@@ -1122,7 +1122,10 @@ pub enum BinaryChoice {
 impl BinaryChoice {
     pub fn labels(self) -> [&'static str; 2] {
         match self {
+            #[cfg(not(target_os = "linux"))]
             Self::TcpQos => ["Off (default)", "Audio/video QoS (experimental)"],
+            #[cfg(target_os = "linux")]
+            Self::TcpQos => ["Off (default)", "DSCP AF21 + socket priority (experimental)"],
             Self::Chroma => ["4:2:0", "Prefer 4:4:4 (experimental)"],
             Self::Rendering => ["Normal GPU rendering", "Zero copy (experimental, HEVC)"],
             Self::AudioBuffer => ["Default (core limits)", "Custom limits"],

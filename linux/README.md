@@ -1,6 +1,6 @@
 # EvoParseq Linux Flatpak preview
 
-Current preview: **0.1.19**, developed on `dev`. This is an
+Current preview: **0.1.20**, developed on `dev`. This is an
 experimental Linux client for unmodified Parsec hosts, not a stable release.
 Windows and Android TV feature availability differs; see the [root README](../README.md).
 
@@ -259,7 +259,20 @@ Automatic BUD routing first tries direct UDP, then the configured TURN carriers
 in the Windows order (UDP, TLS, TCP). Each retry has fresh session credentials
 and a fresh signaling attempt ID. Direct-only never provisions TURN; Force TURN
 never falls back to direct. Actual route reporting still uses transport evidence.
-Windows-only TCP/TLS QoS remains disabled. Event logging can be enabled here.
+The existing TCP/TLS QoS switch enables Linux outgoing socket marking for
+WebRTC and BUD, on direct UDP and TURN UDP/TCP/TLS: DSCP AF21 (18) and
+SO_PRIORITY 6. Off by default; reconnect after saving. Each option is optional:
+refusal does not stop or reroute the connection. No administrator rights,
+capabilities, traffic shaping, per-packet work or additional threads are added.
+IPv4/IPv6 DSCP and local priority are read back independently in the
+`linux_socket_qos` event. Readback confirms local socket configuration only;
+network devices and the local queue discipline may ignore it. Incoming host
+video is not prioritized by client-side marking. AF21 follows RFC 8837's high
+priority data class, appropriate to outgoing input/control and feedback traffic.
+Existing settings files retain the `experimental_tcp_qos` key. Windows qWAVE
+and Android behavior are unchanged. Event logging can be enabled here.
+References: [RFC 8837](https://www.rfc-editor.org/rfc/rfc8837.html),
+[Linux socket options](https://man7.org/linux/man-pages/man7/socket.7.html).
 No new media worker, image copy, readback or render pass is introduced.
 
 The offline network fixtures cover protected-secret persistence, failed edits,

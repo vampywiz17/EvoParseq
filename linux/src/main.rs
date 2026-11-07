@@ -540,6 +540,18 @@ fn main() -> anyhow::Result<()> {
         settings.directory().join("client-events.jsonl"),
         saved.event_logging,
     )?;
+    evoparseq_socket_qos::observe(|transport, status| {
+        let s = status.linux;
+        event_log::record(
+            if status.applied { "INFO" } else { "WARN" },
+            "linux_socket_qos",
+            serde_json::json!({"transport": transport, "requested": status.requested,
+                "applied": status.applied, "ipv4_dscp": s.ipv4_dscp,
+                "ipv6_dscp": s.ipv6_dscp, "socket_priority": s.priority,
+                "ipv4_error": s.ipv4_error, "ipv6_error": s.ipv6_error,
+                "priority_error": s.priority_error, "os_error": status.error}),
+        );
+    });
     let _log_guard = event_log::Guard;
     let restore = !saved.native_core.encrypted_session.is_empty();
     let mut setup = egui_wgpu::WgpuSetupCreateNew::default();

@@ -177,6 +177,8 @@ impl fmt::Debug for Relay {
 /// A client's settings.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
+    #[cfg(target_os = "linux")]
+    pub linux_qos: bool,
     #[cfg(feature = "usb-hid-input")]
     pub hid_mouse: bool,
     #[cfg(feature = "usb-hid-input")]

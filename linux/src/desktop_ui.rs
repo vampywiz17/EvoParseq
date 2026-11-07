@@ -293,7 +293,23 @@ impl Desktop {
                         row.control_text,
                     ),
                 );
-            } else if tab == 0 && row.label != f::TCP_TLS_QOS.label {
+            } else if row.label == f::TCP_TLS_QOS.label {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    let labels = crate::connection_settings::BinaryChoice::TcpQos.labels();
+                    egui::ComboBox::from_id_salt(row.label)
+                        .width(400.)
+                        .selected_text(labels[usize::from(draft.values.experimental_tcp_qos)])
+                        .show_ui(ui, |ui| {
+                            for (index, text) in labels.into_iter().enumerate() {
+                                ui.selectable_value(
+                                    &mut draft.values.experimental_tcp_qos,
+                                    index == 1,
+                                    text,
+                                );
+                            }
+                        });
+                });
+            } else if tab == 0 {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     use crate::connection_settings::RouteMode;
                     if row.label == f::STUN_SERVERS.label {

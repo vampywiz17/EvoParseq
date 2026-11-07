@@ -1,6 +1,6 @@
 [package]
 name = "evoparseq-linux"
-version = "0.1.19"
+version = "0.1.20"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -16,6 +16,7 @@ desktop-telemetry = ["bud"]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("vendor-video"))', 'cfg(nvidia_vsr_sdk)'] }
 
 [dependencies]
+evoparseq-socket-qos = { path = "../src-native/crates/socket-qos" }
 libc = "0.2"
 anyhow = "1"
 xcursor = "=0.3.11"

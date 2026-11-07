@@ -16,7 +16,7 @@ impl NetworkSettings for crate::connection_settings::Manager {
         Box::pin(self.resolve_configuration())
     }
     fn tcp_qos(&self) -> bool {
-        cfg!(windows) && self.view().0.experimental_tcp_qos
+        self.view().0.experimental_tcp_qos
     }
     #[cfg(windows)]
     fn video_gpu(&self) -> Option<crate::connection_settings::GpuPreference> {

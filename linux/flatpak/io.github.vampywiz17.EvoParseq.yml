@@ -37,6 +37,8 @@ modules:
     buildsystem: simple
     build-commands:
       - >-
+        cargo test --manifest-path src-native/crates/socket-qos/Cargo.toml --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
+      - >-
         cargo test --manifest-path linux/Cargo.toml --bin evoparseq-linux linux_ --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
       - >-
         cargo test --manifest-path linux/Cargo.toml --bin evoparseq-linux bud_ingress::tests --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release

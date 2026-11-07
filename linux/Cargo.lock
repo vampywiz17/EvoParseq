@@ -1309,7 +1309,7 @@ dependencies = [
 
 [[package]]
 name = "evoparseq-linux"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "anyhow",
  "ash",
@@ -1318,6 +1318,7 @@ dependencies = [
  "bytes",
  "eframe",
  "evoparseq-bud",
+ "evoparseq-socket-qos",
  "futures-util",
  "getrandom 0.3.4",
  "libc",
@@ -1346,6 +1347,7 @@ dependencies = [
 name = "evoparseq-socket-qos"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "windows-sys 0.61.2",
 ]
 

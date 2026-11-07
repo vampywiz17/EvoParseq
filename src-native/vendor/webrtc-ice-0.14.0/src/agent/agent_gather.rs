@@ -2,8 +2,8 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use util::vnet::net::*;
 use util::Conn;
+use util::vnet::net::*;
 use waitgroup::WaitGroup;
 
 #[path = "turn_preference.rs"]
@@ -310,6 +310,8 @@ impl Agent {
                     }
                 };
 
+                #[cfg(target_os = "linux")]
+                mark_linux_udp(conn.as_ref(), agent_internal.turn_tcp_qos);
                 let port = match conn.local_addr() {
                     Ok(addr) => addr.port(),
                     Err(err) => {
@@ -524,6 +526,8 @@ impl Agent {
                     }
                 };
 
+                #[cfg(target_os = "linux")]
+                mark_linux_udp(conn.as_ref(), agent_internal2.turn_tcp_qos);
                 let laddr = conn.local_addr()?;
                 let mapped_ip = {
                     if let Some(ext_ip_mapper3) = &*ext_ip_mapper2 {
@@ -666,6 +670,8 @@ impl Agent {
                         }
                     };
 
+                    #[cfg(target_os = "linux")]
+                    mark_linux_udp(conn.as_ref(), agent_internal2.turn_tcp_qos);
                     let xoraddr =
                         match get_xormapped_addr(&conn, server_addr, STUN_GATHER_TIMEOUT).await {
                             Ok(xoraddr) => xoraddr,
@@ -697,11 +703,12 @@ impl Agent {
                         rel_port: laddr.port(),
                     };
 
-                    let candidate: Arc<dyn Candidate + Send + Sync> =
-                        match srflx_config.new_candidate_server_reflexive() {
-                            Ok(candidate) => Arc::new(candidate),
-                            Err(err) => {
-                                log::warn!(
+                    let candidate: Arc<dyn Candidate + Send + Sync> = match srflx_config
+                        .new_candidate_server_reflexive()
+                    {
+                        Ok(candidate) => Arc::new(candidate),
+                        Err(err) => {
+                            log::warn!(
                                 "[{}]: Failed to create server reflexive candidate: {} {} {}: {:?}",
                                 agent_internal2.get_name(),
                                 network,
@@ -709,9 +716,9 @@ impl Agent {
                                 port,
                                 err
                             );
-                                return Ok(());
-                            }
-                        };
+                            return Ok(());
+                        }
+                    };
 
                     {
                         if let Err(err) = agent_internal2.add_candidate(&candidate).await {
@@ -830,6 +837,8 @@ impl Agent {
                             }
                         };
 
+                        #[cfg(target_os = "linux")]
+                        mark_linux_udp(loc_conn.as_ref(), agent_internal2.turn_tcp_qos);
                         let local_addr = loc_conn.local_addr()?;
                         let rel_addr = local_addr.ip().to_string();
                         let rel_port = local_addr.port();
@@ -1008,5 +1017,13 @@ impl Agent {
         }
 
         wg.wait().await;
+    }
+}
+
+// Native UDP sockets only; virtual/multiplexed test transports are not OS sockets.
+#[cfg(target_os = "linux")]
+fn mark_linux_udp(conn: &dyn Conn, requested: bool) {
+    if let Some(socket) = conn.as_any().downcast_ref::<tokio::net::UdpSocket>() {
+        evoparseq_socket_qos::Flow::new(socket, requested, "WebRTC/UDP");
     }
 }

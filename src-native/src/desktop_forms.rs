@@ -186,7 +186,11 @@ pub const AI_UPSCALING_EXPERIMENTAL: SettingRow = SettingRow {
 };
 pub const TRANSPORT:SettingRow=SettingRow{tab:0,group:0,label:"Transport",help:"WebRTC or BUD: direct UDP or TURN over UDP/TLS/TCP.\nUses the TURN URLs above. Reconnect after changing.",y:844,help_height:40,field_height:32,kind:Kind::Choice,control_text:""};
 pub const VIDEO_PRESENTATION:SettingRow=SettingRow{tab:1,group:0,label:"Video presentation",help:"HEVC 4:2:0: NV12 (8-bit) or P010 (10-bit).\nRequires driver support; otherwise MF. Reconnect after changing.",y:532,help_height:40,field_height:32,kind:Kind::Choice,control_text:""};
+#[cfg(not(target_os = "linux"))]
 pub const TCP_TLS_QOS:SettingRow=SettingRow{tab:0,group:0,label:"TCP/TLS QoS",help:"Windows outgoing TURN traffic only; network support varies.\nUnsupported or refused: continue unmarked.\nReconnect after changing.",y:844 + 94,help_height:60,field_height:32,kind:Kind::Choice,control_text:""};
+#[cfg(target_os = "linux")]
+pub const TCP_TLS_QOS:SettingRow=SettingRow{tab:0,group:0,label:"TCP/TLS QoS",help:"Linux outgoing UDP/TCP/TLS: DSCP AF21 + socket priority 6.\nNetwork/queue support varies; refused options are optional.\nReconnect after changing.",y:844 + 94,help_height:60,field_height:32,kind:Kind::Choice,control_text:""};
+
 pub const EVENT_LOG:SettingRow=SettingRow{tab:0,group:0,label:"Event log",help:"Log connection changes and decoder errors.\nSaved beside settings.json; no credentials or media payloads.\nApplies immediately after saving.",y:938 + 94,help_height:60,field_height:32,kind:Kind::Check,control_text:"Enable event logging"};
 pub const PLAYBACK_BUFFER: SettingRow = SettingRow {
     tab: 2,
