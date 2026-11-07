@@ -605,8 +605,7 @@ fn rows_with_missing(
                     })
                 })
             })
-            .unwrap_or_else(|| "Not reported".into())
-            .into(),
+            .unwrap_or_else(|| "Not reported".into()),
     );
     row(
         crate::app_style::forms::STAT_LOCAL_DROPPED_FRAMES,

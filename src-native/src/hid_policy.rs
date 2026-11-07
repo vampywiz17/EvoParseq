@@ -57,7 +57,7 @@ impl Router {
         if kind == 0 && self.keyboard && !active[1].0 {
             return Ok(());
         }
-        if self.mouse && matches!(kind, 1 | 2 | 3) {
+        if self.mouse && matches!(kind, 1..=3) {
             if !primary || !active[0].0 {
                 return Ok(());
             }
