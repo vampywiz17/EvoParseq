@@ -698,7 +698,7 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
             40,
         );
         binary_choice(hwnd, page, ZERO_COPY, 532);
-        check(hwnd, ZERO_COPY, s.experimental_zero_copy);
+        check(hwnd, ZERO_COPY, s.zero_copy);
     }
     page.building_tab = Some(Tab::Network);
     row_label(
@@ -1309,7 +1309,7 @@ unsafe fn save(hwnd: HWND, page: &mut Page) {
     s.experimental_tcp_qos = checked(hwnd, TCP_QOS);
     #[cfg(feature = "vendor-video")]
     {
-        s.experimental_zero_copy = checked(hwnd, ZERO_COPY);
+        s.zero_copy = checked(hwnd, ZERO_COPY);
     }
     #[cfg(feature = "bud")]
     {
@@ -1876,10 +1876,10 @@ mod tests {
             assert_eq!(manager.view().0.video_gpu, expected_gpu);
             #[cfg(feature = "vendor-video")]
             {
-                assert!(!manager.view().0.experimental_zero_copy);
+                assert!(!manager.view().0.zero_copy);
                 check(page, ZERO_COPY, true);
                 SendMessageW(page, WM_COMMAND, SAVE, 0);
-                assert!(manager.view().0.experimental_zero_copy);
+                assert!(manager.view().0.zero_copy);
             }
             assert!(manager.view().0.prefer_hevc);
             DestroyWindow(page);

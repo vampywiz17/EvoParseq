@@ -141,11 +141,11 @@ The Windows features below remain available on this branch.
   and GameSir Android forwarding are live-tested; device-specific rumble and
   disconnect behavior need broader validation.
 - **Input:** two-way Unicode text clipboard; normal mouse/keyboard forwarding;
-  experimental BUD USB HID mouse and keyboard, including relative camera input.
+  BUD USB HID mouse and keyboard, including relative camera input.
 - **Diagnostics:** route, RTT, traffic, FPS, actual decoder/format, audio queues,
   host/local timings and system resource use. Optional bounded event logs record
   failures without continuous mouse/key activity.
-- **Presentation:** Automatic, Low latency, VSync and experimental DXGI VRR,
+- **Presentation:** Automatic, Low latency, VSync and DXGI VRR,
   with reference-safe catch-up after bursts. VRR requires an enabled compatible
   display/driver; DXGI support alone does not verify panel activation. Zero copy
   retains Windows-managed timing. WebRTC uses bounded recent queue history.
@@ -306,10 +306,13 @@ or generated frames are introduced.
   runtime/configuration details remain in event logs. Currently limited to
   8-bit SDR upscaling; 10-bit, 4:4:4 and Zero copy keep their existing paths.
 
+On Windows, Display timing (including VRR), Zero copy presentation and BUD USB HID
+input no longer carry an experimental label. Hardware requirements and fallbacks
+still apply. Linux feature labels and defaults are unchanged.
+
 ## Experimental features and limits
 
-**Vendor HEVC, zero-copy, 10-bit HEVC, 4:4:4, display timing, USB HID and
-multichannel audio remain experimental.** For conservative operation, use H.264,
+**Vendor HEVC, 10-bit HEVC, 4:4:4 and multichannel audio remain experimental.** For conservative operation, use H.264,
 stereo Opus and Automatic timing with experimental options disabled.
 
 - **Video:** live decoded frames remain on the GPU. Normal rendering uses the

@@ -638,7 +638,7 @@ fn run(
     let mut zero_fallback = None;
     let vsr_quality = window.ai_upscale_quality();
     #[cfg(feature = "vendor-video")]
-    let zero_requested = window.experimental_zero_copy() && vsr_quality == 0;
+    let zero_requested = window.zero_copy() && vsr_quality == 0;
     #[cfg(not(feature = "vendor-video"))]
     let zero_requested = false;
     loop {

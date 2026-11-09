@@ -544,7 +544,7 @@ fn rows_with_missing(
     );
     if let Some(status) = video.and_then(|v| v.zero_copy_status.as_deref()) {
         row(
-            crate::app_style::forms::STAT_ZERO_COPY_EXPERIMENTAL,
+            crate::app_style::forms::STAT_ZERO_COPY,
             if status.starts_with("Original NV12") || status.starts_with("Original P010") {
                 "Active"
             } else if status.starts_with("Starting") {
@@ -1208,9 +1208,9 @@ mod tests {
             ..Default::default()
         };
         let displayed = rows(&sample, &Values::default(), (None, None, None));
-        assert!(displayed.iter().any(|(k, v)| k
-            == crate::app_style::forms::STAT_ZERO_COPY_EXPERIMENTAL
-            && v == "Active"));
+        assert!(displayed
+            .iter()
+            .any(|(k, v)| k == crate::app_style::forms::STAT_ZERO_COPY && v == "Active"));
         assert!(displayed
             .iter()
             .any(|(k, v)| k == crate::app_style::forms::STAT_DECODER_FALLBACK
@@ -1228,9 +1228,9 @@ mod tests {
         video.zero_copy_status = Some(crate::video_output::original_surface_status(true).into());
         video.decoded_bit_depth = Some(10);
         let displayed = rows(&sample, &Values::default(), (None, None, None));
-        assert!(displayed.iter().any(|(k, v)| k
-            == crate::app_style::forms::STAT_ZERO_COPY_EXPERIMENTAL
-            && v == "Active"));
+        assert!(displayed
+            .iter()
+            .any(|(k, v)| k == crate::app_style::forms::STAT_ZERO_COPY && v == "Active"));
         assert!(displayed
             .iter()
             .any(|(k, v)| k == crate::app_style::forms::STAT_DECODED_COLOR_DEPTH && v == "10-bit"));
@@ -1244,9 +1244,10 @@ mod tests {
         sample.video.as_mut().unwrap().zero_copy_status =
             Some("Fallback: unsupported allocation".into());
         let displayed = rows(&sample, &Values::default(), (None, None, None));
-        assert!(displayed.iter().any(|(k, v)| k
-            == crate::app_style::forms::STAT_ZERO_COPY_EXPERIMENTAL
-            && v == "Unavailable; using normal GPU rendering"));
+        assert!(displayed
+            .iter()
+            .any(|(k, v)| k == crate::app_style::forms::STAT_ZERO_COPY
+                && v == "Unavailable; using normal GPU rendering"));
     }
 
     #[cfg(feature = "bud")]

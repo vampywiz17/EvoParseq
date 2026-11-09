@@ -35,7 +35,10 @@ impl PresentationMode {
             Self::Automatic => "Automatic (existing behavior)",
             Self::LowLatency => "Low latency (one queued presentation)",
             Self::Vsync => "VSync (synchronize to display refresh)",
+            #[cfg(target_os = "linux")]
             Self::Vrr => "VRR (experimental; compatible display required)",
+            #[cfg(not(target_os = "linux"))]
+            Self::Vrr => "VRR (compatible display required)",
         }
     }
     pub fn from_index(index: usize) -> Self {
@@ -106,9 +109,13 @@ pub struct Settings {
     #[serde(alias = "experimentalBud")]
     pub bud: bool,
     #[cfg(any(feature = "bud", target_os = "linux"))]
-    pub experimental_hid_mouse: bool,
+    #[cfg_attr(target_os = "linux", serde(rename = "experimentalHidMouse"))]
+    #[cfg_attr(not(target_os = "linux"), serde(alias = "experimentalHidMouse"))]
+    pub hid_mouse: bool,
     #[cfg(any(feature = "bud", target_os = "linux"))]
-    pub experimental_hid_keyboard: bool,
+    #[cfg_attr(target_os = "linux", serde(rename = "experimentalHidKeyboard"))]
+    #[cfg_attr(not(target_os = "linux"), serde(alias = "experimentalHidKeyboard"))]
+    pub hid_keyboard: bool,
     pub prefer_hevc: bool,
     pub presentation_mode: PresentationMode,
     /// Optional RTX Video quality: 0 off, 1..=4 low through ultra.
@@ -127,7 +134,9 @@ pub struct Settings {
     pub allow_raw_audio: bool,
     pub experimental_surround_audio: bool,
     #[cfg(any(feature = "vendor-video", target_os = "linux"))]
-    pub experimental_zero_copy: bool,
+    #[cfg_attr(target_os = "linux", serde(rename = "experimentalZeroCopy"))]
+    #[cfg_attr(not(target_os = "linux"), serde(alias = "experimentalZeroCopy"))]
+    pub zero_copy: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub video_gpu: Option<GpuPreference>,
     pub provider: String,
@@ -176,9 +185,9 @@ impl Default for Settings {
             #[cfg(any(feature = "bud", target_os = "linux"))]
             bud: false,
             #[cfg(any(feature = "bud", target_os = "linux"))]
-            experimental_hid_mouse: false,
+            hid_mouse: false,
             #[cfg(any(feature = "bud", target_os = "linux"))]
-            experimental_hid_keyboard: false,
+            hid_keyboard: false,
             prefer_hevc: false,
             presentation_mode: PresentationMode::Automatic,
             nvidia_vsr: 0,
@@ -194,7 +203,7 @@ impl Default for Settings {
             allow_raw_audio: false,
             experimental_surround_audio: false,
             #[cfg(any(feature = "vendor-video", target_os = "linux"))]
-            experimental_zero_copy: false,
+            zero_copy: false,
             video_gpu: None,
             provider: "cloudflare".into(),
             custom_urls: vec![],
@@ -216,12 +225,12 @@ impl Default for Settings {
 impl Settings {
     #[cfg(feature = "bud")]
     pub fn hid_mouse_enabled(&self) -> bool {
-        self.bud && self.experimental_hid_mouse
+        self.bud && self.hid_mouse
     }
 
     #[cfg(feature = "bud")]
     pub fn hid_keyboard_enabled(&self) -> bool {
-        self.bud && self.experimental_hid_keyboard
+        self.bud && self.hid_keyboard
     }
 
     fn fresh() -> Self {
@@ -705,15 +714,47 @@ mod tests {
         let restored: Settings = serde_json::from_value(saved).unwrap();
         assert!(restored.bud && restored.custom_audio_buffer && restored.allow_raw_audio);
     }
+    #[cfg(all(feature = "bud", any(feature = "vendor-video", target_os = "linux")))]
+    #[test]
+    fn promoted_video_and_hid_preferences_preserve_legacy_profiles() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"experimentalHidMouse":true,"experimentalHidKeyboard":true,"experimentalZeroCopy":true,"presentationMode":"vrr"}"#,
+        ).unwrap();
+        assert!(settings.hid_mouse && settings.hid_keyboard && settings.zero_copy);
+        assert!(!settings.hid_mouse_enabled() && !settings.hid_keyboard_enabled());
+        assert_eq!(settings.presentation_mode, super::PresentationMode::Vrr);
+        let saved = serde_json::to_value(&settings).unwrap();
+        for (current, legacy) in [
+            ("hidMouse", "experimentalHidMouse"),
+            ("hidKeyboard", "experimentalHidKeyboard"),
+            ("zeroCopy", "experimentalZeroCopy"),
+        ] {
+            #[cfg(target_os = "linux")]
+            let (written, omitted) = (legacy, current);
+            #[cfg(not(target_os = "linux"))]
+            let (written, omitted) = (current, legacy);
+            assert_eq!(saved[written], true);
+            assert!(saved.get(omitted).is_none());
+        }
+        let restored: Settings = serde_json::from_value(saved).unwrap();
+        assert!(restored.hid_mouse && restored.hid_keyboard && restored.zero_copy);
+        let defaults = Settings::default();
+        assert!(!defaults.hid_mouse && !defaults.hid_keyboard && !defaults.zero_copy);
+        assert_eq!(
+            defaults.presentation_mode,
+            super::PresentationMode::Automatic
+        );
+    }
+
     #[cfg(feature = "bud")]
     #[test]
     fn hid_input_preference_roundtrips_without_enabling_webrtc_input() {
         let mut s: Settings = serde_json::from_str("{}").unwrap();
         assert!(!s.hid_mouse_enabled());
-        s.experimental_hid_mouse = true;
+        s.hid_mouse = true;
         assert!(!s.hid_mouse_enabled());
         let restored: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
-        assert!(restored.experimental_hid_mouse);
+        assert!(restored.hid_mouse);
         assert!(!restored.hid_mouse_enabled());
         s.bud = true;
         assert!(s.hid_mouse_enabled());
@@ -1130,7 +1171,10 @@ impl BinaryChoice {
                 "DSCP AF21 + socket priority (experimental)",
             ],
             Self::Chroma => ["4:2:0", "Prefer 4:4:4 (experimental)"],
+            #[cfg(target_os = "linux")]
             Self::Rendering => ["Normal GPU rendering", "Zero copy (experimental, HEVC)"],
+            #[cfg(not(target_os = "linux"))]
+            Self::Rendering => ["Normal GPU rendering", "Zero copy (HEVC)"],
             Self::AudioBuffer => ["Default (core limits)", "Custom limits"],
             Self::AudioCodec => ["Opus", "Allow raw PCM (BUD)"],
             Self::Speakers => ["Stereo", "Match output layout (experimental, BUD)"],
@@ -1152,16 +1196,24 @@ impl InputMode {
         Self::HidKeyboard,
         Self::HidBoth,
     ];
+    #[cfg(target_os = "linux")]
     pub const LABELS: [&'static str; 4] = [
         "Standard input",
         "USB HID mouse (experimental)",
         "USB HID keyboard (experimental)",
         "USB HID mouse + keyboard (experimental)",
     ];
+    #[cfg(not(target_os = "linux"))]
+    pub const LABELS: [&'static str; 4] = [
+        "Standard input",
+        "USB HID mouse",
+        "USB HID keyboard",
+        "USB HID mouse + keyboard",
+    ];
     pub fn current(s: &Settings) -> Self {
         #[cfg(feature = "bud")]
         {
-            match (s.experimental_hid_mouse, s.experimental_hid_keyboard) {
+            match (s.hid_mouse, s.hid_keyboard) {
                 (false, false) => Self::Standard,
                 (true, false) => Self::HidMouse,
                 (false, true) => Self::HidKeyboard,
@@ -1177,8 +1229,8 @@ impl InputMode {
     pub fn apply(self, s: &mut Settings) {
         #[cfg(feature = "bud")]
         {
-            s.experimental_hid_mouse = matches!(self, Self::HidMouse | Self::HidBoth);
-            s.experimental_hid_keyboard = matches!(self, Self::HidKeyboard | Self::HidBoth);
+            s.hid_mouse = matches!(self, Self::HidMouse | Self::HidBoth);
+            s.hid_keyboard = matches!(self, Self::HidKeyboard | Self::HidBoth);
         }
         #[cfg(not(feature = "bud"))]
         {

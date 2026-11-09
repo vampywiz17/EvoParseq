@@ -1,5 +1,13 @@
 # EvoParseq changelog
 
+## Unreleased
+
+- Remove the experimental designation from Windows Display timing, VRR, Zero copy
+  presentation and BUD USB HID input in shared UI text, code names and documentation.
+  Keep defaults, hardware requirements and runtime behavior unchanged. Saved Windows
+  profiles accept the former keys and write the current names. Linux retains its
+  experimental labels and existing JSON keys.
+
 ## v0.9.6-dev.5 — Audio controls, Android TV updates and recovery (2026-11-06)
 
 This development preview builds on **EvoParseq v0.9.6-dev.1**. The changes below
@@ -85,7 +93,7 @@ Windows-equivalent Zero copy mode. The related API research is documentation,
 not an implemented or validated capability. Driver/compositor work and physical
 scanout remain unverified; no universal performance or latency gain is claimed.
 The earlier transport-specific high-bitrate WebRTC limitation remains under
-investigation. Existing Windows experimental GPU, HID and audio limits remain
+investigation. Existing Windows experimental GPU and audio limits remain
 as documented in the README.
 
 Existing host permissions and controller requirements still apply. Windows
@@ -218,7 +226,7 @@ report simultaneous OK and direction presses required for dragging.
 
 MediaCodec-to-Surface output is not a claim of verified driver/compositor
 zero copy. Android does not advertise HDR, 4:4:4 or AI upscaling; 10-bit is SDR.
-Existing Windows experimental video/HID/QoS limits remain as documented for
+Existing Windows experimental video/QoS limits remain as documented for
 v0.9.5. This release does not change the stable main branch or host configuration.
 EvoParseq remains independent of Parsec/Unity and lowlat.
 
@@ -353,8 +361,7 @@ compatible video drivers. H.264, stereo Opus and Automatic presentation remain
 the conservative defaults. Host settings are requests: check **Connection stats**
 for the codec, depth, chroma and output actually received.
 
-**Vendor HEVC, Zero copy, 10-bit HEVC, HEVC 4:4:4, display timing/VRR, AI
-upscaling, USB HID, QoS and multichannel audio remain experimental options.**
+**Vendor HEVC, 10-bit HEVC, HEVC 4:4:4, AI upscaling, QoS and multichannel audio remain experimental options.**
 Successful tests do not guarantee every GPU/driver combination. Intel AI and
 live multichannel playback remain unverified; no universal latency gain is claimed.
 
@@ -411,7 +418,7 @@ Implemented changes since EvoParseq v0.9.5-dev.1.
   presentation and teardown. Keep driver-owned resources on their owning worker
   and prevent accumulating replacement workers. An unrecoverable native timeout
   requires restarting the app.
-- **Experimental DXGI VRR:** add optional variable-refresh presentation to the
+- **DXGI VRR:** add optional variable-refresh presentation to the
   normal DXGI path used by vendor and Media Foundation decoders. Check tearing
   support, preserve configuration through resize/precision changes and fall back
   without adding decoded-frame copies. Physical panel activation depends on the
@@ -516,7 +523,7 @@ builds, not published stable releases.
 
 ## Unreleased
 
-- Extend experimental original-surface Zero copy to HEVC Main10 4:2:0 P010. Check optional P010 displayable support at setup; decode directly into displayable P010 DPB textures and retain existing presentation leases. No application pixel copy, RGB target, processor/shader pass or new per-frame format probe is added. Unsupported setup/runtime falls back to normal Media Foundation rendering without a silent 8-bit downgrade.
+- Extend original-surface Zero copy to HEVC Main10 4:2:0 P010. Check optional P010 displayable support at setup; decode directly into displayable P010 DPB textures and retain existing presentation leases. No application pixel copy, RGB target, processor/shader pass or new per-frame format probe is added. Unsupported setup/runtime falls back to normal Media Foundation rendering without a silent 8-bit downgrade.
 - Report original P010 presentation and actual decoded 10-bit depth without claiming final compositor/scanout output depth. HEVC 10-bit 4:2:0 Zero copy is now live-confirmed on tested AMD and NVIDIA systems; Intel HEVC paths under the current decoder policy still require live testing.
 
 
@@ -536,21 +543,20 @@ unmodified Parsec WASM core.
 - **BUD transport:** connect to unmodified Parsec hosts directly over UDP or through configured TURN relays over UDP, TLS or TCP. Use the same Network settings as WebRTC, including Force TURN; startup retries prefer UDP, then TLS, then TCP, with port 80 first among TCP URLs. An established connection is not migrated and BUD never silently switches to WebRTC.
 - **Responsive relay IO:** native event-driven BUD TCP/TLS sockets retain partial writes, bounded reusable buffers, TLS backpressure and write deadlines. TLS verifies the server certificate and hostname. WebRTC TURN/TCP reuses receive storage, and TCP/TLS ChannelData is submitted with its padding in one framed write. Newly queued BUD HID reports and control replies drain before the next network wait, without a batching delay or changes to protocol retransmission timers.
 - **Vendor HEVC decoding (experimental):** normal 8-bit HEVC uses Direct D3D11 on NVIDIA, AMF on AMD and VPL on Intel, with the existing Media Foundation recovery/fallback. H.264 continues to use Media Foundation on every vendor. Burst handling and surface ownership fixes improve HEVC startup and avoid unnecessary Intel decoder fallback.
-- **Zero copy presentation (experimental):** supported NVIDIA, AMD and Intel GPUs can present original 8-bit NV12 decoder surfaces through Windows Presentation API, preserving aspect ratio and falling back to normal GPU rendering when needed. This removes the application's conversion/output pass without decoded-frame CPU readback; internal Windows/driver copies and direct scanout are not guaranteed. Windows 11 and compatible drivers are required.
+- **Zero copy presentation:** supported NVIDIA, AMD and Intel GPUs can present original 8-bit NV12 decoder surfaces through Windows Presentation API, preserving aspect ratio and falling back to normal GPU rendering when needed. This removes the application's conversion/output pass without decoded-frame CPU readback; internal Windows/driver copies and direct scanout are not guaranteed. Windows 11 and compatible drivers are required.
 - **Correct color range:** translate full/limited-range metadata correctly between Media Foundation and D3D11, including vendor output. This fixes grey-looking whites and lifted blacks. Startup, later encoder requests and keyframe requests consistently retain the selected range and HEVC flags.
 - **10-bit HEVC and RGB SDR output (experimental):** request Main 10 over WebRTC or BUD when supported, including the BUD startup fix for negotiated 10-bit video. Actual P010 decoder output can feed a 10-bit RGB swap chain through the existing GPU conversion pass, with compatible 8-bit RGB output fallback. Stats distinguish decoded depth from application output. Host/driver support determines the received stream; this is SDR, not HDR, and original-surface Zero copy stays 8-bit only.
 - **Audio controls:** add a dedicated Audio tab with optional minimum/maximum playback buffering, supported low-period shared WASAPI output with fallback, bounded fresh PCM queues and BUD-only raw PCM permission. Keep automatic buffering and Opus as defaults, align the menu's initial custom limits with the pinned core, and handle PCM/Opus transitions safely. Raw PCM also requires host support and can fall back to Opus; WebRTC remains stereo Opus.
 - **Multichannel audio (experimental, BUD):** optionally request the Windows output's compatible 5.1/7.1 channel layout, decode Opus/PCM with per-packet format information and report the actual layout. Stereo remains the default and fallback. This feature has synthetic tests and silent WASAPI validation only; live surround playback and channel ordering are not confirmed.
-- **USB HID mouse and keyboard (experimental, BUD):** use the stock host's USB/Yubikey passthrough for absolute desktop positioning, native relative camera control, five mouse buttons, dragging, scrolling and physical keyboard input. Mouse and keyboard share one device lifecycle and bounded queues; selected HID devices replace ordinary Parsec forwarding independently. Local menus remain accessible and focus loss/disconnect releases held input. No helper executable or host patch is needed; one physical or virtual display and matching keyboard layouts are supported.
+- **USB HID mouse and keyboard (BUD):** use the stock host's USB/Yubikey passthrough for absolute desktop positioning, native relative camera control, five mouse buttons, dragging, scrolling and physical keyboard input. Mouse and keyboard share one device lifecycle and bounded queues; selected HID devices replace ordinary Parsec forwarding independently. Local menus remain accessible and focus loss/disconnect releases held input. No helper executable or host patch is needed; one physical or virtual display and matching keyboard layouts are supported.
 - **Dragging and cursor transitions:** restore the host-reported endpoint when leaving relative/hidden capture so the next HID click does not return to the old drag anchor. Keep the cursor hidden until position restoration and replace its image before retiring the old handle. Prompt BUD capture-state wakeups reduce transition flicker while preserving camera input, event order, focus handling and local controls.
 - **Two-way text clipboard:** forward native clipboard changes, focus restoration and paste-key requests through the original core while respecting core/host permissions. Preserve UTF-8 boundaries, avoid echoes and distinguish unavailable reads from copied empty text. Client-to-host pasting has been verified live; file/image transfer is not added.
-- **Display timing and burst catch-up:** add experimental Automatic, Low latency and VSync choices. Automatic preserves previous behavior; explicit DXGI modes request a one-presentation queue. Interruptible display/input readiness waits fix the reported Low latency stutter while preferring fresh decoded input over a pending presentation. BUD can skip obsolete display work without dropping reference decoding. No extra decoded-frame copy, RGB target or rendering thread is introduced; original-surface timing stays Windows-managed.
+- **Display timing and burst catch-up:** add Automatic, Low latency and VSync choices. Automatic preserves previous behavior; explicit DXGI modes request a one-presentation queue. Interruptible display/input readiness waits fix the reported Low latency stutter while preferring fresh decoded input over a pending presentation. BUD can skip obsolete display work without dropping reference decoding. No extra decoded-frame copy, RGB target or rendering thread is introduced; original-surface timing stays Windows-managed.
 - **More useful diagnostics:** Connection stats adds native BUD route/RTT/traffic/delivery counters, actual audio codec and queue/buffer details, decoded/RGB precision, automatic host video/audio timing and bounded local video-stage measurements. Correct encode/frame-interval labels and add Present submission interval. The embedded overlay receives native Decode and Network values. Timings describe their reported host durations or CPU-observed stages, not GPU completion, scanout or end-to-end latency; unavailable values remain unknown.
 - **Optional event logging:** Network settings can create a bounded asynchronous UTF-8 JSON Lines log beside settings.json, with UTC connection/route transitions, transport/decoder/HID failures and audio/profile state. Rotation retains one previous file. Logging is off by default and excludes credentials, media, clipboard content and continuous mouse/key activity; temporary input trace capture has been removed.
 - **Settings, recovery and maintenance:** separate Network, Video, Audio and Input with consistent tab spacing, shared saving and preserved unsaved edits. Disable Zero copy and 10-bit controls while HEVC is off, fix wrapped settings/stats text and guide unsupported host launch choices. Reuse bounded media/input storage, shorten shared locks and release retired video reuse pools. Add concise bug/feature/question issue forms, consolidate active native tests, remove retired experiments, shorten the README, clarify the unchanged-core provenance and credit lowlat's reused open-source components.
 
-**Vendor HEVC decoding, Zero copy, 10-bit HEVC, display timing, multichannel
-audio and USB HID input remain experimental options in this stable release.**
+**Vendor HEVC decoding, 10-bit HEVC and multichannel audio remain experimental options in this stable release.**
 WebRTC, H.264, stereo Opus and Automatic display timing remain the defaults.
 BUD, custom audio buffering, raw PCM permission and host timing no longer carry
 an experimental label. For the most conservative setup, keep the defaults and
@@ -584,8 +590,7 @@ release is targeted for the second half of next week (October 29-November 1,
 
 Changes since v0.9.4-dev.5.
 
-**Vendor-specific HEVC decoding, Zero copy, 10-bit HEVC, display timing,
-multichannel audio and USB HID input remain experimental.** BUD, custom audio
+**Vendor-specific HEVC decoding, 10-bit HEVC and multichannel audio remain experimental.** BUD, custom audio
 buffering, raw PCM permission and host timing no longer carry the experimental
 label. Defaults remain WebRTC, H.264 and automatic playback. For stability-first
 use, leave experimental options disabled or use the stable v0.9.3 release.
@@ -594,7 +599,7 @@ use, leave experimental options disabled or use the stable v0.9.3 release.
 - **Feature status:** remove the experimental label from BUD, custom audio buffering, raw PCM permission and host timing. Keep existing defaults and accept the former settings keys when loading saved profiles. Other experimental options keep their labels; historical release notes describe their original status.
 - **Connection stats layout:** measure both text columns when sizing rows so wrapped labels and values do not overlap; shorten the display catch-up counter label.
 - **Local video timing:** bounded CPU measurements of native compressed-queue wait, decoder setup/service and correlated input-to-output time, surface handoff, presentation preparation and Present calls. No GPU execution/scanout claim, pixel readback or per-frame logging.
-- **Display timing (experimental):** Automatic preserves existing behavior; Low latency and VSync request a one-presentation DXGI queue with nonblocking readiness checks and compatible fallback. Original-surface Zero copy keeps Windows-managed timing. Hardware/live latency gains remain unverified.
+- **Display timing:** Automatic preserves existing behavior; Low latency and VSync request a one-presentation DXGI queue with nonblocking readiness checks and compatible fallback. Original-surface Zero copy keeps Windows-managed timing. Hardware/live latency gains remain unverified.
 - **BUD burst handling:** retain reference decoding while omitting obsolete display updates when later compressed messages are queued. Deterministic tests compare identical decoded references and reduced display work; WebRTC delivery is unchanged.
 - **Memory diagnostics:** distinguish resident/private committed process memory in stats and record a few startup milestones through existing optional event logging. The reported intermittent high-memory startup remains under investigation; no forced working-set trimming. Retired video pipelines release their compressed-buffer reuse pool while preserving final statistics.
 
@@ -606,18 +611,17 @@ use, leave experimental options disabled or use the stable v0.9.3 release.
 
 - **Maintenance and reporting:** add bug/feature/question issue forms, move the active TURN integration fixture under native tests, and remove the obsolete separate BUD test-file logger and launcher instructions. Connection failure stages remain in the normal event log.
 
-## 0.9.4-dev.5 - Experimental USB HID input (2026-10-20)
+## 0.9.4-dev.5 - USB HID input (2026-10-20)
 
 Changes since v0.9.4-dev.4.
 
-**USB HID input, BUD, vendor-specific HEVC decoding, Zero copy, 10-bit HEVC
-and the Audio options remain experimental.** For stability-first use, select
+**BUD, vendor-specific HEVC decoding, 10-bit HEVC and the Audio options remain experimental.** For stability-first use, select
 WebRTC with H.264, leave experimental options disabled, or use the published
 stable v0.9.3 release. HID input requires BUD and USB/Yubikey passthrough on
 the stock host; compatibility depends on the host and application.
 
-- **Experimental USB HID mouse:** use the stock host's USB/Yubikey passthrough with BUD for absolute desktop positioning, native relative camera movement, five buttons, dragging and vertical/horizontal scrolling. Relative capture follows the host cursor state and hides the local pointer. One physical or virtual display is supported.
-- **Experimental USB HID keyboard:** forward physical key presses, releases and modifiers through the same host USB path. Matching active layouts, including Hungarian on both computers, are supported; the host layout is not changed automatically. Simultaneous keys use a bitmap without a six-key array limit.
+- **USB HID mouse:** use the stock host's USB/Yubikey passthrough with BUD for absolute desktop positioning, native relative camera movement, five buttons, dragging and vertical/horizontal scrolling. Relative capture follows the host cursor state and hides the local pointer. One physical or virtual display is supported.
+- **USB HID keyboard:** forward physical key presses, releases and modifiers through the same host USB path. Matching active layouts, including Hungarian on both computers, are supported; the host layout is not changed automatically. Simultaneous keys use a bitmap without a six-key array limit.
 - **Simultaneous HID input:** mouse and keyboard share one USB device lifecycle and bounded transport queues, with separate reports and fair scheduling. Buttons keep the same owner across desktop/camera mode changes. Ordinary Parsec forwarding is disabled independently for each selected HID input, preventing duplicate input.
 - **New Input settings tab:** select HID mouse and keyboard independently, save the preferences and reconnect. Both options require BUD and are disabled by default. Local menus remain usable; focus loss and disconnect release held input and capture. Only the usual EXE and settings.json are needed, without a host modification or additional launcher.
 - **HID operational logging:** the existing optional client-events.jsonl records activation, state changes and setup/transfer/queue failures, without continuous mouse movement, coordinates, clicks, key history, typed text or USB payloads.
@@ -658,7 +662,7 @@ leave experimental options disabled, or use the published stable v0.9.3 release.
 
 Changes since v0.9.4-dev.1.
 
-**BUD, vendor-specific HEVC decoding, Zero copy and 10-bit HEVC are experimental.**
+**BUD, vendor-specific HEVC decoding and 10-bit HEVC are experimental.**
 For stability-first use, select WebRTC with H.264 and leave experimental options
 disabled, or use the published stable v0.9.3 release.
 
@@ -672,14 +676,14 @@ disabled, or use the published stable v0.9.3 release.
 
 Changes since the stable v0.9.3 release.
 
-**BUD, vendor-specific HEVC decoding and Zero copy are experimental.** For
+**BUD and vendor-specific HEVC decoding are experimental.** For
 stability-first use, select WebRTC with H.264 and leave the experimental options
 disabled, or use the published stable v0.9.3 release. H.264 remains the default
 and uses Media Foundation on every GPU vendor.
 
 - **Experimental BUD transport:** enable Experimental BUD in Settings to use the native UDP protocol with a regular Parsec host. Direct UDP, automatic fallback to a configured UDP TURN relay and Force TURN are supported. WebRTC remains the default and retains TURN over UDP, TCP and TLS; BUD supports UDP only and does not silently switch to WebRTC.
 - **Experimental vendor-specific HEVC decoding:** when Prefer H.265 / HEVC is enabled, normal 8-bit HEVC playback uses Direct D3D11 on NVIDIA, AMF on AMD and VPL on Intel. These paths keep decoder output on the GPU and feed the existing presentation path directly. The existing GPU Media Foundation fallback/recovery remains available when a vendor path cannot be used.
-- **Experimental Zero copy presentation:** the Video tab can select original NV12 decoder-surface presentation through Direct D3D11 and Windows Presentation API on supported NVIDIA, AMD and Intel GPUs. This removes the application's conversion/output pass and introduces no intermediate decoded-frame copy or CPU pixel readback. Windows 11 and compatible hardware/drivers are required; internal Windows/driver copies and direct scanout are not guaranteed.
+- **Zero copy presentation:** the Video tab can select original NV12 decoder-surface presentation through Direct D3D11 and Windows Presentation API on supported NVIDIA, AMD and Intel GPUs. This removes the application's conversion/output pass and introduces no intermediate decoded-frame copy or CPU pixel readback. Windows 11 and compatible hardware/drivers are required; internal Windows/driver copies and direct scanout are not guaranteed.
 - **More reliable HEVC startup and recovery:** handle short arrival bursts without exhausting presentation surfaces or unnecessarily abandoning the working Intel decoder. Original-surface presentation preserves the picture's aspect ratio and can recover to normal GPU rendering when unavailable.
 - **BUD connection statistics:** show native RTT, decoded FPS, incoming/outgoing traffic, direct or relay route, host encode time when available and BUD delivery counters. Irrelevant WebRTC ICE/DTLS fields are hidden in BUD mode, and the last valid host encode time no longer flickers between reports.
 - **Network and Video settings tabs:** connection servers, credentials, routing and transport settings are separated from GPU, codec and presentation choices. Both tabs share Save settings and retain unsaved edits when switching tabs.

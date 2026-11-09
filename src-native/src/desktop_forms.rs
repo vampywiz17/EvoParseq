@@ -160,7 +160,21 @@ pub const VIDEO_GPU: SettingRow = SettingRow {
     control_text: "",
 };
 pub const VIDEO_FORMAT:SettingRow=SettingRow{tab:1,group:0,label:"Video format",help:"HEVC and 10-bit require compatible host encoding.\nThe host may select H.264; reconnect after changing.",y:344,help_height:48,field_height:32,kind:Kind::Choice,control_text:""};
-pub const DISPLAY_TIMING:SettingRow=SettingRow{tab:1,group:0,label:"Display timing",help:"Experimental: normal GPU rendering; reconnect to apply.\nVRR needs an enabled compatible monitor and driver.\nZero copy keeps Windows-managed timing.",y:626,help_height:60,field_height:32,kind:Kind::Choice,control_text:""};
+pub const DISPLAY_TIMING: SettingRow = SettingRow {
+    tab: 1,
+    group: 0,
+    label: "Display timing",
+    help: if cfg!(target_os = "linux") {
+        "Experimental: normal GPU rendering; reconnect to apply.\nVRR needs an enabled compatible monitor and driver.\nZero copy keeps Windows-managed timing."
+    } else {
+        "Normal GPU rendering; reconnect to apply.\nVRR needs an enabled compatible monitor and driver.\nZero copy keeps Windows-managed timing."
+    },
+    y: 626,
+    help_height: 60,
+    field_height: 32,
+    kind: Kind::Choice,
+    control_text: "",
+};
 pub const CHROMA:SettingRow=SettingRow{tab:1,group:0,label:"Chroma",help:"NVIDIA tested; Intel not live-validated. AMD unavailable.\nHEVC 8/10-bit; requires compatible host and GPU.\nNormal GPU rendering; host may send 4:2:0 instead.",y:438,help_height:60,field_height:32,kind:Kind::Choice,control_text:""};
 pub const SESSION_MENU: SettingRow = SettingRow {
     tab: 1,
@@ -208,7 +222,21 @@ pub const MINIMUM_BUFFER_MS:SettingRow=SettingRow{tab:2,group:0,label:"Minimum b
 pub const MAXIMUM_BUFFER_MS:SettingRow=SettingRow{tab:2,group:0,label:"Maximum buffer (ms)",help:"Local PCM plus audio queued on the Windows device.\n0 <= minimum <= maximum <= 500; maximum above zero.",y:438,help_height:48,field_height:36,kind:Kind::Edit,control_text:""};
 pub const AUDIO_FORMAT:SettingRow=SettingRow{tab:2,group:0,label:"Audio format",help:"RAW: BUD only; host must also enable RAW.\n48 kHz stereo PCM uses about 1.54 Mbps before overhead.\nThe actual codec is shown in Connection stats.",y:532,help_height:60,field_height:32,kind:Kind::Choice,control_text:""};
 pub const SPEAKER_LAYOUT:SettingRow=SettingRow{tab:2,group:0,label:"Speaker layout",help:"Experimental: match the Windows output's 5.1 or 7.1 layout.\nSynthetic tests only; no live host/client validation.\nBUD only; stereo fallback. Reconnect to apply.",y:630,help_height:68,field_height:32,kind:Kind::Choice,control_text:""};
-pub const INPUT_MODE:SettingRow=SettingRow{tab:3,group:0,label:"Input mode",help:"Standard input or experimental USB HID over BUD.\nMouse and keyboard can be selected independently.",y:242,help_height:48,field_height:32,kind:Kind::Choice,control_text:""};
+pub const INPUT_MODE: SettingRow = SettingRow {
+    tab: 3,
+    group: 0,
+    label: "Input mode",
+    help: if cfg!(target_os = "linux") {
+        "Standard input or experimental USB HID over BUD.\nMouse and keyboard can be selected independently."
+    } else {
+        "Standard input or USB HID over BUD.\nMouse and keyboard can be selected independently."
+    },
+    y: 242,
+    help_height: 48,
+    field_height: 32,
+    kind: Kind::Choice,
+    control_text: "",
+};
 pub const HID_REQUIREMENTS:SettingRow=SettingRow{tab:3,group:0,label:"HID requirements",help:"Enable USB/Yubikey passthrough on the host.\nHID mouse uses the primary display only.\nUse the same keyboard layout on host and client.",y:354,help_height:64,field_height:32,kind:Kind::Info,control_text:""};
 pub const COMPATIBILITY:SettingRow=SettingRow{tab:3,group:0,label:"Compatibility",help:"Absolute desktop and relative camera movement.\nCamera mode follows the host cursor state.\nKeyboard layout is not switched automatically.",y:466,help_height:64,field_height:32,kind:Kind::Info,control_text:""};
 #[cfg(target_os = "linux")]
@@ -282,7 +310,10 @@ pub const STAT_RGB_OUTPUT: &str = "RGB output";
 pub const STAT_RGB_OUTPUT_FALLBACK: &str = "RGB output fallback";
 pub const STAT_RENDERER: &str = "Renderer";
 pub const STAT_GPU_ADAPTER: &str = "GPU adapter";
-pub const STAT_ZERO_COPY_EXPERIMENTAL: &str = "Zero copy (experimental)";
+#[cfg(target_os = "linux")]
+pub const STAT_ZERO_COPY: &str = "Zero copy (experimental)";
+#[cfg(not(target_os = "linux"))]
+pub const STAT_ZERO_COPY: &str = "Zero copy";
 pub const STAT_DISPLAY_OUTPUT: &str = "Display output";
 pub const STAT_VIDEO_STATUS: &str = "Video status";
 pub const STAT_HARDWARE_DECODE: &str = "Hardware decode";
@@ -483,7 +514,7 @@ pub const STATS: &[StatRow] = &[
         section: false,
     },
     StatRow {
-        label: STAT_ZERO_COPY_EXPERIMENTAL,
+        label: STAT_ZERO_COPY,
         tab: 2,
         section: false,
     },

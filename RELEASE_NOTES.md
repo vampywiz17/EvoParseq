@@ -27,7 +27,7 @@ Parsec hosts.
   presentation and teardown. Keep driver-owned resources on their owning worker
   and prevent accumulating replacement workers. An unrecoverable native timeout
   requires restarting the app.
-- **Experimental DXGI VRR:** add optional variable-refresh presentation to the
+- **DXGI VRR:** add optional variable-refresh presentation to the
   normal DXGI path used by vendor and Media Foundation decoders. Check tearing
   support, preserve configuration through resize/precision changes and fall back
   without adding decoded-frame copies. Physical panel activation depends on the
@@ -58,8 +58,7 @@ Parsec hosts.
 
 ## Compatibility and validation
 
-**AI upscaling, VRR/display timing, vendor HEVC, zero-copy, 10-bit HEVC,
-HEVC 4:4:4, USB HID and multichannel audio remain experimental.** For conservative
+**AI upscaling, vendor HEVC, 10-bit HEVC, HEVC 4:4:4 and multichannel audio remain experimental.** For conservative
 operation, use H.264, stereo Opus and Automatic timing with optional effects off.
 
 AI upscaling is **GPU processing, not the application's Zero copy mode**. It

@@ -267,7 +267,7 @@ mod tests {
         form.values.experimental_chroma_444 = true;
         #[cfg(feature = "vendor-video")]
         {
-            form.values.experimental_zero_copy = true;
+            form.values.zero_copy = true;
         }
         for vendor in [Some(0x10de), Some(0x8086), Some(0x1002), None] {
             for hevc in [false, true] {
@@ -281,7 +281,7 @@ mod tests {
                 assert_eq!(form.values.experimental_chroma_444, eligible);
                 assert!(form.values.experimental_ten_bit);
                 #[cfg(feature = "vendor-video")]
-                assert!(form.values.experimental_zero_copy);
+                assert!(form.values.zero_copy);
             }
         }
         // A selected adapter overrides Automatic's vendor; a missing list
@@ -307,8 +307,8 @@ mod tests {
         form.values.experimental_surround_audio = true;
         #[cfg(feature = "bud")]
         {
-            form.values.experimental_hid_mouse = true;
-            form.values.experimental_hid_keyboard = true;
+            form.values.hid_mouse = true;
+            form.values.hid_keyboard = true;
         }
         form.turn_urls = "turns:example.invalid:443?transport=tcp".into();
         for cloudflare in [false, true] {
@@ -339,8 +339,8 @@ mod tests {
         {
             form.values.bud = true;
             assert!(form.availability().bud);
-            assert!(form.values.experimental_hid_mouse);
-            assert!(form.values.experimental_hid_keyboard);
+            assert!(form.values.hid_mouse);
+            assert!(form.values.hid_keyboard);
         }
         assert!(form.values.allow_raw_audio && form.values.experimental_surround_audio);
         assert!(form.turn_urls.ends_with("transport=tcp"));
