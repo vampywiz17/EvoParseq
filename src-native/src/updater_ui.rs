@@ -221,7 +221,6 @@ unsafe fn open_page(parent: HWND, pages: Arc<Pages>, mode: Mode) -> HWND {
         ES_MULTILINE as u32
             | ES_READONLY as u32
             | ES_AUTOVSCROLL as u32
-            | WS_VSCROLL
             | WS_TABSTOP
             | WS_CLIPCHILDREN,
         page.font,
