@@ -1,6 +1,12 @@
 name: Release malware scan
 
 on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: Numeric ID of the fully prepared draft release to scan and publish
+        type: string
+        required: true
   release:
     types: [published]
 
@@ -14,7 +20,7 @@ concurrency:
 
 jobs:
   scan:
-    if: github.event.release.draft == false
+    if: github.event_name == 'workflow_dispatch' || github.event.release.draft == false
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -35,7 +41,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VIRUSTOTAL: ${{ secrets.VIRUSTOTAL }}
-          RELEASE_ID: ${{ github.event.release.id }}
+          RELEASE_ID: ${{ inputs.release_id || github.event.release.id }}
+          PUBLISH_RELEASE: ${{ github.event_name == 'workflow_dispatch' }}
         run: python3 scripts/release_security_scan.py
       - name: Preserve generated reports even when detections need review
         if: always()

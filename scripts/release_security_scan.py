@@ -212,22 +212,34 @@ def asset_identity(assets):
             for asset in assets]
 
 
-def scan_release(repo, release_id, scanner, directory):
+def scan_release(repo, release_id, scanner, directory, publish=False):
     endpoint = f"repos/{repo}/releases/{release_id}"
     release = github(endpoint)
-    if release["draft"] or not release.get("published_at") or github(f"repos/{repo}")["private"]:
-        raise ScanError("Only published public releases may be submitted")
+    if github(f"repos/{repo}")["private"]:
+        raise ScanError("Private repository files may not be submitted")
+    if publish and not release["draft"]:
+        raise ScanError("Publication gate requires a draft release")
+    if not publish and (release["draft"] or not release.get("published_at")):
+        raise ScanError("Published-release audit requires a published release")
     tag = safe_name(release["tag_name"])
     assets = select_assets(release)
     report = {"release": release["html_url"], "tag": tag,
               "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "files": []}
     cache = {}
+    blocked = False
     for index, asset in enumerate(assets):
+        if blocked:
+            report["files"].append({"name": asset["name"], "status": "not_scanned",
+                                    "error": "Stopped after a blocking scan result"})
+            continue
         work = directory / str(index)
         work.mkdir()
         try:
             path = download(repo, tag, asset, work)
             report["files"].append(scan_file(scanner, path, asset["name"], cache))
+            if needs_attention(report["files"][-1]):
+                blocked = True
+                continue
             if path.suffix.lower() == ".flatpak":
                 name = asset["name"] + " / files/bin/evoparseq-linux"
                 try:
@@ -237,9 +249,12 @@ def scan_release(repo, release_id, scanner, directory):
                     report["files"].append({"name": name, "status": "error", "error": safe_error(error)})
         except (ScanError, OSError) as error:
             report["files"].append({"name": asset["name"], "status": "error", "error": safe_error(error)})
+        blocked = any(needs_attention(row) for row in report["files"])
     latest = github(endpoint)
     if asset_identity(select_assets(latest)) != asset_identity(assets):
         raise ScanError("Release assets changed during analysis; results were not published")
+    if latest["draft"] != release["draft"]:
+        raise ScanError("Release publication state changed during analysis")
     text = markdown(report)
     notes = replace_section(latest.get("body") or "", text)
     output = Path("security-scan-results")
@@ -248,12 +263,15 @@ def scan_release(repo, release_id, scanner, directory):
     (output / REPORTS[1]).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     command(["gh", "release", "upload", tag, "--repo", repo, "--clobber",
              *(str(output / name) for name in REPORTS)])
-    github(endpoint, "PATCH", {"body": notes})
+    update = {"body": notes}
+    if publish and not blocked:
+        update.update(draft=False, make_latest="false" if latest.get("prerelease") else "true")
+    github(endpoint, "PATCH", update)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with Path(summary).open("a", encoding="utf-8") as stream:
             stream.write(text)
-    return int(any(needs_attention(row) for row in report["files"]))
+    return int(blocked)
 
 
 def main():
@@ -263,7 +281,8 @@ def main():
     release_id = int(os.environ["RELEASE_ID"])
     scanner = VirusTotal(os.environ.get("VIRUSTOTAL", ""))
     with tempfile.TemporaryDirectory(prefix="release-scan-") as work:
-        return scan_release(repo, release_id, scanner, Path(work))
+        return scan_release(repo, release_id, scanner, Path(work),
+                            publish=os.environ.get("PUBLISH_RELEASE") == "true")
 
 
 if __name__ == "__main__":

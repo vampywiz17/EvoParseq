@@ -209,14 +209,16 @@ class Fixtures(unittest.TestCase):
         unpack.mkdir()
         self.assertEqual(scan.flatpak_payload(bundle, unpack).read_bytes(), exe.read_bytes())
 
-    def run_release(self, initial, latest=None, client=None, extraction=None):
+    def run_release(self, initial, latest=None, client=None, extraction=None, publish=False):
         reads = 0
+        self.updates = []
         def api(endpoint, method="GET", payload=None):
             nonlocal reads
             if endpoint == "repos/a/b":
                 return {"private": False}
             if method == "PATCH":
                 self.assertIn("Existing release notes", payload["body"])
+                self.updates.append(payload)
                 return {}
             reads += 1
             return initial if reads == 1 else latest or initial
@@ -229,9 +231,36 @@ class Fixtures(unittest.TestCase):
         os.chdir(self.root)
         self.addCleanup(os.chdir, previous)
         with patch.object(scan, "github", side_effect=api), patch.object(scan, "download", side_effect=download), \
-                patch.object(scan, "command") as publish, patch.object(scan, "flatpak_payload", side_effect=extraction), \
+                patch.object(scan, "command") as upload, patch.object(scan, "flatpak_payload", side_effect=extraction), \
                 patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(self.root / "summary.md")}):
-            return scan.scan_release("a/b", 1, client, self.root), publish
+            return scan.scan_release("a/b", 1, client, self.root, publish=publish), upload
+
+    def test_clean_draft_is_published_only_after_completed_scans(self):
+        draft = release() | {"draft": True, "published_at": None}
+        result, _ = self.run_release(draft, publish=True)
+        self.assertEqual(result, 0)
+        self.assertEqual(self.updates[-1]["draft"], False)
+        self.assertEqual(self.updates[-1]["make_latest"], "true")
+
+    def test_positive_verdict_stops_submissions_and_keeps_release_draft(self):
+        draft = release([asset(), asset("a.apk")]) | {"draft": True, "published_at": None}
+        client = Mock(scan=Mock(return_value=DONE | {"stats": STATS | {"malicious": 1}}))
+        result, _ = self.run_release(draft, client=client, publish=True)
+        self.assertEqual(result, 1)
+        self.assertEqual(client.scan.call_count, 1)
+        self.assertNotIn("draft", self.updates[-1])
+        report = json.loads((self.root / "security-scan-results/SECURITY-SCAN.json").read_text())
+        self.assertEqual(report["files"][1]["status"], "not_scanned")
+
+    def test_publication_gate_rejects_already_public_releases(self):
+        with patch.object(scan, "github", side_effect=[release(), {"private": False}]):
+            with self.assertRaisesRegex(scan.ScanError, "draft release"):
+                scan.scan_release("a/b", 1, Mock(), self.root, publish=True)
+
+    def test_concurrent_publication_cannot_bypass_the_gate(self):
+        draft = release() | {"draft": True, "published_at": None}
+        with self.assertRaisesRegex(scan.ScanError, "publication state"):
+            self.run_release(draft, latest=release(), publish=True)
 
     def test_published_release_report_snapshot_and_live_notes(self):
         first = release()
