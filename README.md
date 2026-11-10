@@ -26,7 +26,7 @@ requires no browser, WebView or helper executable.
 **This is an independent community project, not affiliated with or endorsed by
 Parsec, Unity or lowlat.** A Parsec account and a compatible host are required.
 
-The stable release is [**EvoParseq v0.9.6**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6),
+The stable release is [**EvoParseq v0.9.7**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.7),
 with Windows x64 packages and the signed Android TV APK. This is the `main`
 branch; ongoing development continues on `dev`. Linux remains a separate alpha
 on `codex/linux-flatpak` and is not included in this release.
@@ -82,7 +82,7 @@ MediaCodec submits frames to Surface without CPU pixel readback; physical scanou
 and internal driver/compositor copies are not verified.
 
 Download **EvoParseq-TV.apk** from the
-[stable release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6), or
+[stable release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.7), or
 use **Settings > Updates** in an existing distribution-signed Android build.
 The APK includes ARMv7 and ARM64 libraries and requires **Android 10 (API 29)+**.
 Android still asks for installation confirmation. Normal signed updates retain
@@ -147,8 +147,8 @@ The animation illustrates processing order, not measured speed. Check
 
 ## Windows download and run
 
-1. Download `EvoParseq-v0.9.6-win64.zip` from the
-   [stable release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6).
+1. Download `EvoParseq-v0.9.7-win64.zip` from the
+   [stable release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.7).
 2. Extract to a writable folder and run **EvoParseq.exe**. Settings and optional
    encrypted sessions are stored beside it in `settings.json`.
 3. Sign in with the host owner's account, choose a computer and connect.

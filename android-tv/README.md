@@ -1,6 +1,6 @@
 # EvoParseq for Android TV
 
-Stable release: [**EvoParseq v0.9.6**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6)
+Stable release: [**EvoParseq v0.9.7**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.7)
 on `main`, with a signed **EvoParseq-TV.apk** for Android 10+ (ARMv7 and ARM64).
 The initial Android TV client uses a Google TV / Android TV interface, D-pad
 navigation, two-factor sign-in and shared Rust account/session logic. First live

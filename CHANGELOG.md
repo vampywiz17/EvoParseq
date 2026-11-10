@@ -1,5 +1,20 @@
 # EvoParseq changelog
 
+## v0.9.7 - Release security reports (2026-11-10)
+
+Stable maintenance release since v0.9.6. Publish VirusTotal results for final
+release binaries in the release notes and SECURITY-SCAN.md/JSON attachments.
+Keep releases in draft until completed scans pass; findings and incomplete/error
+results block publication. Report unsupported engines and analysis failures explicitly. Add
+offline scanner tests, a real Flatpak extraction fixture and measured Python
+coverage to the strict SonarQube gate. Flatpak support in the scanner prepares
+future releases; this stable release includes Windows and Android TV only.
+
+Application behavior, permissions and signing keys are unchanged. Only version
+metadata advances to 0.9.7 (Android versionCode 31) so in-place updates work.
+Scan reports are not a safety certification or Google Play Protect approval.
+
+
 ## v0.9.6 - Controllers, Android TV and local audio controls (2026-11-07)
 
 This stable release adds shared controller support, Windows playback volume

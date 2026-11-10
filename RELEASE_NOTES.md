@@ -1,87 +1,54 @@
-EvoParseq v0.9.5-dev.2 - AI upscaling, diagnostics and input fixes
+EvoParseq v0.9.7 - Release security reports
 
-This Windows prerelease builds on **EvoParseq v0.9.5-dev.1**, with optional GPU
-upscaling, clearer diagnostics and input/recovery fixes for existing, unmodified
-Parsec hosts.
-
-**This is a development preview. ParsecWebTurn v0.9.4 remains the stable release.**
+This stable maintenance release builds on **EvoParseq v0.9.6**. Windows x64
+packages and a distribution-signed Android TV APK are included. Application
+behavior is unchanged; this release adds automated publication of malware-scan
+evidence for the final release binaries. Linux alpha builds remain separate.
 
 ## What's new and improved
 
-- **Simultaneous mouse-button holds:** fix capture being reacquired when the
-  stream window already owns it. Holding left and right together no longer
-  generates premature releases. Independent releases, focus-loss cleanup and
-  relative-camera transitions retain their existing behavior.
-- **Input under load:** combine adjacent absolute mouse positions and sum
-  relative camera movement without crossing button, wheel, focus or mode
-  boundaries. Reserve queue capacity for other input and fail safely on
-  unrecoverable overflow instead of leaving held input behind.
-- **Clipboard reliability:** retry a failed Windows clipboard write using only
-  the newest remote text, with bounded retries. Cancel obsolete writes after
-  focus/permission changes or a new local copy.
-- **Organized Connection stats:** group diagnostics into Overview, Network,
-  Video, Audio and Timings tabs with a fixed header and separate scrolling.
-  Add recent two-second video timing averages, expire stale values and show
-  decoded FPS separately from presentation-submission FPS.
-- **Native video stall handling:** supervise decoder/device setup, processing,
-  presentation and teardown. Keep driver-owned resources on their owning worker
-  and prevent accumulating replacement workers. An unrecoverable native timeout
-  requires restarting the app.
-- **Experimental DXGI VRR:** add optional variable-refresh presentation to the
-  normal DXGI path used by vendor and Media Foundation decoders. Check tearing
-  support, preserve configuration through resize/precision changes and fall back
-  without adding decoded-frame copies. Physical panel activation depends on the
-  display, driver and Windows settings.
-- **Experimental AI upscaling:** one GPU-dependent selector offers NVIDIA RTX
-  VSR quality levels or Intel VPL AI. Off by default, upscaling only, with normal
-  GPU rendering retained on unsupported configurations. NVIDIA RTX 3060 playback
-  is live-confirmed. Intel support is implemented but **not hardware-validated**;
-  installed runtimes may reject the AI filter.
-- **Optional NVIDIA runtime:** keep the VSR DLL outside the EXE. With explicit
-  consent, download the pinned official NVIDIA RTX Video SDK 1.1.0 payload and
-  verify both archive and DLL SHA-256 hashes. Reuse verified caches and store the
-  runtime under `%LOCALAPPDATA%/EvoParseq/vsr/1.1.0`, without administrator rights.
-  Intel uses its installed driver runtime and downloads no DLL or model.
-- **VSR startup/recovery:** preserve warmed effect state on the same GPU during
-  decoder-reference recovery, reducing repeated setup and black-picture
-  interruptions. Genuine native errors still recreate the decoder; repeated
-  steady-state overload disables the effect rather than growing the queue.
-- **AMD HEVC compatibility:** check coded Main/Main10 dimensions once through
-  D3D11 on the selected GPU before AMF initialization. Unsupported configurations
-  take the existing logged Media Foundation fallback; visible-size AMF setup and
-  normal frame processing remain unchanged.
-- **WebRTC cryptography and maintenance:** update the existing DTLS engine's
-  P-256/P-384 dependencies while preserving the WebRTC/ICE/SCTP integration,
-  certificate checks, record ciphers and transport policy. Update Tokio to
-  1.54.1, webpki-roots to 1.0.11 and serde_json to 1.0.154. Remove unused legacy
-  control callback payloads and unnecessary copies.
+- **Published release security reports:** scan the final Windows EXE and Android
+  APK with VirusTotal while the prepared release remains a draft. Add a SHA-256-linked results
+  table to these notes and attach SECURITY-SCAN.md and SECURITY-SCAN.json.
+  The report records per-engine findings and distinguishes unsupported engines,
+  errors and timeouts. Publication is blocked by malicious or suspicious findings, incomplete
+  analyses or errors. Only successful completed scans allow publication.
+- **Release automation validation:** add offline regression tests, including a
+  real Flatpak extraction fixture, and measured Python coverage in the existing
+  SonarQube quality gate. The scanner also supports future Flatpak releases and
+  their embedded Linux executable; this stable release contains no Flatpak.
+- **Version alignment:** Windows and Android report 0.9.7. The Android versionCode
+  is 31 so existing distribution-signed installations can update in place.
+  No decoder, rendering, audio, networking, input, permissions, signing-key or
+  application-interface behavior changes are included.
 
 ## Compatibility and validation
 
-**AI upscaling, VRR/display timing, vendor HEVC, zero-copy, 10-bit HEVC,
-HEVC 4:4:4, USB HID and multichannel audio remain experimental.** For conservative
-operation, use H.264, stereo Opus and Automatic timing with optional effects off.
+Requirements and hardware limitations are unchanged from v0.9.6: Windows 11 x64
+with Direct3D feature level 11.0+ and compatible drivers; Android 10 (API 29)+
+with ARMv7 or ARM64. Existing feature status and tested-device limits remain in
+README and the Android TV guide. The Windows and Android build/test workflows,
+Code quality checks and strict SonarQube gate are required before publication.
 
-AI upscaling is **GPU processing, not the application's Zero copy mode**. It
-adds GPU resources/work and an output copy, and may increase latency. Intel AI
-currently supports 8-bit SDR normal rendering only; actual runtime support is
-required. VRR application flags do not prove physical variable-refresh scanout.
-10-bit output remains SDR, not HDR. No universal performance improvement is claimed.
+VirusTotal results are a point-in-time record, **not a safety certification or
+Google Play Protect approval**. No-detection results do not guarantee safety;
+detections require investigation and are not automatically dismissed as false
+positives. Uploads can be shared by VirusTotal with its partners. This release
+does not claim to resolve the reported Android Play Protect warning.
 
-Existing host permissions, HID primary-display restrictions and codec/driver
-requirements still apply. The DTLS upgrade does not replace the separate BUD
-cryptography dependency chain. See README for the full compatibility limits.
+## Requirements and upgrading
 
-## Updating
+**Windows:** close the client and extract **EvoParseq-v0.9.7-win64.zip**, retaining
+settings.json under the same Windows account. Native protected remembered sessions
+and settings are retained. **ParsecWebTurn-v0.9.7-win64.zip** contains the identical
+executable under the old filename. ZIPs exclude user settings and the optional
+NVIDIA runtime. Protected credentials are not portable across accounts/machines.
 
-Close the client and extract **EvoParseq-v0.9.5-dev.2-win64.zip**. Keep your
-`settings.json` under the same Windows account; native encrypted remembered
-sessions and compatible settings are retained. Protected credentials are not
-portable between machines or Windows accounts.
+**Android TV:** install **EvoParseq-TV.apk** or use **Settings > Updates** in an
+existing distribution-signed installation. The signing certificate is unchanged;
+normal updates retain settings and sign-in. **EvoParseq-TV-v0.9.7.zip** includes the
+same APK, setup guide and license notices. Old debug-signed previews require the
+already-documented one-time reinstall only if Android rejects their certificate.
 
-**ParsecWebTurn-v0.9.5-dev.2-win64.zip** contains the same executable under the
-legacy name for existing shortcuts. Both ZIPs exclude settings.json; the NVIDIA
-runtime is not bundled. Run only one client and keep a backup while testing.
-
-This is a **Windows x64 prerelease**, installed manually. The main branch and
-stable ParsecWebTurn v0.9.4 remain unchanged.
+Verify downloads with SHA256SUMS.txt. Source changes since the previous stable
+release: https://github.com/vampywiz17/EvoParseq/compare/v0.9.6...v0.9.7
