@@ -113,6 +113,15 @@ jobs:
           Path('coverage/rust.info').write_text('\n'.join(output) + '\n', encoding='utf-8')
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'Measured coverage conversion failed' }
+      - name: Measure release scanner offline tests
+        shell: pwsh
+        run: |
+          python -m pip install coverage==7.6.12
+          if ($LASTEXITCODE -ne 0) { throw 'Python coverage installation failed' }
+          python -m coverage run --rcfile=ci-tests/release-scanner.coveragerc -m unittest discover -s ci-tests -p test_release_security_scan.py
+          if ($LASTEXITCODE -ne 0) { throw 'Release scanner regression tests failed' }
+          python -m coverage xml --rcfile=ci-tests/release-scanner.coveragerc -o coverage/python.xml
+          if ($LASTEXITCODE -ne 0) { throw 'Python execution coverage export failed' }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: sonar-measured-coverage
@@ -155,6 +164,7 @@ jobs:
             -Dsonar.qualitygate.timeout=600
             -Dsonar.coverageReportPaths=coverage/powershell.xml
             -Dsonar.rust.lcov.reportPaths=coverage/rust.info
+            -Dsonar.python.coverage.reportPaths=coverage/python.xml
             -Dsonar.tests=ci-tests
             -Dsonar.exclusions=ci-tests/**,coverage/**
         env:

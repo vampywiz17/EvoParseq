@@ -1,0 +1,46 @@
+name: Release malware scan
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+# One shared API key; serialize releases to respect VirusTotal's public quota.
+concurrency:
+  group: virustotal-release-scans
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    if: github.event.release.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      # Run trusted scanner code, not code from an arbitrary release tag.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Validate scanner without network or secrets
+        run: python3 -m unittest discover -s ci-tests -p test_release_security_scan.py
+      - name: Prepare offline Flatpak inspection tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends flatpak ostree
+      - name: Scan final assets and publish reports
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VIRUSTOTAL: ${{ secrets.VIRUSTOTAL }}
+          RELEASE_ID: ${{ github.event.release.id }}
+        run: python3 scripts/release_security_scan.py
+      - name: Preserve generated reports even when detections need review
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-security-scan-${{ github.event.release.id }}
+          path: security-scan-results/
+          if-no-files-found: ignore
