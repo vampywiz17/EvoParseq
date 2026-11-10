@@ -17,6 +17,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  release-scanner:
+    name: Release scanner offline regression tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Prepare Flatpak inspection fixture tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends flatpak ostree
+      - name: Exercise uploads, reports and offline Flatpak extraction without credentials
+        run: python3 -m unittest discover -s ci-tests -p test_release_security_scan.py -v
+
   clippy:
     name: Clippy (Windows)
     runs-on: windows-latest

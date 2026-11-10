@@ -9,6 +9,10 @@ EvoParseq.exe
 *.exe
 dist/
 **/target/
+__pycache__/
+.coverage
+coverage/
+security-scan-results/
 
 # Editor/OS files
 .vscode/
