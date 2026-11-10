@@ -12,7 +12,10 @@ evidence for the final release binaries. Linux alpha builds remain separate.
   table to these notes and attach SECURITY-SCAN.md and SECURITY-SCAN.json.
   The report records per-engine findings and distinguishes unsupported engines,
   errors and timeouts. Publication is blocked by malicious or suspicious findings, incomplete
-  analyses or errors. Only successful completed scans allow publication.
+  analyses or errors, except the owner-approved sole Trapmine
+  `suspicious.low.ml.score` finding on a Windows EXE. This narrow exception is
+  explicitly disclosed with unchanged detection counts; it is not a confirmed
+  false positive. Any other finding remains blocking.
 - **Release automation validation:** add offline regression tests, including a
   real Flatpak extraction fixture, and measured Python coverage in the existing
   SonarQube quality gate. The scanner also supports future Flatpak releases and
