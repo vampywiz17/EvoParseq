@@ -166,10 +166,28 @@ def safe_error(error):
     return str(error) if isinstance(error, ScanError) else "Incomplete response or unreadable file"
 
 
+def accepted_trapmine_finding(row):
+    """Explicit owner policy, not a vendor-confirmed false positive."""
+    stats = row.get("stats", {})
+    findings = [(engine, result) for engine, result in row.get("results", {}).items()
+                if result.get("category") in ("malicious", "suspicious")]
+    if (row.get("status") != "completed" or not row.get("name", "").lower().endswith(".exe")
+            or len(findings) != 1
+            or stats.get("malicious", 0) + stats.get("suspicious", 0) != 1
+            or stats.get("undetected", 0) + stats.get("harmless", 0) == 0):
+        return False
+    engine, result = findings[0]
+    category = result["category"]
+    return (engine.casefold() == "trapmine"
+            and result.get("engine_name", "").casefold() == "trapmine"
+            and result.get("result", "").casefold() == "suspicious.low.ml.score"
+            and stats.get(category, 0) == 1)
+
+
 def needs_attention(row):
     stats = row.get("stats", {})
-    return (row["status"] != "completed" or stats.get("malicious", 0) > 0
-            or stats.get("suspicious", 0) > 0
+    flagged = stats.get("malicious", 0) > 0 or stats.get("suspicious", 0) > 0
+    return (row["status"] != "completed" or (flagged and not accepted_trapmine_finding(row))
             or stats.get("undetected", 0) + stats.get("harmless", 0) == 0)
 
 
@@ -186,6 +204,8 @@ def markdown(report):
         status = row["status"]
         if status == "completed":
             status = "ATTENTION" if needs_attention(row) else "Completed"
+            if accepted_trapmine_finding(row):
+                status = "Accepted exception (Trapmine)"
         link = f"[{row['sha256']}]({row['report_url']})" if row.get("sha256") else "Not submitted"
         lines.append(f"| {row['name']} | {link} | {status} | {stats.get('malicious', '-')} | "
                      f"{stats.get('suspicious', '-')} | {stats.get('undetected', '-')} / {stats.get('harmless', '-')} | "
@@ -193,6 +213,10 @@ def markdown(report):
                      f"{stats.get('timeout', 0) + stats.get('confirmed-timeout', 0)} |")
         if row.get("error"):
             lines += ["", f"{row['name']}: {row['error']}", ""]
+    if any(accepted_trapmine_finding(row) for row in report["files"]):
+        lines += ["", "Owner-approved exception: only Trapmine's suspicious.low.ml.score on a Windows EXE,",
+                  "with no other malicious/suspicious findings. The detection counts are unchanged.",
+                  "This is an accepted release-policy exception, not a confirmed false positive or a clean scan."]
     return "\n".join(lines) + "\n"
 
 
@@ -255,6 +279,10 @@ def scan_release(repo, release_id, scanner, directory, publish=False):
         raise ScanError("Release assets changed during analysis; results were not published")
     if latest["draft"] != release["draft"]:
         raise ScanError("Release publication state changed during analysis")
+    for row in report["files"]:
+        if accepted_trapmine_finding(row):
+            row["accepted_exception"] = {"engine": "Trapmine", "result": "suspicious.low.ml.score",
+                                         "reason": "Owner-approved sole-finding Windows EXE exception; not confirmed false positive"}
     text = markdown(report)
     notes = replace_section(latest.get("body") or "", text)
     output = Path("security-scan-results")

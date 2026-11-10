@@ -9,10 +9,11 @@ in source, logs, reports or command arguments. Only the scanner step receives it
 Prepare releases as drafts, upload **all final assets** (including the signed APK),
 then start this workflow on main with the draft's numeric `release_id` input.
 It scans and attaches evidence while the release remains a draft. Any malicious
-or suspicious verdict immediately stops further submissions, fails the job and
+or suspicious verdict, except the narrow owner-approved exception below,
+immediately stops further submissions, fails the job and
 leaves the release unpublished. Incomplete/error/no-supported-verdict results
 also block publication. Only successful complete scans allow the workflow to
-publish the draft and mark a stable release latest. No ignore list or override
+publish the draft and mark a stable release latest. No generic ignore list or override
 input exists. The workflow's `GITHUB_TOKEN` publication does not retrigger the
 published-release audit, avoiding duplicate submissions.
 
@@ -24,6 +25,22 @@ publication. An asset added after publication requires rerunning its audit job.
 The scanner runs trusted code from the default branch. Keep the workflow, script,
 tests and measurement wiring in main and dev when preparing releases. It scans
 the already-published assets; it never rebuilds or modifies the executables.
+
+## Sole Trapmine finding exception
+
+The owner explicitly permits publication of a Windows `.exe` whose only finding
+is Trapmine's exact `suspicious.low.ml.score` label (case-insensitive). Both the
+engine key and engine name must identify Trapmine. Aggregate malicious/suspicious
+counts and the per-engine findings must agree on exactly one finding, the analysis
+must be completed, and at least one supported engine must report undetected or
+harmless. A different Trapmine label, any second finding, missing finding detail,
+APK/Flatpak files or an incomplete analysis still blocks publication.
+
+The original counts and engine result remain in both reports. Markdown shows
+**Accepted exception (Trapmine)** and JSON includes `accepted_exception` with the
+reason. This is the owner's release-policy decision, not a vendor-confirmed false
+positive or a claim that the scan found nothing. No application code or binary is
+modified to avoid detection.
 
 ## Scope and published evidence
 
@@ -47,7 +64,7 @@ limit. Large-file upload URLs support files up to 650 MiB. Quota exhaustion or
 service failures are errors, never successful clean results. Other users of the
 same API key can still consume its quota.
 
-Detections, suspicious verdicts, missing supported verdicts and failed file
+Non-exempt detections, suspicious verdicts, missing supported verdicts and failed file
 analyses make the job fail **after reporting the available results**. Remaining
 files are marked not scanned after a blocking result. No engine
 is silently ignored. Unsupported engines, timeouts and failures have separate
