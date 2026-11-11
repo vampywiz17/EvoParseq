@@ -91,3 +91,9 @@ The module set and public API are unchanged. Outside `src/macos`, `lib.rs`,
 offload off on macOS, and `stream_io.rs` treats `EINPROGRESS` as a pending
 connect there. The crate's tests run on macOS in CI; there only 127.0.0.1 is a
 local loopback address, and the offload tests hold the per-datagram path.
+
+The burst regression keeps Linux/Android's single-drain batch assertion.
+On macOS, like Windows, it collects nonblocking drains up to the existing
+one-second deadline and still verifies every payload and the exact packet count.
+This matches public recvmsg readiness semantics; it does not add a production
+wait, change the socket receive loop or silently tolerate packet loss.

@@ -295,10 +295,10 @@ mod tests {
         assert!(!io.saturated());
     }
 
-    /// The property the batch exists for: a burst arrives whole, in one call,
-    /// rather than one datagram per syscall with the rest dropped.
+    /// Drain the entire burst without loss. Linux checks its queued batch in
+    /// one drain; per-datagram completion paths collect until the same deadline.
     #[test]
-    fn a_burst_arrives_in_one_call() {
+    fn a_burst_is_drained_without_loss() {
         let sender = Socket::open(0).expect("open sender");
         let (mut receiver, to) = receiver();
 
@@ -310,10 +310,11 @@ mod tests {
 
         // Linux's batched receive takes everything queued in one call, which
         // is the batch's whole property. Windows completes each receive on
-        // its own and a wait returns with what has completed so far -- under
-        // load, measured, 17 to 25 of these 32 -- so there the burst is
-        // gathered, and the pool's own tests hold the batching.
-        #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+        // its own. macOS uses one public recvmsg per datagram and may reach
+        // WouldBlock before the last loopback sends become readable (29/32
+        // observed on CI). Collect both per-datagram paths to a bounded deadline,
+        // retaining the exact final count and payload checks below.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         let seen: Vec<Vec<u8>> = {
             assert_eq!(
                 arrived(&mut receiver),
@@ -325,7 +326,7 @@ mod tests {
                 .map(|(_, _, bytes)| bytes.to_vec())
                 .collect()
         };
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         let seen: Vec<Vec<u8>> = {
             let mut seen = Vec::new();
             let started = std::time::Instant::now();
