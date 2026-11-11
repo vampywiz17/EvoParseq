@@ -59,7 +59,7 @@ pub fn create(
         "vulkan_adapter_requested",
         serde_json::json!({
             "source": if requested.is_some() { "command_line" } else if preference.is_some() { "settings" } else { "automatic" },
-            "vendor_id": preference.map(|p| p.vendor_id), "device_id": preference.map(|p| p.device_id),
+            "stored_vendor_id": preference.map(|p| p.vendor_id), "stored_device_id": preference.map(|p| p.device_id),
         }),
     );
     let mut reasons = Vec::new();
