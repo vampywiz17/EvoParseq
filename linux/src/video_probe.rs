@@ -167,12 +167,22 @@ unsafe fn query(
         return;
     }
     let result = (|| -> anyhow::Result<()> {
-        crate::video_profile::original_surfaces(flags, dpb, references, decode_flags)?;
-        let formats = unsafe { crate::video_profile::formats(video, gpu, profile)? };
-        anyhow::ensure!(
-            formats.iter().any(crate::video_profile::original_nv12),
-            "Original NV12 surfaces require sampleable mutable 2D optimal-tiling output"
-        );
+        let surfaces =
+            crate::video_profile::original_surfaces(flags, dpb, references, decode_flags)?;
+        unsafe { crate::video_profile::validate_formats(video, gpu, profile, surfaces)? };
+        lines.push(format!(
+            "Reference images: {} · Decode output: {}",
+            if surfaces.layered {
+                "layered"
+            } else {
+                "separate"
+            },
+            if surfaces.distinct {
+                "distinct"
+            } else {
+                "coinciding"
+            }
+        ));
         Ok(())
     })();
     lines.push(match result {

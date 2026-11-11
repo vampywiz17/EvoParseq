@@ -7,49 +7,92 @@ pub fn usage() -> vk::VideoDecodeUsageInfoKHR<'static> {
         .video_usage_hints(vk::VideoDecodeUsageFlagsKHR::STREAMING)
 }
 
-/// Required by the existing original-surface path, independent of GPU vendor.
+/// Resource layout selected from the profile capabilities, never the vendor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Surfaces {
+    pub layered: bool,
+    pub distinct: bool,
+}
+impl Surfaces {
+    pub fn output_usage(self) -> vk::ImageUsageFlags {
+        let usage = vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR | vk::ImageUsageFlags::SAMPLED;
+        if self.distinct {
+            usage
+        } else {
+            usage | vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR
+        }
+    }
+    pub fn reference_usage(self) -> vk::ImageUsageFlags {
+        if self.distinct {
+            vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR
+        } else {
+            self.output_usage()
+        }
+    }
+}
 pub fn original_surfaces(
     flags: vk::VideoCapabilityFlagsKHR,
     dpb: u32,
     references: u32,
     decode: vk::VideoDecodeCapabilityFlagsKHR,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Surfaces> {
     anyhow::ensure!(
-        flags.contains(vk::VideoCapabilityFlagsKHR::SEPARATE_REFERENCE_IMAGES),
-        "This driver requires a layered DPB; separate reference surfaces are unavailable"
-    );
-    anyhow::ensure!(
-        decode.contains(vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE),
-        "This driver requires distinct DPB/output images; that path is not integrated"
+        decode.intersects(
+            vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE
+                | vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_DISTINCT
+        ),
+        "No supported Vulkan decode output layout"
     );
     anyhow::ensure!(
         dpb >= 2 && references >= 1,
         "Insufficient Vulkan DPB capacity"
     );
-    Ok(())
-}
-pub fn surface_usage() -> vk::ImageUsageFlags {
-    vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
-        | vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR
-        | vk::ImageUsageFlags::SAMPLED
+    Ok(Surfaces {
+        layered: !flags.contains(vk::VideoCapabilityFlagsKHR::SEPARATE_REFERENCE_IMAGES),
+        distinct: !decode.contains(vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE),
+    })
 }
 pub fn original_nv12(format: &vk::VideoFormatPropertiesKHR<'_>) -> bool {
-    format.format == vk::Format::G8_B8R8_2PLANE_420_UNORM
-        && format.image_type == vk::ImageType::TYPE_2D
-        && format.image_tiling == vk::ImageTiling::OPTIMAL
+    nv12(format)
         && format
             .image_create_flags
             .contains(vk::ImageCreateFlags::MUTABLE_FORMAT)
+}
+fn nv12(format: &vk::VideoFormatPropertiesKHR<'_>) -> bool {
+    format.format == vk::Format::G8_B8R8_2PLANE_420_UNORM
+        && format.image_type == vk::ImageType::TYPE_2D
+        && format.image_tiling == vk::ImageTiling::OPTIMAL
+}
+pub unsafe fn validate_formats(
+    video: &ash::khr::video_queue::Instance,
+    gpu: vk::PhysicalDevice,
+    profile: &vk::VideoProfileInfoKHR<'_>,
+    surfaces: Surfaces,
+) -> anyhow::Result<()> {
+    let output = unsafe { formats(video, gpu, profile, surfaces.output_usage())? };
+    anyhow::ensure!(
+        output.iter().any(original_nv12),
+        "NV12 output requires sampleable mutable 2D optimal-tiling surfaces"
+    );
+    if surfaces.distinct {
+        let references = unsafe { formats(video, gpu, profile, surfaces.reference_usage())? };
+        anyhow::ensure!(
+            references.iter().any(nv12),
+            "NV12 reference surfaces are unavailable"
+        );
+    }
+    Ok(())
 }
 pub unsafe fn formats(
     video: &ash::khr::video_queue::Instance,
     gpu: vk::PhysicalDevice,
     profile: &vk::VideoProfileInfoKHR<'_>,
+    usage: vk::ImageUsageFlags,
 ) -> anyhow::Result<Vec<vk::VideoFormatPropertiesKHR<'static>>> {
     let profiles = [*profile];
     let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
     let info = vk::PhysicalDeviceVideoFormatInfoKHR::default()
-        .image_usage(surface_usage())
+        .image_usage(usage)
         .push_next(&mut list);
     let mut count = 0;
     unsafe {
@@ -80,47 +123,59 @@ pub unsafe fn formats(
 mod tests {
     use super::*;
     #[test]
-    fn linux_surface_eligibility_is_vendor_independent_and_rejects_unsupported_dpb_modes() {
-        let mut caps = vk::VideoCapabilitiesKHR::default()
-            .flags(vk::VideoCapabilityFlagsKHR::SEPARATE_REFERENCE_IMAGES)
-            .max_dpb_slots(16)
-            .max_active_reference_pictures(15);
-        let mut decode = vk::VideoDecodeCapabilitiesKHR::default()
-            .flags(vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE);
+    fn linux_surface_layout_handles_intel_nvidia_and_amd_capabilities() {
+        for layered in [false, true] {
+            for distinct in [false, true] {
+                let caps = if layered {
+                    vk::VideoCapabilityFlagsKHR::empty()
+                } else {
+                    vk::VideoCapabilityFlagsKHR::SEPARATE_REFERENCE_IMAGES
+                };
+                let decode = if distinct {
+                    vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_DISTINCT
+                } else {
+                    vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE
+                };
+                let surfaces = original_surfaces(caps, 16, 15, decode).unwrap();
+                assert_eq!(surfaces, Surfaces { layered, distinct });
+                assert!(surfaces.output_usage().contains(
+                    vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
+                ));
+                assert_eq!(
+                    surfaces
+                        .reference_usage()
+                        .contains(vk::ImageUsageFlags::SAMPLED),
+                    !distinct
+                );
+                assert!(
+                    surfaces
+                        .reference_usage()
+                        .contains(vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR)
+                );
+            }
+        }
+        let both = vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE
+            | vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_DISTINCT;
+        assert!(
+            !original_surfaces(
+                vk::VideoCapabilityFlagsKHR::SEPARATE_REFERENCE_IMAGES,
+                16,
+                15,
+                both
+            )
+            .unwrap()
+            .distinct
+        );
         assert!(
             original_surfaces(
-                caps.flags,
-                caps.max_dpb_slots,
-                caps.max_active_reference_pictures,
-                decode.flags
+                vk::VideoCapabilityFlagsKHR::empty(),
+                16,
+                15,
+                vk::VideoDecodeCapabilityFlagsKHR::empty()
             )
-            .is_ok()
+            .is_err()
         );
-        caps.flags = vk::VideoCapabilityFlagsKHR::empty();
-        assert!(
-            original_surfaces(
-                caps.flags,
-                caps.max_dpb_slots,
-                caps.max_active_reference_pictures,
-                decode.flags
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("layered")
-        );
-        caps.flags = vk::VideoCapabilityFlagsKHR::SEPARATE_REFERENCE_IMAGES;
-        decode.flags = vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_DISTINCT;
-        assert!(
-            original_surfaces(
-                caps.flags,
-                caps.max_dpb_slots,
-                caps.max_active_reference_pictures,
-                decode.flags
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("distinct")
-        );
+        assert!(original_surfaces(vk::VideoCapabilityFlagsKHR::empty(), 1, 0, both).is_err());
         let mut format = vk::VideoFormatPropertiesKHR::default()
             .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
             .image_type(vk::ImageType::TYPE_2D)

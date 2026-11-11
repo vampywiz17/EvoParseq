@@ -317,6 +317,7 @@ mod tests {
             badge: Default::default(),
             fitted_stream: None,
             video_context: None,
+            video_gpus: Vec::new(),
             video_error: None,
             output_format: wgpu::TextureFormat::Bgra8Unorm,
             decoder: None,

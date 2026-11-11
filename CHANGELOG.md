@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Linux: support Vulkan Video layered reference storage and distinct DPB/output
+  images for AMD/NVIDIA capability layouts, retaining the existing Intel path,
+  bounded surface lifetime tracking and GPU-resident presentation. Enable the
+  Video GPU selector with persisted hardware selection (restart required).
+  No Windows/Android backend changes or alternative decode API.
+
 - Fix a Windows BUD disconnect deadlock: terminal transport events update the
   already-locked attempt state instead of reacquiring its mutex. A delivery
   timeout or host disconnect can now reach the existing teardown and UI error

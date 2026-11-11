@@ -35,6 +35,9 @@ struct Resources {
     parameters: vk::VideoSessionParametersKHR,
     session_memory: Vec<vk::DeviceMemory>,
     images: Vec<Arc<Image>>,
+    outputs: Vec<Arc<Image>>,
+    surfaces: crate::video_profile::Surfaces,
+    reference_initialized: [bool; MAX_FRAMES],
     jobs: Vec<Submission>,
     active: usize,
     completed: u64,
@@ -83,6 +86,12 @@ impl Resources {
             parameters: vk::VideoSessionParametersKHR::null(),
             session_memory: Vec::new(),
             images: Vec::new(),
+            outputs: Vec::new(),
+            surfaces: crate::video_profile::Surfaces {
+                layered: false,
+                distinct: false,
+            },
+            reference_initialized: [false; MAX_FRAMES],
             jobs: Vec::new(),
             active: 0,
             completed: 0,
@@ -189,6 +198,15 @@ impl Drop for Session {
 }
 
 impl Session {
+    pub fn output_layer(&self, slot: usize) -> u32 {
+        self.resources.as_ref().map_or(0, |resources| {
+            if resources.surfaces.layered && !resources.surfaces.distinct {
+                slot as u32
+            } else {
+                0
+            }
+        })
+    }
     pub fn available(&mut self) -> Result<usize> {
         let resources = self.resources.as_mut().context("Video session closed")?;
         resources.reap(false)?;
@@ -321,7 +339,7 @@ impl Session {
         let min_bitstream_buffer_size_alignment = caps.min_bitstream_buffer_size_alignment;
         let std_header_version = caps.std_header_version;
         let flags = caps.flags;
-        crate::video_profile::original_surfaces(
+        resources.surfaces = crate::video_profile::original_surfaces(
             flags,
             max_dpb_slots,
             max_active_reference_pictures,
@@ -399,130 +417,176 @@ impl Session {
                 .bind_video_session_memory(resources.session, &bindings)?
         };
         let profiles = [profile];
-        let usage = crate::video_profile::surface_usage();
-        let formats = unsafe { crate::video_profile::formats(&video, context.physical, &profile)? };
-        ensure!(
-            formats.iter().any(crate::video_profile::original_nv12),
-            "The original NV12 decoder surfaces cannot be sampled on this driver"
-        );
+        unsafe {
+            crate::video_profile::validate_formats(
+                &video,
+                context.physical,
+                &profile,
+                resources.surfaces,
+            )?
+        };
         let graphics_family = unsafe { context.device.as_hal::<wgpu::hal::api::Vulkan>() }
             .context("Vulkan device unavailable")?
             .queue_family_index();
         let families = [context.decode_family, graphics_family];
-        for _ in 0..MAX_FRAMES {
-            let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
-            let mut info = vk::ImageCreateInfo::default()
-                .push_next(&mut list)
-                .flags(vk::ImageCreateFlags::MUTABLE_FORMAT)
-                .image_type(vk::ImageType::TYPE_2D)
-                .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-                .extent(vk::Extent3D {
+        // Keep the parser's existing fixed slot bound and output lease. Distinct
+        // output is written by the decode command itself, never copied by us.
+        for output in [false, true] {
+            if output && !resources.surfaces.distinct {
+                continue;
+            }
+            let sampled = output || !resources.surfaces.distinct;
+            let layers = if !output && resources.surfaces.layered {
+                MAX_FRAMES as u32
+            } else {
+                1
+            };
+            let count = if layers > 1 { 1 } else { MAX_FRAMES };
+            let usage = if output {
+                resources.surfaces.output_usage()
+            } else {
+                resources.surfaces.reference_usage()
+            };
+            for _ in 0..count {
+                let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
+                let mut info = vk::ImageCreateInfo::default()
+                    .push_next(&mut list)
+                    .flags(if sampled {
+                        vk::ImageCreateFlags::MUTABLE_FORMAT
+                    } else {
+                        vk::ImageCreateFlags::empty()
+                    })
+                    .image_type(vk::ImageType::TYPE_2D)
+                    .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+                    .extent(vk::Extent3D {
+                        width: extent.width,
+                        height: extent.height,
+                        depth: 1,
+                    })
+                    .mip_levels(1)
+                    .array_layers(layers)
+                    .samples(vk::SampleCountFlags::TYPE_1)
+                    .tiling(vk::ImageTiling::OPTIMAL)
+                    .usage(usage);
+                if graphics_family != context.decode_family {
+                    info = info
+                        .sharing_mode(vk::SharingMode::CONCURRENT)
+                        .queue_family_indices(&families);
+                }
+                let image = unsafe { raw.create_image(&info, None)? };
+                let mut allocation = Image {
+                    context: context.clone(),
+                    image,
+                    memory: vk::DeviceMemory::null(),
+                    view: vk::ImageView::null(),
+                };
+                let requirement = unsafe { raw.get_image_memory_requirements(image) };
+                let memory = unsafe {
+                    raw.allocate_memory(
+                        &vk::MemoryAllocateInfo::default()
+                            .allocation_size(requirement.size)
+                            .memory_type_index(context.memory_type(
+                                requirement.memory_type_bits,
+                                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                            )?),
+                        None,
+                    )?
+                };
+                allocation.memory = memory;
+                unsafe { raw.bind_image_memory(image, memory, 0)? };
+                let view = unsafe {
+                    raw.create_image_view(
+                        &vk::ImageViewCreateInfo::default()
+                            .image(image)
+                            .view_type(if layers > 1 {
+                                vk::ImageViewType::TYPE_2D_ARRAY
+                            } else {
+                                vk::ImageViewType::TYPE_2D
+                            })
+                            .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+                            .subresource_range(
+                                vk::ImageSubresourceRange::default()
+                                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                                    .level_count(1)
+                                    .layer_count(layers),
+                            ),
+                        None,
+                    )?
+                };
+                allocation.view = view;
+                let allocation = Arc::new(allocation);
+                let images = if output {
+                    &mut resources.outputs
+                } else {
+                    &mut resources.images
+                };
+                images.extend((0..layers).map(|_| allocation.clone()));
+                if !sampled {
+                    continue;
+                }
+                let hal = unsafe { context.device.as_hal::<wgpu::hal::api::Vulkan>() }
+                    .context("Vulkan texture interop unavailable")?;
+                let size = wgpu::Extent3d {
                     width: extent.width,
                     height: extent.height,
-                    depth: 1,
-                })
-                .mip_levels(1)
-                .array_layers(1)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(usage);
-            if graphics_family != context.decode_family {
-                info = info
-                    .sharing_mode(vk::SharingMode::CONCURRENT)
-                    .queue_family_indices(&families);
-            }
-            let image = unsafe { raw.create_image(&info, None)? };
-            let mut allocation = Image {
-                context: context.clone(),
-                image,
-                memory: vk::DeviceMemory::null(),
-                view: vk::ImageView::null(),
-            };
-            let requirement = unsafe { raw.get_image_memory_requirements(image) };
-            let memory = unsafe {
-                raw.allocate_memory(
-                    &vk::MemoryAllocateInfo::default()
-                        .allocation_size(requirement.size)
-                        .memory_type_index(context.memory_type(
-                            requirement.memory_type_bits,
-                            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                        )?),
-                    None,
-                )?
-            };
-            allocation.memory = memory;
-            unsafe { raw.bind_image_memory(image, memory, 0)? };
-            let view = unsafe {
-                raw.create_image_view(
-                    &vk::ImageViewCreateInfo::default()
-                        .image(image)
-                        .view_type(vk::ImageViewType::TYPE_2D)
-                        .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-                        .subresource_range(
-                            vk::ImageSubresourceRange::default()
-                                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                                .level_count(1)
-                                .layer_count(1),
-                        ),
-                    None,
-                )?
-            };
-            allocation.view = view;
-            let allocation = Arc::new(allocation);
-            resources.images.push(allocation.clone());
-            let hal = unsafe { context.device.as_hal::<wgpu::hal::api::Vulkan>() }
-                .context("Vulkan texture interop unavailable")?;
-            let size = wgpu::Extent3d {
-                width: extent.width,
-                height: extent.height,
-                depth_or_array_layers: 1,
-            };
-            let texture = unsafe {
-                hal.texture_from_raw(
-                    image,
-                    &wgpu::hal::TextureDescriptor {
-                        label: Some("Original NV12 decode surface"),
-                        size,
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::NV12,
-                        usage: wgpu::TextureUses::RESOURCE,
-                        memory_flags: wgpu::hal::MemoryFlags::empty(),
-                        view_formats: Vec::new(),
-                    },
-                    Some(Box::new(move || drop(allocation))),
-                )
-            };
-            let texture = unsafe {
-                context
-                    .device
-                    .create_texture_from_hal::<wgpu::hal::api::Vulkan>(
-                        texture,
-                        &wgpu::TextureDescriptor {
+                    depth_or_array_layers: layers,
+                };
+                let texture = unsafe {
+                    hal.texture_from_raw(
+                        image,
+                        &wgpu::hal::TextureDescriptor {
                             label: Some("Original NV12 decode surface"),
                             size,
                             mip_level_count: 1,
                             sample_count: 1,
                             dimension: wgpu::TextureDimension::D2,
                             format: wgpu::TextureFormat::NV12,
-                            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                            view_formats: &[],
+                            usage: wgpu::TextureUses::RESOURCE,
+                            memory_flags: wgpu::hal::MemoryFlags::empty(),
+                            view_formats: Vec::new(),
                         },
+                        Some(Box::new(move || drop(allocation))),
                     )
-            };
-            self.textures.push(texture);
+                };
+                let texture = unsafe {
+                    context
+                        .device
+                        .create_texture_from_hal::<wgpu::hal::api::Vulkan>(
+                            texture,
+                            &wgpu::TextureDescriptor {
+                                label: Some("Original NV12 decode surface"),
+                                size,
+                                mip_level_count: 1,
+                                sample_count: 1,
+                                dimension: wgpu::TextureDimension::D2,
+                                format: wgpu::TextureFormat::NV12,
+                                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                                view_formats: &[],
+                            },
+                        )
+                };
+                self.textures.extend((0..layers).map(|_| texture.clone()));
+            }
         }
         // Establish wgpu's RESOURCE state before the first native decode.
         // Subsequent native operations restore SHADER_READ_ONLY_OPTIMAL.
         let mut encoder = context.device.create_command_encoder(&Default::default());
         encoder.transition_resources(
             std::iter::empty(),
-            self.textures.iter().map(|texture| wgpu::TextureTransition {
-                texture,
-                selector: None,
-                state: wgpu::TextureUses::RESOURCE,
-            }),
+            self.textures
+                .iter()
+                .take(
+                    if resources.surfaces.layered && !resources.surfaces.distinct {
+                        1
+                    } else {
+                        MAX_FRAMES
+                    },
+                )
+                .map(|texture| wgpu::TextureTransition {
+                    texture,
+                    selector: None,
+                    state: wgpu::TextureUses::RESOURCE,
+                }),
         );
         context.queue.submit([encoder.finish()]);
         context.wait_graphics()?;
@@ -609,6 +673,8 @@ impl Session {
                 "surface_tracking": self.sync.is_some(),
                 "selected_output_lease": true,
                 "submission_slots": resources.jobs.len(),
+                "layered_dpb": resources.surfaces.layered,
+                "distinct_output": resources.surfaces.distinct,
             }),
         );
         Ok(())
@@ -706,6 +772,11 @@ impl Session {
                 .view;
             Ok(vk::VideoPictureResourceInfoKHR::default()
                 .image_view_binding(view)
+                .base_array_layer(if resources.surfaces.layered {
+                    slot as u32
+                } else {
+                    0
+                })
                 .coded_extent(vk::Extent2D {
                     width: self.size.0,
                     height: self.size.1,
@@ -796,11 +867,18 @@ impl Session {
         let mut codec_info = vk::VideoDecodeH264PictureInfoKHR::default()
             .std_picture_info(&picture_info)
             .slice_offsets(&offsets);
+        let output = if resources.surfaces.distinct {
+            vk::VideoPictureResourceInfoKHR::default()
+                .image_view_binding(resources.outputs[job.current.slot].view)
+                .coded_extent(target.coded_extent)
+        } else {
+            target
+        };
         let decode = vk::VideoDecodeInfoKHR::default()
             .src_buffer(resources.jobs[resources.active].buffer)
             .src_buffer_offset(0)
             .src_buffer_range(size)
-            .dst_picture_resource(target)
+            .dst_picture_resource(output)
             .setup_reference_slot(&target_slot)
             .reference_slots(&slots)
             .push_next(&mut codec_info);
@@ -940,6 +1018,11 @@ impl Session {
                         .context("Invalid HEVC surface slot")?
                         .view,
                 )
+                .base_array_layer(if resources.surfaces.layered {
+                    slot as u32
+                } else {
+                    0
+                })
                 .coded_extent(vk::Extent2D {
                     // Preserve the SPS picture extent; self.size includes image padding.
                     width: job.sps.width,
@@ -992,10 +1075,17 @@ impl Session {
         let mut codec = vk::VideoDecodeH265PictureInfoKHR::default()
             .std_picture_info(&picture_info)
             .slice_segment_offsets(&offsets);
+        let output = if resources.surfaces.distinct {
+            vk::VideoPictureResourceInfoKHR::default()
+                .image_view_binding(resources.outputs[job.current.slot].view)
+                .coded_extent(target.coded_extent)
+        } else {
+            target
+        };
         let decode = vk::VideoDecodeInfoKHR::default()
             .src_buffer(resources.jobs[resources.active].buffer)
             .src_buffer_range(size)
-            .dst_picture_resource(target)
+            .dst_picture_resource(output)
             .setup_reference_slot(&target_slot)
             .reference_slots(&slots)
             .push_next(&mut codec);
@@ -1052,22 +1142,56 @@ impl Session {
                 .aspect_mask(vk::ImageAspectFlags::COLOR)
                 .level_count(1)
                 .layer_count(1);
-            let barriers: Vec<_> = used
+            let mut barriers: Vec<_> = used
                 .iter()
                 .map(|slot| {
                     vk::ImageMemoryBarrier::default()
                         .image(resources.images[*slot].image)
-                        .subresource_range(range)
+                        .subresource_range(range.base_array_layer(if resources.surfaces.layered {
+                            *slot as u32
+                        } else {
+                            0
+                        }))
                         .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                         .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                        .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .old_layout(if resources.surfaces.distinct {
+                            if resources.reference_initialized[*slot] {
+                                vk::ImageLayout::VIDEO_DECODE_DPB_KHR
+                            } else {
+                                vk::ImageLayout::UNDEFINED
+                            }
+                        } else {
+                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+                        })
                         .new_layout(vk::ImageLayout::VIDEO_DECODE_DPB_KHR)
-                        .src_access_mask(vk::AccessFlags::MEMORY_READ)
+                        .src_access_mask(
+                            if resources.surfaces.distinct
+                                && !resources.reference_initialized[*slot]
+                            {
+                                vk::AccessFlags::empty()
+                            } else {
+                                vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE
+                            },
+                        )
                         .dst_access_mask(
                             vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
                         )
                 })
                 .collect();
+            if resources.surfaces.distinct {
+                let slot = *used.last().context("Missing output slot")?;
+                barriers.push(
+                    vk::ImageMemoryBarrier::default()
+                        .image(resources.outputs[slot].image)
+                        .subresource_range(range)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .new_layout(vk::ImageLayout::VIDEO_DECODE_DST_KHR)
+                        .src_access_mask(vk::AccessFlags::MEMORY_READ)
+                        .dst_access_mask(vk::AccessFlags::MEMORY_WRITE),
+                );
+            }
             raw.cmd_pipeline_barrier(
                 resources.jobs[resources.active].command,
                 vk::PipelineStageFlags::ALL_COMMANDS,
@@ -1123,8 +1247,14 @@ impl Session {
             );
             let barriers: Vec<_> = barriers
                 .iter()
+                // Distinct DPB layers stay in decode layout; only the output
+                // is sampled by graphics. Coinciding images retain Intel's path.
+                .filter(|barrier| {
+                    !resources.surfaces.distinct
+                        || barrier.new_layout == vk::ImageLayout::VIDEO_DECODE_DST_KHR
+                })
                 .map(|barrier| vk::ImageMemoryBarrier {
-                    old_layout: vk::ImageLayout::VIDEO_DECODE_DPB_KHR,
+                    old_layout: barrier.new_layout,
                     new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                     src_access_mask: vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
                     dst_access_mask: vk::AccessFlags::MEMORY_READ,
@@ -1145,7 +1275,15 @@ impl Session {
             let commands = [resources.jobs[resources.active].command];
             let waits = self.sync.as_ref().map(|sync| [sync.graphics]);
             let signals = self.sync.as_ref().map(|sync| [sync.decode]);
-            let wait_values = self.sync.as_ref().map(|sync| [sync.graphics_value(used)]);
+            let output_used = if resources.surfaces.distinct {
+                &used[used.len() - 1..]
+            } else {
+                used
+            };
+            let wait_values = self
+                .sync
+                .as_ref()
+                .map(|sync| [sync.graphics_value(output_used)]);
             let signal_values = self.sync.as_ref().map(|sync| [sync.next_decode()]);
             let stages = [vk::PipelineStageFlags::ALL_COMMANDS];
             let mut timeline = vk::TimelineSemaphoreSubmitInfo::default();
@@ -1167,6 +1305,9 @@ impl Session {
                 &[submit],
                 resources.jobs[resources.active].fence,
             )?;
+            for &slot in used {
+                resources.reference_initialized[slot] = true;
+            }
             if let (Some(sync), Some(values)) = (&self.sync, signal_values) {
                 sync.submitted(values[0]);
             }

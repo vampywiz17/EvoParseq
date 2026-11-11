@@ -286,9 +286,26 @@ sample/decode/DPB NV12 support. Startup rejects unsupported H.264 adapters befor
 creating the device, so an incapable adapter does not hide a later eligible one.
 `--video-adapter <name>` constrains the startup candidates for multi-GPU tests.
 
-The current allocation is separate per-reference, coincident DPB/output. Layered
-DPB-only and distinct-only output are not implemented. These limitations can
-exclude AMD or NVIDIA drivers; Vulkan Video extension presence alone is not proof
-of compatibility. They are reported explicitly, not hidden behind a copy path.
-No per-picture work, synchronization, GPU copies, render passes or driver-specific
-media fallback was added. Physical AMD/NVIDIA playback remains unverified.
+### Cross-vendor resource layouts (0.1.21)
+
+Profile capabilities now select separate or layered reference images and
+coinciding or distinct output. Combined DPB/output/sampling remains preferred
+where supported, preserving Intel's existing allocation. A layered DPB uses one
+array image, with video resources and presentation views selecting the exact
+layer. Distinct output uses DPB-only references plus sampleable decode output;
+`vkCmdDecodeVideoKHR` writes both, without an application copy. References stay
+in decode layout; only the output transitions to the existing presentation pass.
+The parser's fixed slot bound and selected-output lease prevent premature reuse;
+per-surface GPU waits still protect outstanding graphics readers. No deeper
+compressed queue, worker, CPU readback, extra render pass or alternative decoder
+was introduced. Distinct output necessarily consumes extra decoder storage and
+write bandwidth. This remains GPU-resident conversion, not strict Zero copy.
+
+The GUI enumerates Vulkan hardware adapters and persists the existing
+`videoGpu` preference. Changes require restart so decode and UI retain the same
+Vulkan device. The command-line override remains available. Live sustained
+playback on AMD/NVIDIA is still pending validation of this build.
+
+References: [DPB storage capabilities](https://docs.vulkan.org/refpages/latest/refpages/source/VkVideoCapabilityFlagBitsKHR.html),
+[coinciding/distinct decode output](https://docs.vulkan.org/refpages/latest/refpages/source/VkVideoDecodeCapabilityFlagBitsKHR.html),
+[video picture array layers](https://docs.vulkan.org/refpages/latest/refpages/source/VkVideoPictureResourceInfoKHR.html).

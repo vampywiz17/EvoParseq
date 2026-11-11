@@ -24,18 +24,48 @@ pub struct Context {
     _adapter: wgpu::Adapter,
 }
 
-pub fn create() -> Result<(WgpuSetupExisting, Arc<Context>)> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::VULKAN,
-        ..Default::default()
-    });
+pub fn adapters(instance: &wgpu::Instance) -> Vec<crate::connection_settings::GpuPreference> {
+    let mut result = Vec::new();
+    for adapter in instance.enumerate_adapters(wgpu::Backends::VULKAN) {
+        let info = adapter.get_info();
+        if !matches!(
+            info.device_type,
+            wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::DiscreteGpu
+        ) {
+            continue;
+        }
+        let preference = crate::connection_settings::GpuPreference {
+            name: info.name,
+            vendor_id: info.vendor,
+            device_id: info.device,
+            subsystem_id: 0,
+            revision: 0,
+            luid: 0,
+        };
+        if !result.contains(&preference) {
+            result.push(preference);
+        }
+    }
+    result
+}
+
+pub fn create(
+    instance: &wgpu::Instance,
+    preference: Option<&crate::connection_settings::GpuPreference>,
+) -> Result<(WgpuSetupExisting, Arc<Context>)> {
     let requested = requested_adapter(std::env::args().skip(1))?;
     let mut reasons = Vec::new();
     for adapter in instance.enumerate_adapters(wgpu::Backends::VULKAN) {
-        if !matches_adapter(&adapter.get_info().name, requested.as_deref()) {
+        let info = adapter.get_info();
+        if !matches_adapter(&info.name, requested.as_deref())
+            || (requested.is_none()
+                && preference.is_some_and(|p| {
+                    p.vendor_id != info.vendor || p.device_id != info.device || p.name != info.name
+                }))
+        {
             continue;
         }
-        match unsafe { create_on(&instance, &adapter) } {
+        match unsafe { create_on(instance, &adapter) } {
             Ok(context) => {
                 let setup = WgpuSetupExisting {
                     instance: instance.clone(),
@@ -48,8 +78,8 @@ pub fn create() -> Result<(WgpuSetupExisting, Arc<Context>)> {
             Err(error) => reasons.push(format!("{}: {error:#}", adapter.get_info().name)),
         }
     }
-    if reasons.is_empty() && requested.is_some() {
-        bail!("No Vulkan adapter matches --video-adapter");
+    if reasons.is_empty() && (requested.is_some() || preference.is_some()) {
+        bail!("The selected Vulkan adapter is unavailable");
     }
     bail!("H.264 Vulkan Video unavailable. {}", reasons.join("; "))
 }
@@ -319,11 +349,7 @@ fn codec_available(
         caps.max_dpb_slots,
         caps.max_active_reference_pictures,
     );
-    crate::video_profile::original_surfaces(flags, dpb, references, decode.flags)?;
-    let formats = unsafe { crate::video_profile::formats(&video, physical, &profile)? };
-    ensure!(
-        formats.iter().any(crate::video_profile::original_nv12),
-        "Original NV12 surfaces require sampleable mutable 2D optimal-tiling output"
-    );
+    let surfaces = crate::video_profile::original_surfaces(flags, dpb, references, decode.flags)?;
+    unsafe { crate::video_profile::validate_formats(&video, physical, &profile, surfaces)? };
     Ok(())
 }

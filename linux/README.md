@@ -1,6 +1,6 @@
 # EvoParseq Linux Flatpak preview
 
-Current preview: **0.1.20**, developed on `dev`. This is an
+Current preview: **0.1.21**, developed on `dev`. This is an
 experimental Linux client for unmodified Parsec hosts, not a stable release.
 Windows and Android TV feature availability differs; see the [root README](../README.md).
 
@@ -193,7 +193,7 @@ flatpak run io.github.vampywiz17.EvoParseq --probe-video
 The probe reports driver capabilities and sampleable output formats. A positive
 report permits a playback attempt; it does not establish sustained throughput
 or independently verified hardware execution. HEVC is advertised only after checking Main/8-bit capabilities, the selected
-decode queue and shared decode/reference/sampleable NV12 support. Session
+decode queue and a supported NV12 reference/output layout. Session
 creation additionally validates the received dimensions, level and DPB needs.
 
 The [CI workflow](../.github/workflows/linux-flatpak.yml) vendors locked sources,
@@ -218,7 +218,7 @@ LGPLv3 / CC-BY-SA 3.0 license; license copies ship in the Flatpak.
 In Settings > Video > Video format, choose **H.265 / HEVC (8-bit)**, save and
 reconnect. H.264 remains the default. The HEVC choice is enabled only when the
 selected Vulkan device/queue reports Main 8-bit decode, sufficient reference
-capacity and original NV12 surfaces usable by decode, DPB and sampling together.
+capacity and sampleable NV12 output with a supported DPB layout.
 The host may still choose H.264; Connection stats reports the received codec.
 Existing dormant 10-bit/4:4:4 preferences never enable those Linux formats.
 
@@ -359,14 +359,21 @@ not publish a release automatically.
 ## AMD / NVIDIA test preparation
 
 Selection and eligibility are capability-based, without a vendor allowlist.
-The existing GPU-resident path still requires `SEPARATE_REFERENCE_IMAGES`,
-`DPB_AND_OUTPUT_COINCIDE` and sampleable, mutable NV12 2D optimal-tiling images
-with combined decode-output/DPB/sampling usage. A driver exposing only layered
-DPB or distinct DPB/output is **not supported by this implementation yet**,
-even if it supports Vulkan Video decoding in another application. Unsupported
-paths fail explicitly; no hidden image-copy, software or cross-GPU fallback is
-introduced. The probe now prints the driver, both DPB flags and exact path
-eligibility, rather than treating general decode support as sufficient.
+Vulkan Video capabilities select separate or layered DPB storage and coinciding
+or distinct decode output for both H.264 and HEVC Main 8-bit. Intel retains its
+existing coinciding per-image path. NVIDIA's layered references share one image;
+AMD's distinct output is written directly by the decode command and sampled by
+the existing presentation pass. No application-side decoded-frame copy, CPU
+readback, extra render pass, VA-API or software fallback is added. Distinct output
+necessarily needs separate output allocations and decoder memory bandwidth.
+The existing bounded parser slots, output lease and GPU synchronization remain.
+
+Settings > Video > Video GPU lists Vulkan hardware adapters and saves the chosen
+device in the existing settings schema. Restart EvoParseq after changing it:
+decode and UI rendering intentionally share one Vulkan device. A missing or
+ineligible explicit adapter produces an error instead of selecting another GPU.
+Automatic retains capability-based startup selection. The probe reports the
+selected resource layout; driver eligibility is not playback validation.
 
 ```sh
 flatpak update
@@ -377,7 +384,7 @@ flatpak run io.github.vampywiz17.EvoParseq --video-adapter 'AMD Radeon'
 
 `--video-adapter` matches the case-insensitive adapter name, tries only matching
 adapters at startup, and never silently substitutes another vendor for playback.
-It is a startup test selection, not live GPU switching. Use the exact name from
+It overrides the saved Video GPU for that launch; it is not live GPU switching. Use the exact name from
 the probe if a broad substring matches several devices.
 
 AMD uses the runtime's compatible Vulkan driver (normally Mesa RADV); NVIDIA

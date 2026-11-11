@@ -19,6 +19,7 @@ pub struct State {
     pub saving:
         Option<std::sync::mpsc::Receiver<(crate::network_settings::Draft, Result<(), String>)>>,
     pub feedback: String,
+    pub(super) gpu_changed: bool,
 }
 impl Desktop {
     pub(super) fn settings(&mut self, ui: &mut egui::Ui) {
@@ -28,6 +29,9 @@ impl Desktop {
                     self.ui_state.network = Some(draft);
                     self.ui_state.saving = None;
                     self.ui_state.feedback = match result {
+                        Ok(()) if self.ui_state.gpu_changed => {
+                            "Saved. Restart EvoParseq to change the Video GPU.".into()
+                        }
                         Ok(()) => crate::network_settings::SAVED.into(),
                         Err(error) => error,
                     };
@@ -133,7 +137,11 @@ impl Desktop {
                 label(
                     ui,
                     r(s::help(row.y, row.help_height)),
-                    row.help,
+                    if row.label == f::VIDEO_GPU.label {
+                        "GPU for stream decoding and rendering.\nRestart EvoParseq after changing the GPU."
+                    } else {
+                        row.help
+                    },
                     13.,
                     color(app_style::SETTINGS_MUTED),
                 );
@@ -197,15 +205,30 @@ impl Desktop {
                             }
                         });
                 });
-            } else if row.label == f::VIDEO_PRESENTATION.label
-                || row.label == f::CHROMA.label
-                || row.label == f::VIDEO_GPU.label
-            {
-                let value = if row.label == f::VIDEO_GPU.label {
-                    self.video_context
-                        .as_ref()
-                        .map_or("N/A", |c| c.adapter_name.as_str())
-                } else if row.label == f::CHROMA.label {
+            } else if row.label == f::VIDEO_GPU.label {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    egui::ComboBox::from_id_salt(row.label)
+                        .width(400.)
+                        .selected_text(
+                            draft
+                                .values
+                                .video_gpu
+                                .as_ref()
+                                .map_or("Automatic", |gpu| gpu.name.as_str()),
+                        )
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut draft.values.video_gpu, None, "Automatic");
+                            for gpu in &self.video_gpus {
+                                ui.selectable_value(
+                                    &mut draft.values.video_gpu,
+                                    Some(gpu.clone()),
+                                    &gpu.name,
+                                );
+                            }
+                        });
+                });
+            } else if row.label == f::VIDEO_PRESENTATION.label || row.label == f::CHROMA.label {
+                let value = if row.label == f::CHROMA.label {
                     crate::connection_settings::BinaryChoice::Chroma.labels()[0]
                 } else {
                     crate::connection_settings::BinaryChoice::Rendering.labels()[0]
@@ -454,6 +477,7 @@ impl Desktop {
                 .take()
                 .expect("network form initialized");
             draft.values.bud = self.transport == connection::Mode::Bud;
+            self.ui_state.gpu_changed = draft.values.video_gpu != self.settings.view().0.video_gpu;
             if self.ui_state.prefer_hevc != draft.values.prefer_hevc {
                 if self.ui_state.prefer_hevc {
                     crate::connection_settings::VideoFormat::Hevc8

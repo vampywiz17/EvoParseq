@@ -166,6 +166,7 @@ struct Desktop {
     badge: session_overlay::Badge,
     fitted_stream: Option<(u32, u32)>,
     video_context: Option<Arc<video_vulkan::Context>>,
+    video_gpus: Vec<connection_settings::GpuPreference>,
     video_error: Option<String>,
     output_format: wgpu::TextureFormat,
     decoder: Option<video_vulkan::Decoder>,
@@ -556,10 +557,13 @@ fn main() -> anyhow::Result<()> {
     let restore = !saved.native_core.encrypted_session.is_empty();
     let mut setup = egui_wgpu::WgpuSetupCreateNew::default();
     setup.instance_descriptor.backends = wgpu::Backends::VULKAN;
-    let (wgpu_setup, video_context, video_error) = match video_vulkan::create() {
-        Ok((setup, context)) => (egui_wgpu::WgpuSetup::Existing(setup), Some(context), None),
-        Err(error) => (setup.into(), None, Some(error.to_string())),
-    };
+    let instance = wgpu::Instance::new(&setup.instance_descriptor);
+    let video_gpus = video_vulkan::adapters(&instance);
+    let (wgpu_setup, video_context, video_error) =
+        match video_vulkan::create(&instance, saved.video_gpu.as_ref()) {
+            Ok((setup, context)) => (egui_wgpu::WgpuSetup::Existing(setup), Some(context), None),
+            Err(error) => (setup.into(), None, Some(error.to_string())),
+        };
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
@@ -625,6 +629,7 @@ fn main() -> anyhow::Result<()> {
                         .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
                     Ok(Box::new(Desktop {
                         video_context,
+                        video_gpus,
                         video_error,
                         output_format,
                         decoder: None,

@@ -8,7 +8,7 @@ mod surface_usage;
 mod sync;
 
 use anyhow::{Context as _, Result, ensure};
-pub use device::{Context, create};
+pub use device::{Context, adapters, create};
 use eframe::{egui, egui_wgpu};
 use lowlat_decode::h264::{Read, Stream};
 use std::sync::Arc;
@@ -311,12 +311,18 @@ impl Decoder {
                     label: Some("Decode Y plane"),
                     format: Some(wgpu::TextureFormat::R8Unorm),
                     aspect: wgpu::TextureAspect::Plane0,
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    base_array_layer: session.output_layer(surface),
+                    array_layer_count: Some(1),
                     ..Default::default()
                 });
                 let uv = texture.create_view(&wgpu::TextureViewDescriptor {
                     label: Some("Decode UV plane"),
                     format: Some(wgpu::TextureFormat::Rg8Unorm),
                     aspect: wgpu::TextureAspect::Plane1,
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    base_array_layer: session.output_layer(surface),
+                    array_layer_count: Some(1),
                     ..Default::default()
                 });
                 let values = [
