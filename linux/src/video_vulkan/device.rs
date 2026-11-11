@@ -59,9 +59,7 @@ pub fn create(
         let info = adapter.get_info();
         if !matches_adapter(&info.name, requested.as_deref())
             || (requested.is_none()
-                && preference.is_some_and(|p| {
-                    p.vendor_id != info.vendor || p.device_id != info.device || p.name != info.name
-                }))
+                && !matches_preference(&info.name, info.vendor, info.device, preference))
         {
             continue;
         }
@@ -103,6 +101,14 @@ fn requested_adapter(mut args: impl Iterator<Item = String>) -> Result<Option<St
 fn matches_adapter(name: &str, requested: Option<&str>) -> bool {
     requested.is_none_or(|needle| name.to_ascii_lowercase().contains(needle))
 }
+fn matches_preference(
+    name: &str,
+    vendor: u32,
+    device: u32,
+    preference: Option<&crate::connection_settings::GpuPreference>,
+) -> bool {
+    preference.is_none_or(|p| p.name == name && p.vendor_id == vendor && p.device_id == device)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,6 +120,37 @@ mod tests {
         assert!(!matches_adapter("Intel HD", selected.as_deref()));
         assert!(matches_adapter("AMD Radeon", Some("amd")));
         assert!(requested_adapter(["--video-adapter".into()].into_iter()).is_err());
+    }
+    #[test]
+    fn linux_saved_gpu_selection_survives_enumeration_order_and_rejects_stale_identity() {
+        use crate::connection_settings::GpuPreference;
+        let saved = GpuPreference {
+            name: "NVIDIA GeForce RTX 3060".into(),
+            vendor_id: 0x10de,
+            device_id: 0x2504,
+            subsystem_id: 0,
+            revision: 0,
+            luid: 0,
+        };
+        let json = serde_json::to_string(&saved).unwrap();
+        let saved = serde_json::from_str::<GpuPreference>(&json).unwrap();
+        let devices = [
+            ("AMD Radeon 780M", 0x1002, 0x1900),
+            (saved.name.as_str(), 0x10de, 0x2504),
+        ];
+        for device in devices.iter().chain(devices.iter().rev()) {
+            assert_eq!(
+                matches_preference(device.0, device.1, device.2, Some(&saved)),
+                device.1 == 0x10de
+            );
+        }
+        assert!(!matches_preference(
+            &saved.name,
+            0x10de,
+            0x9999,
+            Some(&saved)
+        ));
+        assert!(matches_preference("AMD Radeon 780M", 0x1002, 0x1900, None));
     }
 }
 
