@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fix a Windows BUD disconnect deadlock: terminal transport events update the
+  already-locked attempt state instead of reacquiring its mutex. A delivery
+  timeout or host disconnect can now reach the existing teardown and UI error
+  handling instead of freezing the client. Preserve host status codes, retry
+  policy, transport deadlines and the decoder/presentation path.
 - Remove the experimental designation from Windows Display timing, VRR, Zero copy
   presentation and BUD USB HID input in shared UI text, code names and documentation.
   Keep defaults, hardware requirements and runtime behavior unchanged. Saved Windows

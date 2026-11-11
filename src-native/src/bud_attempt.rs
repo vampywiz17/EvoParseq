@@ -37,6 +37,28 @@ struct State {
     host_status: Option<i32>,
 }
 
+impl State {
+    // The event loop already owns the state guard. Accept only the borrowed
+    // state here: reacquiring its mutex on Ended would deadlock the UI too.
+    fn ended(&mut self, outcome: Outcome) -> &'static str {
+        self.host_status = match outcome {
+            Outcome::Disconnected(status) => Some(status),
+            _ => None,
+        };
+        match outcome {
+            Outcome::ConnectivityFailed => "ended_connectivity_failed",
+            Outcome::PeerGone => "ended_peer_gone",
+            Outcome::Undeliverable => "ended_undeliverable",
+            Outcome::TransportFailed => "ended_transport_failed",
+            Outcome::Disconnected(_) => "ended_host_disconnected",
+            Outcome::Unreadable => "ended_unreadable",
+            Outcome::RelayUnreachable => "ended_relay_unreachable",
+            Outcome::RelayRefused => "ended_relay_refused",
+            Outcome::RelayLost => "ended_relay_lost",
+        }
+    }
+}
+
 // Keep BUD identity through connecting/disconnected states too. An old worker
 // finishing after reconnect may only publish into its own stats generation.
 struct Statistics {
@@ -709,22 +731,8 @@ fn run(
                     );
                 }
                 Event::Ended { outcome } => {
-                    let host_status = match &outcome {
-                        Outcome::Disconnected(status) => Some(*status),
-                        _ => None,
-                    };
-                    let reason = match outcome {
-                        Outcome::ConnectivityFailed => "ended_connectivity_failed",
-                        Outcome::PeerGone => "ended_peer_gone",
-                        Outcome::Undeliverable => "ended_undeliverable",
-                        Outcome::TransportFailed => "ended_transport_failed",
-                        Outcome::Disconnected(_) => "ended_host_disconnected",
-                        Outcome::Unreadable => "ended_unreadable",
-                        Outcome::RelayUnreachable => "ended_relay_unreachable",
-                        Outcome::RelayRefused => "ended_relay_refused",
-                        Outcome::RelayLost => "ended_relay_lost",
-                    };
-                    state.lock().unwrap_or_else(|e| e.into_inner()).host_status = host_status;
+                    let reason = shared.ended(outcome);
+                    let host_status = shared.host_status;
                     *stage = reason;
                     crate::event_log::record(
                         "WARN",
@@ -909,6 +917,42 @@ fn native_close(text: &str, attempt: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn terminal_outcomes_update_the_already_locked_state_without_relocking() {
+        use super::{Outcome, State};
+        let state = std::sync::Mutex::new(State::default());
+        let mut guard = state.lock().unwrap();
+        assert!(matches!(
+            state.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        assert_eq!(guard.ended(Outcome::Undeliverable), "ended_undeliverable");
+        assert_eq!(guard.host_status, None);
+        for status in [0, -15002, i32::MIN, i32::MAX] {
+            assert_eq!(
+                guard.ended(Outcome::Disconnected(status)),
+                "ended_host_disconnected"
+            );
+            assert_eq!(guard.host_status, Some(status));
+        }
+        for (outcome, reason) in [
+            (Outcome::ConnectivityFailed, "ended_connectivity_failed"),
+            (Outcome::PeerGone, "ended_peer_gone"),
+            (Outcome::Undeliverable, "ended_undeliverable"),
+            (Outcome::TransportFailed, "ended_transport_failed"),
+            (Outcome::Unreadable, "ended_unreadable"),
+            (Outcome::RelayUnreachable, "ended_relay_unreachable"),
+            (Outcome::RelayRefused, "ended_relay_refused"),
+            (Outcome::RelayLost, "ended_relay_lost"),
+        ] {
+            guard.host_status = Some(-15002);
+            assert_eq!(guard.ended(outcome), reason);
+            assert_eq!(guard.host_status, None);
+        }
+        drop(guard);
+        assert!(state.try_lock().is_ok());
+    }
+
     #[test]
     fn timing_reports_bypass_application_events_and_retire_with_their_generation() {
         let bus = std::sync::Arc::new(crate::stats::Shared::default());
