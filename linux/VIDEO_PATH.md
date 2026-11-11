@@ -1,14 +1,17 @@
 # Linux H.264 / HEVC 8-bit video path audit
 
-Source review, updated 2026-11-05. Applies to the Linux Flatpak playback preview only.
+Source review, updated 2026-11-11. Applies to the Linux Flatpak playback preview only.
 This establishes application behavior, not driver/compositor/scanout behavior.
 
 ## Decoded images
 
-`src/video_vulkan/session.rs` creates the original device-local NV12 images with
-`VIDEO_DECODE_DST_KHR | VIDEO_DECODE_DPB_KHR | SAMPLED`. The same original image
-is the decode destination and reference resource; unsupported combinations fail
-capability checks instead of selecting a copy-based fallback.
+`src/video_vulkan/session.rs` creates device-local NV12 images from the profile's
+capabilities. Coinciding output uses `VIDEO_DECODE_DST_KHR |
+VIDEO_DECODE_DPB_KHR | SAMPLED` on the same image. Distinct output uses
+`VIDEO_DECODE_DPB_KHR` reference images and `VIDEO_DECODE_DST_KHR | SAMPLED`
+output images, written together by decoding. Reference storage may be separate
+images or layers of one array image. Unsupported combinations fail capability
+checks instead of selecting a copy-based fallback.
 
 The native image handle is wrapped with wgpu HAL `texture_from_raw` and
 `create_texture_from_hal`. These wrappers do not create a second decoded image

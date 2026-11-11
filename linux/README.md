@@ -27,10 +27,10 @@ single host display is supported; HID mouse pins the verified primary output.
 
 Download the `EvoParseq-Linux-Flatpak` artifact from a successful
 [Linux CI run](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Adev),
-then extract `EvoParseq-Linux-v0.1.17-x86_64.flatpak` from the artifact ZIP.
+then extract `EvoParseq-Linux-v0.1.21-x86_64.flatpak` from the artifact ZIP.
 
 ```sh
-flatpak install --user --reinstall EvoParseq-Linux-v0.1.17-x86_64.flatpak
+flatpak install --user --reinstall EvoParseq-Linux-v0.1.21-x86_64.flatpak
 flatpak run io.github.vampywiz17.EvoParseq
 ```
 
