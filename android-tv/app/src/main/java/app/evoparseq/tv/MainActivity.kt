@@ -74,6 +74,7 @@ class MainActivity : ComponentActivity() {
             TvTheme { TvApp(model) }
         }
     }
+    override fun onResume() { super.onResume(); model.readUpdateResult() }
     override fun onStop() { controllerInput.enabled = false; model.closeLocalSetup(); model.stopStream("Android stopped the streaming activity."); super.onStop() }
 }
 
@@ -248,27 +249,34 @@ private fun TvSettings(model: TvModel, first: FocusRequester, back: () -> Unit) 
         else if (!model.busy && restoreKey.isNotEmpty()) rowFocus.requestFocus()
     }
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-        Column(Modifier.width(160.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.width(160.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = back, scale = steadyScale,
                 modifier = Modifier.focusRequester(first).fillMaxWidth()) { Text("Back") }
             Text("SETTINGS", style = MaterialTheme.typography.titleMedium, color = Color(0xFF71BCFF))
-            listOf("Network", "Video", "Device").forEach { name ->
-                val active = category == name
-                Button(onClick = {
-                    category = name; choosing = null; restoreKey = ""
-                    if (name == "Device") model.inspectDecoders()
-                }, scale = steadyScale,
-                    modifier = Modifier.fillMaxWidth().semantics { this.selected = active }) {
-                    Box(Modifier.width(3.dp).height(18.dp)
-                        .background(if(active) Color(0xFF71BCFF) else Color.Transparent, RoundedCornerShape(2.dp)))
-                    Spacer(Modifier.width(10.dp))
-                    Text(name)
+            // Keep Back visible; focused categories scroll into view instead of
+            // measuring the final TV button with only the remaining few pixels.
+            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+                .padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                listOf("Network", "Video", "Audio", "Diagnostics", "Device", "Updates").forEach { name ->
+                    val active = category == name
+                    Button(onClick = {
+                        category = name; choosing = null; restoreKey = ""
+                        if (name == "Device") model.inspectDecoders()
+                    }, scale = steadyScale,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics { this.selected = active }) {
+                        Box(Modifier.width(3.dp).height(18.dp)
+                            .background(if(active) Color(0xFF71BCFF) else Color.Transparent, RoundedCornerShape(2.dp)))
+                        Spacer(Modifier.width(10.dp))
+                        Text(name)
+                    }
                 }
             }
         }
         // Focus decoration and scrolling remain inside the content pane.
         Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()) {
-            if (category == "Device") {
+            if (category == "Updates") {
+                UpdateSettings(model)
+            } else if (category == "Device") {
                 val blocks = remember(model.inventory) {
                     model.inventory.ifEmpty { "Reading decoder capabilities…" }
                         .split("\n\n").filter { it.isNotBlank() }
@@ -281,7 +289,7 @@ private fun TvSettings(model: TvModel, first: FocusRequester, back: () -> Unit) 
             } else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(choice?.getString("label") ?: category, style = MaterialTheme.typography.headlineSmall)
-                Text("Requests apply to your next connection. The host chooses the actual video format.",
+                Text(model.settings?.optString(when (category) {"Audio" -> "audio_hint"; "Diagnostics" -> "diagnostic_hint"; else -> "request_hint"}) ?: "",
                     color = Color(0xFFA8BED7), fontSize=14.sp, lineHeight=20.sp)
                 if (model.settings == null) Button(onClick = model::readSettings,
                     scale = steadyScale, enabled = !model.busy) { Text("Reload settings") }
@@ -307,7 +315,9 @@ private fun TvSettings(model: TvModel, first: FocusRequester, back: () -> Unit) 
                         Button(onClick = model::resetNetwork, enabled = !model.busy, scale = steadyScale,
                             modifier = Modifier.fillMaxWidth()) { Text("Remove saved relay settings") }
                         Text("Local HTTPS pairing only. Credentials are encrypted on this TV.", color = Color(0xFFA8BED7))
-                    } else {
+                    } else if (category == "Diagnostics") {
+                        DiagnosticActions(model)
+                    } else if (category == "Video") {
                         Text("Dynamic FPS reduces traffic for still images. Fixed FPS requests continuous frames; it does not duplicate frames on the TV.", color = Color(0xFFA8BED7))
                     }
                 } else {
@@ -342,4 +352,62 @@ private fun CapabilityBlock(text: String) {
         .background(Color(0xFF202936),RoundedCornerShape(8.dp)).padding(12.dp)) {
         Text(text,fontSize=14.sp,lineHeight=20.sp)
     }
+}
+
+@Composable
+private fun UpdateSettings(model: TvModel) {
+    var prerelease by rememberSaveable { mutableStateOf(false) }
+    val activity = androidx.activity.compose.LocalActivity.current
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text("Updates", style = MaterialTheme.typography.headlineSmall)
+        Text("Installed: ${model.installedVersion}")
+        Button(onClick = { prerelease = !prerelease; model.checkUpdates(prerelease) }, enabled = !model.busy) {
+            Text(if (prerelease) "Release channel: Include prereleases" else "Release channel: Stable")
+        }
+        Button(onClick = { model.checkUpdates(prerelease) }, enabled = !model.busy) {
+            Text(if (model.busy) "Working…" else "Check for updates")
+        }
+        model.updateRelease?.let { release ->
+            Text("Available: ${release.optString("version")}", style = MaterialTheme.typography.titleLarge)
+            if (model.updateSession == null) {
+                Button(onClick = model::downloadUpdate, enabled = !model.busy) { Text("Download update") }
+            } else {
+                Button(onClick = { activity?.let(model::installUpdate) }, enabled = !model.busy && activity != null) { Text("Install update") }
+            }
+            Text(release.optString("notes"))
+        }
+        Text(model.updateMessage)
+        Text("Updates come from EvoParseq GitHub releases. Android asks you to approve installation. Your settings and saved sign-in are retained.",
+            color = Color(0xFFA8BED7))
+    }
+}
+
+@Composable
+private fun DiagnosticActions(model: TvModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var pending by rememberSaveable { mutableStateOf<String?>(null) }
+    val save = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        val file = pending?.let { java.io.File(it) }
+        pending = null
+        if (uri != null && file != null) model.saveDiagnostics(file, uri)
+    }
+    Button(onClick = {
+        model.prepareDiagnostics { file ->
+            pending = file.absolutePath
+            try { save.launch("EvoParseq-diagnostics.zip") }
+            catch (_: android.content.ActivityNotFoundException) {
+                pending = null
+                model.diagnosticFeedback("No document picker is installed. Use Share diagnostics instead.")
+            }
+        }
+    }, enabled = !model.busy) { Text("Save diagnostics") }
+    Button(onClick = {
+        model.prepareDiagnostics { file ->
+            try { Diagnostics.share(context, file) }
+            catch (_: Exception) { model.diagnosticFeedback("No sharing app is available. Use Save diagnostics instead.") }
+        }
+    }, enabled = !model.busy) { Text("Share diagnostics") }
+    Text(model.diagnosticMessage, color = Color(0xFFA8BED7))
 }

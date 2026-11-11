@@ -2,34 +2,7 @@
 use std::sync::Arc;
 #[cfg(windows)]
 pub const REFRESH: u32 = windows_sys::Win32::UI::WindowsAndMessaging::WM_APP + 40;
-pub fn absolute_motion(
-    frame: &[u8],
-    viewport: Option<crate::viewport::Viewport>,
-) -> anyhow::Result<Option<bytes::Bytes>> {
-    if frame.len() != 13 || frame[12] != 3 || frame[..4] != [0; 4] {
-        return Ok(None);
-    }
-    let viewport = viewport.ok_or(crate::control::AbsoluteMouseUnavailable)?;
-    anyhow::ensure!(
-        viewport.rect().is_some(),
-        "absolute HID requires a valid video viewport"
-    );
-    let axis = |offset: usize, size: u32| {
-        let point = i32::from_be_bytes(frame[offset..offset + 4].try_into().unwrap());
-        let span = i64::from(size.saturating_sub(1));
-        if span == 0 {
-            0
-        } else {
-            ((i64::from(point).clamp(0, span) * 32767 + span / 2) / span) as i32
-        }
-    };
-    Ok(Some(crate::control::header(
-        3,
-        2,
-        axis(4, viewport.source.0),
-        axis(8, viewport.source.1),
-    )))
-}
+pub use crate::hid_policy::absolute_motion;
 
 pub struct Lifetime {
     window: Arc<crate::window::Window>,

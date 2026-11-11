@@ -146,6 +146,7 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_startStream(
     peer: JString,
     preferences: JString,
     choices: JString,
+    audio_inventory: JString,
     width: jni::sys::jint,
     height: jni::sys::jint,
 ) -> jstring {
@@ -161,6 +162,8 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_startStream(
         let choices = text(&mut env, &choices)?;
         anyhow::ensure!(choices.len() <= 4096, "Decoder choices exceed limit");
         let choices: crate::video_android::Choices = serde_json::from_str(&choices)?;
+        let audio_inventory =
+            crate::audio_preferences::Inventory::parse(&text(&mut env, &audio_inventory)?)?;
         let size = (u32::try_from(width)?, u32::try_from(height)?);
         anyhow::ensure!(
             (1..=16384).contains(&size.0) && (1..=16384).contains(&size.1),
@@ -178,6 +181,7 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_startStream(
             prefs,
             crate::video_android::NativeWindow(window),
             choices,
+            audio_inventory,
             size,
         )?;
         Ok(json!({"ok":true}))
@@ -582,4 +586,89 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_desktopPointer(
             wheel: (wx, wy),
         },
     ));
+}
+
+// Runs only on the existing TV account worker; never on a media callback.
+static UPDATE: Mutex<Option<crate::release_apk::Candidate>> = Mutex::new(None);
+#[no_mangle]
+pub extern "system" fn Java_app_evoparseq_tv_NativeCore_checkUpdate(
+    mut env: JNIEnv,
+    _object: JObject,
+    installed: JString,
+    prerelease: jni::sys::jboolean,
+) -> jstring {
+    let result = (|| -> anyhow::Result<Value> {
+        *UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let candidate = crate::release_apk::check(&text(&mut env, &installed)?, prerelease != 0)?;
+        let value = json!({"ok":true,"release":candidate});
+        *UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = candidate;
+        Ok(value)
+    })();
+    reply(
+        &mut env,
+        result.unwrap_or_else(
+            |_| json!({"ok":false,"error":"Could not check GitHub releases. Try again later."}),
+        ),
+    )
+}
+#[no_mangle]
+pub extern "system" fn Java_app_evoparseq_tv_NativeCore_downloadUpdate(
+    mut env: JNIEnv,
+    _object: JObject,
+    destination: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<Value> {
+        let candidate = UPDATE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Check for updates first"))?;
+        crate::release_apk::download(
+            &candidate,
+            std::path::Path::new(&text(&mut env, &destination)?),
+        )?;
+        Ok(json!({"ok":true,"version":candidate.version}))
+    })();
+    reply(&mut env,result.unwrap_or_else(|_|json!({"ok":false,"error":"APK download or integrity check failed. Check for updates and retry."})))
+}
+
+/// The directory comes only from Application.noBackupFilesDir, never local provisioning.
+#[no_mangle]
+pub extern "system" fn Java_app_evoparseq_tv_NativeCore_configureDiagnostics(
+    mut env: JNIEnv,
+    _object: JObject,
+    directory: JString,
+    enabled: jni::sys::jboolean,
+) -> jstring {
+    static INITIALIZED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+    let result = (|| -> anyhow::Result<Value> {
+        let mut initialized = INITIALIZED
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Logger unavailable"))?;
+        if !*initialized {
+            let path = std::path::PathBuf::from(text(&mut env, &directory)?);
+            anyhow::ensure!(path.is_absolute(), "Invalid diagnostic directory");
+            std::fs::create_dir_all(&path)?;
+            crate::event_log::initialize(path.join("client-events.jsonl"), enabled != 0)?;
+            *initialized = true;
+        } else {
+            crate::event_log::configure(enabled != 0)?;
+        }
+        Ok(json!({"ok":true}))
+    })();
+    reply(
+        &mut env,
+        result.unwrap_or_else(|_| json!({"error":"Could not configure diagnostic logging."})),
+    )
+}
+#[no_mangle]
+pub extern "system" fn Java_app_evoparseq_tv_NativeCore_flushDiagnostics(
+    mut env: JNIEnv,
+    _object: JObject,
+) -> jstring {
+    let value = match crate::event_log::flush() {
+        Ok(()) => json!({"ok":true}),
+        Err(_) => json!({"error":"Could not flush diagnostics."}),
+    };
+    reply(&mut env, value)
 }

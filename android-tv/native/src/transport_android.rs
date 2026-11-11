@@ -1,15 +1,14 @@
 //! Android transport lifecycle; codecs and host settings stay shared.
 use crate::{
     attempt::{Attempt, Output, StunProvider},
-    audio_stream, control, native_wire,
+    audio_stream, bud_ingress, control, native_wire,
     native_wire::SignalingWrite,
-    video_android, video_stream,
+    video_android,
 };
 use anyhow::{ensure, Result};
 use bytes::Bytes;
 use evoparseq_bud::{
     bud::{Event, MediaSource, Route, Session},
-    media,
     signaling::Signaling,
 };
 use serde_json::{json, Value};
@@ -30,11 +29,11 @@ pub struct Bud {
     audio: audio_stream::Pipeline,
     sender: audio_stream::Sender,
     video: Arc<video_android::Pipeline>,
-    inspector: video_stream::Inspector,
+    ingress: bud_ingress::VideoState,
+    more_media: bool,
     controls: VecDeque<Bytes>,
     started: Instant,
     established: bool,
-    waiting_for_keyframe: bool,
     network: Arc<crate::network::Network>,
     config: control::Config,
     writer: SignalingWrite,
@@ -43,8 +42,11 @@ pub struct Bud {
     wire_id: String,
     routes: Option<VecDeque<Route>>,
     retries: usize,
+    audio_settings: crate::audio_preferences::Settings,
+    audio_layout: crate::audio_layout::Layout,
 }
 impl Transport {
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         id: &str,
         peer: &str,
@@ -53,6 +55,8 @@ impl Transport {
         bud: bool,
         video: Arc<video_android::Pipeline>,
         network: Arc<crate::network::Network>,
+        audio_settings: crate::audio_preferences::Settings,
+        audio_layout: crate::audio_layout::Layout,
     ) -> Result<Self> {
         if !bud {
             let target = peer.to_owned();
@@ -70,10 +74,16 @@ impl Transport {
                 true,
                 Some(network),
             )?;
-            attempt.start_android_media(video);
+            attempt.start_native_media(video, audio_settings.maximum());
             return Ok(Self::WebRtc(Box::new(attempt)));
         }
-        let mut session = Session::external_video_depth(config.allow_hevc, config.ten_bit)?;
+        let mut session = bud_ingress::session(
+            config.allow_hevc,
+            config.ten_bit,
+            false,
+            audio_settings.pcm,
+            audio_layout,
+        )?;
         session.wake_consumer(std::thread::current());
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -121,12 +131,11 @@ impl Transport {
             writer(signaling.offer(&credentials).to_string()),
             "Could not send BUD offer"
         );
-        let audio = audio_stream::Pipeline::start_with_budget(Some(100));
+        let audio =
+            audio_stream::Pipeline::start_with_layout(Some(audio_settings.maximum()), audio_layout);
         let sender = audio
             .sender()
             .ok_or_else(|| anyhow::anyhow!("Audio unavailable"))?;
-        let mut inspector = video_stream::Inspector::default();
-        inspector.enable_hevc(config.allow_hevc);
         Ok(Self::Bud(Box::new(Bud {
             session,
             signaling,
@@ -134,11 +143,11 @@ impl Transport {
             audio,
             sender,
             video,
-            inspector,
+            ingress: bud_ingress::VideoState::new(config.allow_hevc, config.ten_bit, false),
+            more_media: false,
             controls: VecDeque::new(),
             started: Instant::now(),
             established: false,
-            waiting_for_keyframe: true,
             network,
             config: config.clone(),
             writer,
@@ -147,6 +156,8 @@ impl Transport {
             wire_id: id.into(),
             routes,
             retries: 0,
+            audio_settings,
+            audio_layout,
         })))
     }
     pub fn receive(&mut self, text: &str, id: &str) -> Result<()> {
@@ -207,64 +218,19 @@ impl Transport {
                     bud.established || bud.started.elapsed() < Duration::from_secs(30),
                     "BUD connection timed out"
                 );
-                for _ in 0..8 {
-                    let inspector = &mut bud.inspector;
-                    let waiting = &mut bud.waiting_for_keyframe;
-                    let video = &bud.video;
-                    if bud
-                        .source
-                        .with_video(|bytes| {
-                            match media::video(bytes)? {
-                                media::Video::Metadata(metadata) => {
-                                    if metadata.rebuilt {
-                                        *waiting = true;
-                                    }
-                                }
-                                media::Video::AccessUnit { annex_b, header } => {
-                                    ensure!(
-                                        matches!(
-                                            header.rotation,
-                                            media::Rotation::None | media::Rotation::Unknown
-                                        ),
-                                        "Rotated BUD video is not supported on Android TV yet"
-                                    );
-                                    if let Some(info) = inspector.receive(annex_b) {
-                                        if !*waiting || info.idr || info.parameters {
-                                            let idr = info.idr;
-                                            if video.submit(annex_b, info) {
-                                                if idr {
-                                                    *waiting = false;
-                                                }
-                                            } else {
-                                                *waiting = true;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            Ok(())
-                        })?
-                        .is_none()
-                    {
-                        break;
-                    }
-                }
-                for _ in 0..8 {
-                    let sender = &bud.sender;
-                    if bud
-                        .source
-                        .with_audio(|bytes| {
-                            sender.submit(media::opus(bytes)?);
-                            Ok(())
-                        })?
-                        .is_none()
-                    {
-                        break;
-                    }
-                }
+                let pumped = bud_ingress::pump(
+                    &mut bud.source,
+                    &mut bud.ingress,
+                    bud.video.as_ref(),
+                    &bud.sender,
+                )?;
+                bud.more_media = pumped.more_pending();
             }
         }
         Ok(())
+    }
+    pub fn more_media_pending(&self) -> bool {
+        matches!(self, Self::Bud(bud) if bud.more_media)
     }
     pub fn audio_receiver(&self) -> Option<audio_stream::NativeReceiver> {
         match self {
@@ -360,8 +326,13 @@ impl Bud {
             native_wire::envelope("offer_cancel", &self.peer, &self.wire_id, json!({})).to_string(),
         );
         self.session.close();
-        let mut session =
-            Session::external_video_depth(self.config.allow_hevc, self.config.ten_bit)?;
+        let mut session = bud_ingress::session(
+            self.config.allow_hevc,
+            self.config.ten_bit,
+            false,
+            self.audio_settings.pcm,
+            self.audio_layout,
+        )?;
         session.wake_consumer(std::thread::current());
         self.retries += 1;
         self.wire_id = format!("{}-relay-{}", self.base_id, self.retries);
@@ -375,7 +346,27 @@ impl Bud {
         self.session = session;
         self.started = Instant::now();
         self.controls.clear();
-        self.waiting_for_keyframe = true;
+        self.ingress =
+            bud_ingress::VideoState::new(self.config.allow_hevc, self.config.ten_bit, false);
+        self.more_media = false;
         Ok(true)
+    }
+}
+
+impl bud_ingress::VideoTarget for video_android::Pipeline {
+    fn encoder_rebuilt(&self) {
+        self.encoder_rebuilt();
+    }
+    fn submit_oriented(
+        &self,
+        bytes: &[u8],
+        info: crate::video_stream::PacketInfo,
+        rotation: u8,
+    ) -> Result<bool> {
+        ensure!(
+            rotation == 0,
+            "Rotated BUD video is not supported on Android TV yet"
+        );
+        Ok(self.submit(bytes, info))
     }
 }

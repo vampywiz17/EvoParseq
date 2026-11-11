@@ -17,7 +17,7 @@ The Windows SDK/MSVC toolchain and Rust are build-time requirements. The portabl
 application uses EvoParseq.exe and settings.json; ordinary use does not require
 administrator rights. The configured static CRT and bundled Opus remain in place.
 
-## Experimental DXGI VRR
+## DXGI VRR
 
 Select **Video / Display timing / VRR**, disable Zero copy, save and reconnect.
 This uses the existing normal DXGI renderer with all existing decoder backends;

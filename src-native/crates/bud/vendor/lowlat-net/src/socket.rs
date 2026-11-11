@@ -47,7 +47,7 @@ pub(crate) const WANT_SNDBUF: i32 = 4 * 1024 * 1024;
 
 /// Expedited forwarding, on both families. A socket option where the system
 /// honours one; Windows ignores it and marks per destination instead.
-#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+#[cfg(any(target_os = "android", target_os = "macos"))]
 pub(crate) const DSCP_EF: i32 = 0xB8;
 
 /// The TTL everything but a mapping probe leaves at.

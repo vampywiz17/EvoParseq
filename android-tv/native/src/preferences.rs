@@ -8,6 +8,10 @@ use serde_json::{json, Value};
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Preferences {
+    #[serde(default)]
+    pub audio: crate::audio_preferences::Settings,
+    #[serde(default)]
+    pub logging: bool,
     pub transport: usize,
     pub video: usize,
     pub resolution: usize,
@@ -17,6 +21,9 @@ pub struct Preferences {
     pub pacing: usize,
 }
 
+const BUFFER_MS: &[u32] = &[
+    0, 5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100, 125, 150, 200, 250, 300, 400, 500,
+];
 const TRANSPORT: &[&str] = &["WebRTC", "BUD"];
 const PACING: &[&str] = &["Dynamic FPS", "Fixed FPS"];
 const VIDEO: &[&str] = &["H.264 · 8-bit SDR", "HEVC · 8-bit SDR", "HEVC · 10-bit SDR"];
@@ -25,6 +32,8 @@ type ChoiceField = (&'static str, &'static str, &'static [&'static str], usize);
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            audio: Default::default(),
+            logging: false,
             transport: 0,
             pacing: 0,
             video: 0,
@@ -65,10 +74,47 @@ impl Preferences {
         }
         // Reuse the Windows panel's parsing/limits rather than duplicating them.
         value.host_request()?;
+        value.audio.validate()?;
+        ensure!(
+            BUFFER_MS.contains(&value.audio.minimum_ms)
+                && BUFFER_MS.contains(&value.audio.maximum_ms),
+            "Unsupported audio buffer preset"
+        );
         Ok(value)
     }
 
     pub fn select(&mut self, field: &str, index: usize) -> Result<()> {
+        let mut audio = self.audio;
+        let boolean = || {
+            ensure!(index < 2, "Invalid audio setting");
+            Ok(index == 1)
+        };
+        match field {
+            "audio_custom" => audio.custom = boolean()?,
+            "audio_pcm" => audio.pcm = boolean()?,
+            "audio_surround" => audio.surround = boolean()?,
+            "audio_minimum" => {
+                audio.minimum_ms = *BUFFER_MS
+                    .get(index)
+                    .ok_or_else(|| anyhow::anyhow!("Invalid audio buffer"))?
+            }
+            "audio_maximum" => {
+                audio.maximum_ms = *BUFFER_MS
+                    .get(index)
+                    .ok_or_else(|| anyhow::anyhow!("Invalid audio buffer"))?
+            }
+            "logging" => {
+                self.logging = boolean()?;
+                return Ok(());
+            }
+            _ => return self.select_video(field, index),
+        }
+        audio.validate()?;
+        self.audio = audio;
+        Ok(())
+    }
+
+    fn select_video(&mut self, field: &str, index: usize) -> Result<()> {
         let choices = self
             .fields()
             .into_iter()
@@ -89,8 +135,38 @@ impl Preferences {
     }
 
     pub fn view(&self) -> Value {
-        json!({"ok":true, "settings":self, "rows":self.fields().map(|(key,label,choices,selected)|
-            json!({"key":key,"label":label,"choices":choices,"selected":selected,"group":if key=="transport" || key=="bandwidth" {"Network"} else {"Video"}}))})
+        let mut rows: Vec<Value> = self.fields().into_iter().map(|(key,label,choices,selected)|
+            json!({"key":key,"label":label,"choices":choices,"selected":selected,"group":if key=="transport" || key=="bandwidth" {"Network"} else {"Video"}})).collect();
+        for (key, label, selected) in [
+            ("audio_custom", "Custom audio buffer", self.audio.custom),
+            ("audio_pcm", "Raw PCM (BUD only)", self.audio.pcm),
+            (
+                "audio_surround",
+                "Match output speaker layout (BUD only)",
+                self.audio.surround,
+            ),
+            ("logging", "Diagnostic logging", self.logging),
+        ] {
+            rows.push(json!({"key":key,"label":label,"choices":["Off","On"],"selected":usize::from(selected),"group":if key=="logging" {"Diagnostics"} else {"Audio"}}));
+        }
+        for (key, label, value) in [
+            (
+                "audio_minimum",
+                "Minimum audio buffer (ms)",
+                self.audio.minimum_ms,
+            ),
+            (
+                "audio_maximum",
+                "Maximum audio buffer (ms)",
+                self.audio.maximum_ms,
+            ),
+        ] {
+            rows.push(json!({"key":key,"label":label,"choices":BUFFER_MS.iter().map(|v|format!("{v} ms")).collect::<Vec<_>>(),"selected":BUFFER_MS.iter().position(|v|*v==value).unwrap_or(0),"group":"Audio"}));
+        }
+        json!({"ok":true,"settings":self,"rows":rows,
+            "request_hint":"Requests apply to your next connection. The host chooses the actual video format.",
+            "audio_hint":"Applies to the next connection. Default buffering preserves existing latency. A larger minimum can smooth jitter but adds delay. PCM needs more bandwidth. Surround requires BUD and a verified 5.1/7.1 output; otherwise stereo is used.",
+            "diagnostic_hint":"Enable logging before reproducing the issue, then save or share the bounded diagnostic archive. It contains operational events and device information, excluding credentials, clipboard and media content."})
     }
 
     pub fn host_request(&self) -> Result<crate::session_preferences::Video> {
@@ -117,6 +193,26 @@ impl Preferences {
 mod tests {
     use super::*;
 
+    #[test]
+    fn audio_settings_are_backward_compatible_and_invalid_edits_are_atomic() {
+        let mut value =
+            Preferences::parse(r#"{"transport":0,"video":0,"resolution":0,"fps":0,"bandwidth":0}"#)
+                .unwrap();
+        assert!(!value.audio.custom && !value.audio.pcm && !value.audio.surround && !value.logging);
+        value.select("audio_custom", 1).unwrap();
+        let before = serde_json::to_string(&value).unwrap();
+        assert!(value.select("audio_maximum", 0).is_err());
+        assert_eq!(before, serde_json::to_string(&value).unwrap());
+        value.select("audio_minimum", 0).unwrap();
+        value.select("audio_maximum", 18).unwrap();
+        value.select("audio_pcm", 1).unwrap();
+        value.select("audio_surround", 1).unwrap();
+        value.select("logging", 1).unwrap();
+        let restored = Preferences::parse(&serde_json::to_string(&value).unwrap()).unwrap();
+        assert_eq!(restored.audio.maximum(), 500);
+        assert_eq!(restored.audio.minimum_frames(), 0);
+        assert!(restored.audio.pcm && restored.audio.surround && restored.logging);
+    }
     #[test]
     fn default_is_webrtc_h264_and_round_trips_without_secrets() {
         let value = Preferences::default();

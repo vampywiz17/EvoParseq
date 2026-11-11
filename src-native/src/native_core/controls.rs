@@ -5,8 +5,8 @@ use windows_sys::Win32::{
 };
 
 pub(super) const BG: u32 = crate::branding::BACKGROUND;
-pub(super) const FIELD: u32 = 0x003a322c;
-pub(super) const FG: u32 = 0x00f5f3f0;
+pub(super) const FIELD: u32 = crate::branding::colorref(crate::app_style::FIELD);
+pub(super) const FG: u32 = crate::branding::colorref(crate::app_style::TEXT);
 
 pub(super) fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain([0]).collect()

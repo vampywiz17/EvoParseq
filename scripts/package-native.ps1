@@ -48,6 +48,9 @@ try {
         Copy-Item (Join-Path $env:EVOPARSEQ_RTX_VIDEO_SDK 'NVIDIA_RTX_Video_SDK_License.pdf') (Join-Path $taskPackage 'NVIDIA-RTX-VIDEO-LICENSE.pdf')
         'Optional NVIDIA RTX Video SDK 1.1.0: NVIDIA RTX technology. Its optional runtime and linked SDK library are proprietary NVIDIA components, excluded from the EvoParseq MIT license. See NVIDIA-RTX-VIDEO-LICENSE.pdf. VSR is off by default and may increase latency, GPU load and memory use. The runtime is downloaded only with consent, checked against pinned archive and DLL SHA-256 values, and stored under %LOCALAPPDATA%/EvoParseq/vsr/1.1.0 without administrator rights. No runtime DLL is embedded in the EXE.' | Set-Content (Join-Path $taskPackage 'NVIDIA-RTX-VIDEO-NOTICE.txt') -Encoding utf8
     }
+    Copy-Item src-native/vendor/webrtc-util-0.12.0/LICENSE-MIT (Join-Path $taskPackage 'WEBRTC-UTIL-LICENSE-MIT.txt')
+    Copy-Item src-native/vendor/webrtc-util-0.12.0/LICENSE-APACHE (Join-Path $taskPackage 'WEBRTC-UTIL-LICENSE-APACHE.txt')
+    Copy-Item src-native/vendor/webrtc-util-0.12.0/LOCAL-CHANGES.md (Join-Path $taskPackage 'WEBRTC-UTIL-LOCAL-CHANGES.md')
     Copy-Item src-native/vendor/webrtc-0.14.0/LICENSE-MIT (Join-Path $taskPackage 'WEBRTC-LICENSE-MIT.txt')
     Copy-Item src-native/vendor/webrtc-0.14.0/LICENSE-APACHE (Join-Path $taskPackage 'WEBRTC-LICENSE-APACHE.txt')
     Copy-Item src-native/vendor/dtls-0.13.0/LICENSE-MIT (Join-Path $taskPackage 'DTLS-LICENSE-MIT.txt')

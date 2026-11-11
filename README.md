@@ -1,3 +1,17 @@
+> [!WARNING]
+> **EvoParseq is developed with substantial AI assistance.** AI generates most of the
+> implementation code, while the project’s concept, architecture, scope, platform choices,
+> and development priorities are defined by its human maintainer.
+>
+> Development remains human-led. The maintainer directs the work, tests the application on
+> real hardware, investigates reported problems, and oversees patches and fixes.
+> Responsibility for reviewing and accepting changes stays with the maintainer.
+>
+> The project owner has a formal IT education and works in Kubernetes and DevOps. The
+> primary motivation for using AI is to save time and make effective use of LLM
+> capabilities, allowing more effort to go into design decisions, integration, and practical
+> testing.
+
 <p align="center">
   <img src="assets/evoparseq-wordmark.svg" width="360" alt="EvoParseq">
 </p>
@@ -12,12 +26,65 @@ requires no browser, WebView or helper executable.
 **This is an independent community project, not affiliated with or endorsed by
 Parsec, Unity or lowlat.** A Parsec account and a compatible host are required.
 
-**This is the development branch (0.9.6-dev.1): Windows plus an Android TV preview.**
-Download [**v0.9.6-dev.1**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6-dev.1)
-for Windows ZIPs and the Android TV APK. This prerelease is installed manually.
-The stable Windows client is [**EvoParseq v0.9.5**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.5)
-on `main`. This branch adds controller support on Windows and Android TV;
-these additions are not included in the stable Windows release.
+**This is the development branch: Windows, Android TV and experimental Linux Flatpak support.**
+The latest stable Windows/Android release is
+[**EvoParseq v0.9.6**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6)
+on `main`. The last published dev release,
+[**v0.9.6-dev.5**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6-dev.5),
+contains Windows ZIPs and the signed Android TV APK, but not Linux.
+The Linux preview is **0.1.17** and is now developed here on `dev`; download its
+Flatpak from successful [dev Linux CI runs](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Adev).
+Windows previews are installed manually; signed Android builds can check the
+prerelease channel in Settings > Updates. Platform capabilities differ; see below.
+
+## Linux Flatpak preview
+
+- **Wayland + Vulkan:** egui desktop UI follows the Windows client's shared
+  wording, logical dimensions and layout, with native desktop window decorations.
+  Login/computer picker and Settings have fixed sizes; the stream is resizable
+  and uses centered aspect fitting. Connection stats is a separate fixed-size native window.
+- **Shared Rust core:** account/2FA, discovery, session preferences, settings,
+  WebRTC/BUD, media ingress, normal input and diagnostic models are reused.
+  Linux adapters provide Vulkan Video/Vulkan, PipeWire, Wayland input and
+  Secret portal credential protection.
+- **Playback:** WebRTC and explicit BUD selection, progressive H.264 or capability-gated HEVC Main 8-bit 4:2:0
+  and stereo WebRTC Opus or BUD Opus/PCM with optional matched 5.1/7.1 output. Original NV12 decoder surfaces feed the same-device Vulkan
+  presentation shader; no application-side decoded-image copy or CPU readback.
+  Shader conversion still costs GPU work: this is GPU-resident rendering,
+  **not the application's Zero copy mode**.
+- **Controls:** normal or opt-in BUD HID mouse/keyboard, controllers/rumble,
+  focused text clipboard, orientation and immersive input. A
+  draggable session icon, host display selection, resolution/bitrate/FPS/pacing
+  requests, fullscreen, local PipeWire mute/volume and Disconnect. Host settings
+  replies and Apply confirmation use the shared Rust models.
+- **Diagnostics:** live overlay and Connection stats, with four Overview cards
+  in a 2-by-2 layout. CPU/RSS are sampled at most once per second and only while
+  Connection stats is open. No GPU utilization sampler or extra render pass is
+  introduced; unavailable measurements remain explicitly unavailable.
+- **Updates:** Help → About and GitHub Flatpak checks; verified Linux packages open
+  in the system installer for user confirmation. CI artifacts must first be
+  published as versioned release assets to be discoverable.
+- **Network:** shared Windows STUN/custom TURN/Cloudflare configuration,
+  direct-only and Force TURN for WebRTC and BUD; protected relay secrets and
+  optional in-memory Cloudflare credentials. Windows-only TCP/TLS QoS stays disabled.
+- **Persistence:** Windows-compatible `settings.json` schema and encrypted
+  remembered sessions through the Linux Secret portal. Passwords and 2FA codes
+  are never saved; protected credentials are not portable between platforms.
+
+Linux currently requires a working Wayland desktop, PipeWire and a driver
+exposing the necessary Vulkan Video H.264 decode and sampleable NV12 surfaces.
+A Flatpak runtime cannot add missing GPU/kernel capabilities. Intel HD 520
+H.264 and HEVC 8-bit playback have been reported working on the maintainer's HP EliteBook 840 G3; that does not
+establish support on every Skylake system or driver. The package defaults to
+`ANV_DEBUG=video-decode` for Mesa Intel's experimental video path.
+
+**Not yet integrated on Linux:** 10-bit/4:4:4 playback, the application's
+Zero copy mode, AI upscaling, runtime GPU switching, verified VRR control and simultaneous multi-display windows.
+The full Settings layout is present; unimplemented controls remain disabled.
+
+See [Linux installation, current scope and diagnostics](linux/README.md) and
+the [video-path audit](linux/VIDEO_PATH.md). The Windows feature list below
+should not be read as Linux feature parity.
 
 ## Android TV preview
 
@@ -32,6 +99,9 @@ these additions are not included in the stable Windows release.
 - Standard gamepads; optional remote D-pad mouse, short/long OK clicks and
   supported OK + direction dragging. Physical mouse/keyboard use normal input
   with optional capture. Windows HID passthrough is not an Android feature.
+- AAudio device recovery, optional custom buffering, BUD PCM and capability-gated
+  5.1/7.1 output; diagnostic logging with save/share export. These additions need
+  live audio-device validation; WebRTC remains stereo Opus.
 
 Live-tested on Xiaomi TV Box S (3rd Gen), Android 14, including BUD at 50 Mbit/s,
 NVIDIA-encoded Main10, remote mouse and a GameSir controller. WebRTC at sustained
@@ -40,7 +110,7 @@ stable. This is a transport-specific observation, **not a universal hardware lim
 MediaCodec submits frames to Surface without CPU pixel readback; physical scanout
 and internal driver/compositor copies are not verified.
 
-Use the [preview release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6-dev.1)
+Use the [preview release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6-dev.5)
 or successful [dev Android CI artifacts](https://github.com/vampywiz17/EvoParseq/actions/workflows/android-tv.yml?query=branch%3Adev)
 for previews; the stable Windows ZIP is not an Android package.
 [Android TV setup, build and limits](android-tv/README.md).
@@ -71,11 +141,11 @@ The Windows features below remain available on this branch.
   and GameSir Android forwarding are live-tested; device-specific rumble and
   disconnect behavior need broader validation.
 - **Input:** two-way Unicode text clipboard; normal mouse/keyboard forwarding;
-  experimental BUD USB HID mouse and keyboard, including relative camera input.
+  BUD USB HID mouse and keyboard, including relative camera input.
 - **Diagnostics:** route, RTT, traffic, FPS, actual decoder/format, audio queues,
   host/local timings and system resource use. Optional bounded event logs record
   failures without continuous mouse/key activity.
-- **Presentation:** Automatic, Low latency, VSync and experimental DXGI VRR,
+- **Presentation:** Automatic, Low latency, VSync and DXGI VRR,
   with reference-safe catch-up after bursts. VRR requires an enabled compatible
   display/driver; DXGI support alone does not verify panel activation. Zero copy
   retains Windows-managed timing. WebRTC uses bounded recent queue history.
@@ -242,10 +312,13 @@ or generated frames are introduced.
   runtime/configuration details remain in event logs. Currently limited to
   8-bit SDR upscaling; 10-bit, 4:4:4 and Zero copy keep their existing paths.
 
+On Windows, Display timing (including VRR), Zero copy presentation and BUD USB HID
+input no longer carry an experimental label. Hardware requirements and fallbacks
+still apply. Linux feature labels and defaults are unchanged.
+
 ## Experimental features and limits
 
-**Vendor HEVC, zero-copy, 10-bit HEVC, 4:4:4, display timing, USB HID and
-multichannel audio remain experimental.** For conservative operation, use H.264,
+**Vendor HEVC, 10-bit HEVC, 4:4:4 and multichannel audio remain experimental.** For conservative operation, use H.264,
 stereo Opus and Automatic timing with experimental options disabled.
 
 - **Video:** live decoded frames remain on the GPU. Normal rendering uses the
@@ -311,3 +384,12 @@ Our code uses the [MIT license](LICENSE). Applicable Parsec service terms and
 third-party licenses still apply. Development did not use Parsec's proprietary
 source code, and EvoParseq does not patch the official host or client. Parsec and
 Unity names and marks belong to their owners; no affiliation is implied.
+
+## Star history
+
+<a href="https://www.star-history.com/#vampywiz17/EvoParseq&amp;Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=vampywiz17/EvoParseq&amp;type=Date&amp;theme=dark">
+    <img alt="EvoParseq GitHub star history" src="https://api.star-history.com/svg?repos=vampywiz17/EvoParseq&amp;type=Date" width="800">
+  </picture>
+</a>

@@ -10,7 +10,11 @@ pub trait NetworkSettings: Send + Sync {
     fn video_gpu(&self) -> Option<crate::connection_settings::GpuPreference>;
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(
+    windows,
+    target_os = "macos",
+    all(target_os = "linux", feature = "desktop-telemetry")
+))]
 impl NetworkSettings for crate::connection_settings::Manager {
     fn resolve(&self) -> BoxFuture<'_, Result<RTCConfiguration>> {
         Box::pin(self.resolve_configuration())
@@ -18,6 +22,7 @@ impl NetworkSettings for crate::connection_settings::Manager {
     fn tcp_qos(&self) -> bool {
         self.view().0.experimental_tcp_qos
     }
+    #[cfg(windows)]
     fn video_gpu(&self) -> Option<crate::connection_settings::GpuPreference> {
         self.view().0.video_gpu
     }

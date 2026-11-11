@@ -298,12 +298,12 @@ impl Window {
             && !self.closing.load(Ordering::Acquire)
     }
     #[cfg(feature = "vendor-video")]
-    pub fn experimental_zero_copy(&self) -> bool {
+    pub fn zero_copy(&self) -> bool {
         self.connection_settings
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
-            .is_some_and(|manager| manager.view().0.experimental_zero_copy)
+            .is_some_and(|manager| manager.view().0.zero_copy)
     }
     pub fn ai_upscale_quality(&self) -> u8 {
         let settings = self

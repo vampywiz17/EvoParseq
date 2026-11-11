@@ -8,8 +8,15 @@ pub mod account_signaling;
 pub mod attempt;
 #[path = "../../../src-native/src/audio_layout.rs"]
 pub mod audio_layout;
+mod audio_preferences;
+#[cfg(any(target_os = "android", test))]
+#[path = "../../../src-native/src/audio_recovery.rs"]
+mod audio_recovery;
 #[path = "../../../src-native/src/audio_stream.rs"]
 pub mod audio_stream;
+#[path = "../../../src-native/src/bud_ingress.rs"]
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub mod bud_ingress;
 #[path = "../../../src-native/src/codec_initialization.rs"]
 pub mod codec_initialization;
 #[path = "../../../src-native/src/control.rs"]
@@ -76,3 +83,9 @@ pub mod input_handoff;
 pub mod keyboard;
 #[path = "../../../src-native/src/viewport.rs"]
 pub mod viewport;
+
+#[path = "../../../src-native/src/release_apk.rs"]
+pub mod release_apk;
+
+#[path = "../../../src-native/src/release_http.rs"]
+mod release_http;

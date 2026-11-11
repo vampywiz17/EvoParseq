@@ -122,12 +122,7 @@ unsafe fn collect(p: &Panel) -> Result<Video> {
         fps: &selected_field(p, 2),
         constant_fps: select(3) == 1,
         rotated: select(4) == 1,
-        immersive: match select(5) {
-            1 => 3,
-            2 => 2,
-            3 => 1,
-            _ => 0,
-        },
+        immersive: crate::input_state::immersive_value(select(5) as usize),
         fullscreen: SendMessageW(p.fullscreen, BM_GETCHECK, 0, 0) == BST_CHECKED as isize,
     }
     .parse()
@@ -797,17 +792,7 @@ pub unsafe fn toggle(
         [24, 199, 370, 44],
     );
     update_displays(hwnd, p);
-    for (i, label) in [
-        "Resolution",
-        "Bandwidth (Mbps)",
-        "Frame rate (FPS)",
-        "Frame pacing",
-        "Orientation",
-        "Immersive mode",
-    ]
-    .iter()
-    .enumerate()
-    {
+    for (i, label) in crate::app_style::forms::SESSION_LABELS.iter().enumerate() {
         control(
             hwnd,
             p,
@@ -850,13 +835,8 @@ pub unsafe fn toggle(
         p,
         25,
         470,
-        &["Disabled", "Mouse", "Keyboard", "Mouse + keyboard"],
-        match video.immersive {
-            1 => "Mouse + keyboard",
-            2 => "Keyboard",
-            3 => "Mouse",
-            _ => "Disabled",
-        },
+        &crate::input_state::IMMERSIVE_LABELS,
+        crate::input_state::IMMERSIVE_LABELS[crate::input_state::immersive_index(video.immersive)],
     );
     p.fullscreen = control(
         hwnd,
@@ -932,7 +912,13 @@ pub unsafe fn toggle(
     for (id, label, x, y, w) in [
         (SETTINGS, "Settings", 24, 838, 178),
         (APPLY, "Apply", 214, 838, 178),
-        (DISCONNECT, "Disconnect", 24, 888, 178),
+        (
+            DISCONNECT,
+            crate::app_style::session::DISCONNECT,
+            crate::app_style::session::DISCONNECT_RECT[0],
+            crate::app_style::session::DISCONNECT_RECT[1],
+            crate::app_style::session::DISCONNECT_RECT[2],
+        ),
         (CLOSE, "Close", 214, 888, 178),
         (HIDE_BUTTON, "Hide button", 24, 938, 178),
         (SECURE_ATTENTION, "Send Ctrl+Alt+Del", 214, 938, 178),
@@ -1079,11 +1065,22 @@ mod tests {
         let button = loop {
             let button = window.native_session_button.load(Ordering::Acquire) as HWND;
             if !button.is_null() {
-                break button;
+                // The handle is published before install() finishes its initial
+                // raise(). Wait for placement before measuring a drag delta.
+                let placed = unsafe {
+                    let mut origin = POINT { x: 16, y: 16 };
+                    let mut rect = RECT::default();
+                    ClientToScreen(window.handle(), &mut origin) != 0
+                        && GetWindowRect(button, &mut rect) != 0
+                        && (rect.left, rect.top) == (origin.x, origin.y)
+                };
+                if placed {
+                    break button;
+                }
             }
             assert!(
                 std::time::Instant::now() < button_deadline,
-                "Session button did not open"
+                "Session button did not reach its initial position"
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         };

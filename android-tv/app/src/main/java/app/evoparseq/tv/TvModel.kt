@@ -38,6 +38,57 @@ internal class TvModel(application: Application) : AndroidViewModel(application)
     private var streamGeneration = 0
     var lastStreamStopReason by mutableStateOf("")
         private set
+    var updateRelease by mutableStateOf<JSONObject?>(null)
+        private set
+    var updateMessage by mutableStateOf("")
+        private set
+    var updateSession by mutableStateOf<Int?>(null)
+        private set
+    val installedVersion: String get() = AppUpdater.version(getApplication())
+
+    fun checkUpdates(prerelease: Boolean) = request {
+        AppUpdater.clearPrepared(getApplication())
+        val reply = JSONObject(NativeCore.checkUpdate(installedVersion, prerelease))
+        val candidate = reply.optJSONObject("release")
+        return@request {
+            updateSession = null
+            updateRelease = candidate
+            updateMessage = if (!reply.optBoolean("ok")) reply.optString("error")
+                else if (candidate == null) "No newer compatible APK was found in this release channel."
+                else "Update available. Download it to continue."
+        }
+    }
+    fun downloadUpdate() = request {
+        val context = getApplication<Application>()
+        val file = java.io.File(context.cacheDir, "evoparseq-update.apk")
+        val prepared = try {
+            val reply = JSONObject(NativeCore.downloadUpdate(file.absolutePath))
+            check(reply.optBoolean("ok")) { reply.optString("error") }
+            AppUpdater.prepare(context, file, reply.getString("version"))
+        } catch (error: Exception) {
+            val detail = if (error is IllegalStateException) error.message ?: "The APK could not be prepared."
+                else "Android could not prepare the update. Check available storage and retry."
+            return@request { updateMessage = detail }
+        } finally { file.delete() }
+        return@request { updateSession = prepared; updateMessage = "APK verified. Choose Install update, then confirm in Android." }
+    }
+    fun installUpdate(activity: android.app.Activity) {
+        try {
+            if (!AppUpdater.canInstall(activity)) {
+                AppUpdater.permission(activity)
+                updateMessage = "Allow EvoParseq to install apps, then return and choose Install update again."
+                return
+            }
+            val id = updateSession ?: return
+            AppUpdater.install(activity, id)
+            updateSession = null
+            updateMessage = "Waiting for Android installation confirmation."
+        } catch (_: Exception) { updateMessage = "Could not start the Android installer. Please retry." }
+    }
+    fun readUpdateResult() {
+        val prefs = getApplication<Application>().getSharedPreferences("app-updates", Context.MODE_PRIVATE)
+        prefs.getString("result", null)?.let { updateMessage = it; prefs.edit().remove("result").apply() }
+    }
     private val preferences = application.getSharedPreferences("tv-requests", Context.MODE_PRIVATE)
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
@@ -47,11 +98,13 @@ internal class TvModel(application: Application) : AndroidViewModel(application)
     private val networkVault = SessionVault(application, "network")
     init {
         request {
+            AppUpdater.clearPrepared(application)
             val previousCrash = recentAppFailure(application)
             val saved = preferences.getString("requests", "") ?: ""
             val reply = JSONObject(NativeCore.settings(saved, "", 0))
+            val diagnosticsReady = runCatching { Diagnostics.configure(application, reply.optJSONObject("settings")?.optBoolean("logging") ?: false) }.getOrDefault(false)
             var restored = false
-            var feedback = reply.optString("error")
+            var feedback = if (diagnosticsReady) reply.optString("error") else "Diagnostic logging is unavailable."
             try {
                 val token = vault.load()
                 if (token != null) {
@@ -143,14 +196,39 @@ internal class TvModel(application: Application) : AndroidViewModel(application)
         request {
             val reply = JSONObject(NativeCore.settings(current, key, index))
             var feedback = reply.optString("error")
-            val saved = reply.optBoolean("ok") && preferences.edit()
+            val configured = reply.optBoolean("ok") && (key != "logging" || Diagnostics.configure(getApplication(), reply.getJSONObject("settings").optBoolean("logging")))
+            if (reply.optBoolean("ok") && !configured) feedback = "Could not configure diagnostic logging."
+            val saved = reply.optBoolean("ok") && configured && preferences.edit()
                 .putString("requests", reply.getJSONObject("settings").toString()).commit()
-            if (reply.optBoolean("ok") && !saved) feedback = "Could not save TV settings."
+            if (reply.optBoolean("ok") && !saved) {
+                if (configured && key == "logging") runCatching {
+                    Diagnostics.configure(getApplication(), JSONObject(current).optBoolean("logging"))
+                }
+                if (configured) feedback = "Could not save TV settings."
+            }
             return@request {
                 if (saved) settings = reply
                 message = if (saved) "Saved on this TV. Applies to the next connection." else feedback
             }
         }
+    }
+
+    var diagnosticMessage by mutableStateOf("")
+        private set
+    fun diagnosticFeedback(text: String) { diagnosticMessage = text }
+    fun prepareDiagnostics(ready: (java.io.File) -> Unit) = request {
+        val file = try { Diagnostics.prepare(getApplication()) } catch (_: Exception) {
+            return@request { diagnosticMessage = "Could not export diagnostics. Check free storage and retry." }
+        }
+        return@request { diagnosticMessage = "Diagnostic archive prepared."; ready(file) }
+    }
+    fun saveDiagnostics(file: java.io.File, uri: android.net.Uri) = request {
+        val ok = runCatching {
+            getApplication<Application>().contentResolver.openOutputStream(uri, "w")!!.use { output ->
+                file.inputStream().use { it.copyTo(output) }
+            }
+        }.isSuccess
+        return@request { diagnosticMessage = if (ok) "Diagnostics saved." else "Could not save diagnostics." }
     }
 
     fun openLocalSetup() = request {
@@ -206,7 +284,7 @@ internal class TvModel(application: Application) : AndroidViewModel(application)
         streamStatus = JSONObject().put("state", "Connecting…")
         worker.execute {
             val reply = runCatching {
-                JSONObject(NativeCore.startStream(surface, host.peer, current, DecoderInventory.choices(), width, height))
+                JSONObject(NativeCore.startStream(surface, host.peer, current, DecoderInventory.choices(), AudioOutputs.inventory(getApplication()), width, height))
             }.getOrElse { JSONObject().put("error", "Could not start hardware streaming on this device.") }
             main.post {
                 if (generation == streamGeneration && !disposed.get()) {

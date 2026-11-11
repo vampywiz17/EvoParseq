@@ -9,12 +9,13 @@ rust-version = "1.90"
 # Shared sources contain Windows-only feature-gated BUD/HID helpers. Accept
 # the cfg name without enabling those helpers; Android uses its own BUD adapter.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("bud"))'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("bud", "desktop-telemetry"))'] }
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+evoparseq-bud = { path = "../../src-native/crates/bud" }
 anyhow = "1"
 serde_json = "1.0.154"
 serde = { version = "1", features = ["derive"] }
@@ -37,11 +38,12 @@ sha2 = "0.10"
 qrcode = { version = "0.14", default-features = false }
 
 [target.'cfg(target_os = "android")'.dependencies]
+libc = "0.2"
 jni = { version = "0.21.1", default-features = false }
-evoparseq-bud = { path = "../../src-native/crates/bud" }
 ndk-sys = { version = "0.6", features = ["media", "audio"] }
 
 [patch.crates-io]
+webrtc-util = { path = "../../src-native/vendor/webrtc-util-0.12.0" }
 dtls = { path = "../../src-native/vendor/dtls-0.13.0" }
 webrtc = { path = "../../src-native/vendor/webrtc-0.14.0" }
 webrtc-ice = { path = "../../src-native/vendor/webrtc-ice-0.14.0" }

@@ -1,0 +1,69 @@
+app-id: io.github.vampywiz17.EvoParseq
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.llvm21
+command: evoparseq-linux
+finish-args:
+  - --share=network
+  - --socket=wayland
+  - --filesystem=xdg-run/pipewire-0
+  - --device=dri
+  - --device=input
+  - --env=ANV_DEBUG=video-decode
+  - --env=XCURSOR_PATH=/run/host/user-share/icons:/run/host/share/icons:/app/share/icons:/usr/share/icons
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm21/bin
+  prepend-ld-library-path: /usr/lib/sdk/llvm21/lib
+  env:
+    LIBCLANG_PATH: /usr/lib/sdk/llvm21/lib
+modules:
+  - name: adwaita-cursors
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/share/icons/Adwaita /app/share/icons/default
+      - cp -a Adwaita/cursors /app/share/icons/Adwaita/
+      - printf '[Icon Theme]\nName=Default\nInherits=Adwaita\n' > /app/share/icons/default/index.theme
+      - install -Dm644 COPYING /app/share/licenses/adwaita-cursors/COPYING
+      - install -Dm644 COPYING_CCBYSA3 /app/share/licenses/adwaita-cursors/COPYING_CCBYSA3
+      - install -Dm644 COPYING_LGPL /app/share/licenses/adwaita-cursors/COPYING_LGPL
+    sources:
+      - type: archive
+        url: https://download.gnome.org/sources/adwaita-icon-theme/46/adwaita-icon-theme-46.2.tar.xz
+        sha256: beb126b9429339ba762e0818d5e73b2c46f444975bf80076366eae2d0f96b5cb
+  - name: evoparseq-linux
+    buildsystem: simple
+    build-commands:
+      - >-
+        cargo test --manifest-path src-native/crates/socket-qos/Cargo.toml --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
+      - >-
+        cargo test --manifest-path linux/Cargo.toml --bin evoparseq-linux linux_ --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
+      - >-
+        cargo test --manifest-path linux/Cargo.toml --bin evoparseq-linux bud_ingress::tests --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
+      - >-
+        cargo test --manifest-path linux/Cargo.toml --bin evoparseq-linux sign_in::tests --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
+      - >-
+        cargo test --manifest-path linux/Cargo.toml --bin evoparseq-linux stats --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
+      - >-
+        for filter in clipboard_sync hid_policy gamepad input_state event_log audio_recovery audio_layout audio_stream network_settings connection_settings::tests::credential_request connection_settings::tests::credential_service session_preferences host_video host_displays frame_timing input_handoff; do cargo test --manifest-path linux/Cargo.toml --bin evoparseq-linux "$filter" --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release || exit; done
+      - >-
+        cargo test --manifest-path linux/Cargo.toml --test video_contract --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release -- --nocapture
+      - >-
+        cargo build --manifest-path linux/Cargo.toml --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
+      - >-
+        install -Dm755 target/$(rustc -vV | sed -n 's/^host: //p')/release/evoparseq-linux /app/bin/evoparseq-linux
+      - install -Dm644 linux/flatpak/io.github.vampywiz17.EvoParseq.desktop -t /app/share/applications
+      - install -Dm644 assets/evoparseq.svg /app/share/icons/hicolor/scalable/apps/io.github.vampywiz17.EvoParseq.svg
+      - install -Dm644 LICENSE /app/share/licenses/evoparseq/LICENSE
+      - install -Dm644 linux/vendor/egui-winit/LICENSE-MIT /app/share/licenses/evoparseq/egui-winit-MIT
+      - install -Dm644 linux/vendor/egui-winit/LICENSE-APACHE /app/share/licenses/evoparseq/egui-winit-APACHE
+      - install -Dm644 linux/vendor/egui-wgpu/LICENSE-MIT /app/share/licenses/evoparseq/egui-wgpu-MIT
+      - install -Dm644 linux/vendor/egui-wgpu/LICENSE-APACHE /app/share/licenses/evoparseq/egui-wgpu-APACHE
+      - install -Dm644 linux/vendor/wgpu-hal/LICENSE.MIT /app/share/licenses/evoparseq/wgpu-hal-MIT
+      - install -Dm644 linux/vendor/wgpu-hal/LICENSE.APACHE /app/share/licenses/evoparseq/wgpu-hal-APACHE
+      - install -Dm644 src-native/crates/bud/vendor/lowlat-client/LICENSE /app/share/licenses/evoparseq/LOWLAT-LICENSE
+    sources:
+      - type: dir
+        path: ../..

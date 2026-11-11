@@ -31,6 +31,7 @@ struct Request {
     prefs: Preferences,
     window: NativeWindow,
     choices: Choices,
+    audio_inventory: crate::audio_preferences::Inventory,
     size: (u32, u32),
     controllers: Arc<crate::input_handoff::Inbox>,
 }
@@ -41,6 +42,7 @@ pub fn start(
     prefs: Preferences,
     window: NativeWindow,
     choices: Choices,
+    audio_inventory: crate::audio_preferences::Inventory,
     size: (u32, u32),
 ) -> Result<()> {
     ensure!(
@@ -81,11 +83,17 @@ pub fn start(
                     prefs,
                     window,
                     choices,
+                    audio_inventory,
                     size,
                     controllers: worker_controllers,
                 },
                 &worker_stop,
                 &worker_status,
+            );
+            crate::event_log::record(
+                if result.is_ok() { "INFO" } else { "ERROR" },
+                "android_stream_ended",
+                json!({"completed":result.is_ok()}),
             );
             worker_stop.store(true, Ordering::Release);
             let mut report = worker_status.lock().unwrap_or_else(|e| e.into_inner());
@@ -170,12 +178,18 @@ fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result<()>
         prefs,
         window,
         choices,
+        audio_inventory,
         size,
         controllers,
     } = request;
     if stop.load(Ordering::Acquire) {
         return Ok(());
     }
+    crate::event_log::record(
+        "INFO",
+        "android_stream_start",
+        json!({"bud":prefs.transport==1,"video_request":prefs.video,"pcm_requested":prefs.audio.pcm,"surround_requested":prefs.audio.surround,"buffer_max_ms":prefs.audio.maximum()}),
+    );
     let socket = Socket::open(&session)?;
     if stop.load(Ordering::Acquire) {
         return Ok(());
@@ -196,6 +210,8 @@ fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result<()>
         chroma_444: false,
     };
     let video = Pipeline::start(window, choices)?;
+    let mut audio =
+        audio_android::Output::prepare(prefs.audio, &audio_inventory, prefs.transport == 1);
     let attempt = Transport::start(
         &id,
         &peer,
@@ -204,6 +220,8 @@ fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result<()>
         prefs.transport == 1,
         video.clone(),
         crate::network::current(),
+        prefs.audio,
+        audio.layout(),
     )?;
     let mut connection = Connection {
         attempt,
@@ -216,12 +234,13 @@ fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result<()>
         .attempt
         .audio_receiver()
         .context("Audio pipeline unavailable")?;
-    let audio = audio_android::Output::open(receiver.clone())?;
+    audio.attach(receiver.clone())?;
     let mut pads = crate::gamepad::Manager::default();
     let mut desktop = crate::desktop_input::Engine::default();
     let mut last_pointer = 0u64;
     let mut motors = crate::gamepad_android::Output::default();
     let mut controller_batch = std::collections::VecDeque::new();
+    let mut diagnostic_update = Instant::now();
     let mut configured = false;
     let mut queried = false;
     let mut host_config = crate::host_video::Config::default();
@@ -367,10 +386,18 @@ fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result<()>
                 last_pointer = pointer;
             }
         }
-        audio.check()?;
+        audio.tick(Instant::now());
         if update.elapsed() >= Duration::from_millis(500) {
             let snapshot = connection.video.snapshot();
             desktop.geometry((snapshot.width, snapshot.height));
+            if diagnostic_update.elapsed() >= Duration::from_secs(10) {
+                crate::event_log::record(
+                    "INFO",
+                    "android_media_status",
+                    json!({"codec":snapshot.codec,"width":snapshot.width,"height":snapshot.height,"depth":snapshot.depth,"audio":receiver.snapshot(),"audio_output":audio.snapshot()}),
+                );
+                diagnostic_update = Instant::now();
+            }
             let mut network = connection.attempt.network_diagnostics();
             let bytes = network["received_bytes"]
                 .as_array()
@@ -409,6 +436,9 @@ fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result<()>
                 "No video output received within 30 seconds"
             );
             update = Instant::now();
+        }
+        if connection.attempt.more_media_pending() {
+            continue;
         }
         thread::park_timeout(Duration::from_millis(if desktop.ticking() {
             16

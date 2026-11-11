@@ -5,8 +5,6 @@ use crate::connection_settings::{full_chroma_vendor_allowed, GpuPreference, Mana
 use anyhow::{Context, Result};
 use zeroize::Zeroizing;
 
-pub const TCP_QOS_LABEL: &str = "TCP/TLS QoS";
-pub const TCP_QOS_HINT: &str = "Windows outgoing TURN traffic only; network support varies.\nUnsupported or refused: continue unmarked.\nReconnect after changing.";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AiUpscaler {
     Unavailable,
@@ -60,10 +58,6 @@ impl AiUpscaler {
         }
     }
 }
-pub const INPUT_MODE_HINT: &str = "Standard input or experimental USB HID over BUD.\nMouse and keyboard can be selected independently.";
-pub const HID_REQUIREMENTS_HINT: &str = "Enable USB/Yubikey passthrough on the host.\nHID mouse uses the primary display only.\nUse the same keyboard layout on host and client.";
-pub const HID_COMPATIBILITY_HINT: &str = "Absolute desktop and relative camera movement.\nCamera mode follows the host cursor state.\nKeyboard layout is not switched automatically.";
-pub const DISPLAY_TIMING_HINT: &str = "Experimental: normal GPU rendering; reconnect to apply.\nVRR needs an enabled compatible monitor and driver.\nZero copy keeps Windows-managed timing.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -83,7 +77,7 @@ impl Tab {
     }
     pub fn notice(self) -> &'static str {
         match self {
-            Self::Network => "ICE chooses the route automatically unless Force TURN relay is enabled.\nChanges apply to your next connection.",
+            Self::Network => crate::network_settings::NOTICE,
             Self::Video => "Video options are requests/preferences, not guaranteed results; compatibility fallback may apply.\nCheck Connection stats for the actual stream format, decoder and fallback.\nVideo changes apply to your next connection.",
             Self::Audio => "Audio changes apply on your next connection.",
             Self::Input => "Enable BUD on the Network tab to use HID input.\nInput changes apply to your next connection.",
@@ -91,132 +85,10 @@ impl Tab {
     }
 }
 
-/// Compound choices retain the existing settings schema and transport rules.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum VideoFormat {
-    H264,
-    Hevc8,
-    Hevc10,
-}
-impl VideoFormat {
-    pub const ALL: [Self; 3] = [Self::H264, Self::Hevc8, Self::Hevc10];
-    pub const LABELS: [&'static str; 3] = [
-        "H.264",
-        "H.265 / HEVC (8-bit)",
-        "H.265 / HEVC (10-bit, experimental)",
-    ];
-    pub fn current(s: &Settings) -> Self {
-        if !s.prefer_hevc {
-            Self::H264
-        } else if s.experimental_ten_bit {
-            Self::Hevc10
-        } else {
-            Self::Hevc8
-        }
-    }
-    pub fn apply(self, s: &mut Settings) {
-        s.prefer_hevc = self != Self::H264;
-        // Keep a dormant preference when HEVC is disabled, as older settings do.
-        if self != Self::H264 {
-            s.experimental_ten_bit = self == Self::Hevc10;
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RouteMode {
-    Automatic,
-    DirectOnly,
-    ForceRelay,
-}
-impl RouteMode {
-    pub const ALL: [Self; 3] = [Self::Automatic, Self::DirectOnly, Self::ForceRelay];
-    pub const LABELS: [&'static str; 3] = [
-        "Automatic (direct or TURN)",
-        "Direct only (STUN / LAN / VPN)",
-        "Force TURN relay",
-    ];
-    pub fn current(s: &Settings) -> Self {
-        if s.stun_only {
-            Self::DirectOnly
-        } else if s.force_relay {
-            Self::ForceRelay
-        } else {
-            Self::Automatic
-        }
-    }
-    pub fn apply(self, s: &mut Settings) {
-        s.stun_only = self == Self::DirectOnly;
-        s.force_relay = self == Self::ForceRelay;
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InputMode {
-    Standard,
-    HidMouse,
-    HidKeyboard,
-    HidBoth,
-}
-impl InputMode {
-    pub const ALL: [Self; 4] = [
-        Self::Standard,
-        Self::HidMouse,
-        Self::HidKeyboard,
-        Self::HidBoth,
-    ];
-    pub const LABELS: [&'static str; 4] = [
-        "Standard input",
-        "USB HID mouse (experimental)",
-        "USB HID keyboard (experimental)",
-        "USB HID mouse + keyboard (experimental)",
-    ];
-    pub fn current(s: &Settings) -> Self {
-        #[cfg(feature = "bud")]
-        {
-            match (s.experimental_hid_mouse, s.experimental_hid_keyboard) {
-                (false, false) => Self::Standard,
-                (true, false) => Self::HidMouse,
-                (false, true) => Self::HidKeyboard,
-                (true, true) => Self::HidBoth,
-            }
-        }
-        #[cfg(not(feature = "bud"))]
-        {
-            let _ = s;
-            Self::Standard
-        }
-    }
-    pub fn apply(self, s: &mut Settings) {
-        #[cfg(feature = "bud")]
-        {
-            s.experimental_hid_mouse = matches!(self, Self::HidMouse | Self::HidBoth);
-            s.experimental_hid_keyboard = matches!(self, Self::HidKeyboard | Self::HidBoth);
-        }
-        #[cfg(not(feature = "bud"))]
-        {
-            let _ = (self, s);
-        }
-    }
-}
-pub enum BinaryChoice {
-    TcpQos,
-    Chroma,
-    Rendering,
-    AudioBuffer,
-    AudioCodec,
-    Speakers,
-}
-impl BinaryChoice {
-    pub fn labels(self) -> [&'static str; 2] {
-        match self {
-            Self::TcpQos => ["Off (default)", "Audio/video QoS (experimental)"],
-            Self::Chroma => ["4:2:0", "Prefer 4:4:4 (experimental)"],
-            Self::Rendering => ["Normal GPU rendering", "Zero copy (experimental, HEVC)"],
-            Self::AudioBuffer => ["Default (core limits)", "Custom limits"],
-            Self::AudioCodec => ["Opus", "Allow raw PCM (BUD)"],
-            Self::Speakers => ["Stereo", "Match output layout (experimental, BUD)"],
-        }
-    }
-}
+pub use crate::connection_settings::BinaryChoice;
+pub use crate::connection_settings::InputMode;
+pub use crate::connection_settings::RouteMode;
+pub use crate::connection_settings::VideoFormat;
 
 pub struct Availability {
     pub bud: bool,
@@ -316,27 +188,22 @@ impl Form {
         settings.nvidia_vsr = settings.nvidia_vsr.min(4);
         // Preserve the existing parse order and validation even for inactive
         // numeric fields. Domain/secret validation remains in Manager::save.
-        settings.audio_min_buffer_ms = self
-            .audio_min
-            .parse()
-            .context("Enter an audio minimum in milliseconds")?;
-        settings.audio_max_buffer_ms = self
-            .audio_max
-            .parse()
-            .context("Enter an audio maximum in milliseconds")?;
+        crate::network_settings::apply_audio_fields(
+            &mut settings,
+            &self.audio_min,
+            &self.audio_max,
+        )?;
         settings.video_gpu = self
             .gpu_selection
             .and_then(|i| self.gpu_choices.get(i))
             .context("Choose Automatic or an available video GPU")?
             .clone();
-        settings.stun_urls = urls(&self.stun_urls);
-        settings.turn_urls = urls(&self.turn_urls);
-        settings.custom_username = settings.custom_username.trim().into();
-        settings.turn_key_id = settings.turn_key_id.trim().into();
-        settings.ttl = self
-            .ttl
-            .parse()
-            .context("Enter a valid credential lifetime")?;
+        crate::network_settings::apply_fields(
+            &mut settings,
+            &self.stun_urls,
+            &self.turn_urls,
+            &self.ttl,
+        )?;
         Ok(settings)
     }
     pub fn save(&mut self, manager: &Manager) -> bool {
@@ -356,7 +223,7 @@ impl Form {
                 self.token = Zeroizing::new(String::new());
                 self.forget_password = false;
                 self.forget_token = false;
-                self.feedback = "Settings saved. They apply on your next connection.".into();
+                self.feedback = crate::network_settings::SAVED.into();
                 true
             }
             Err(error) => {
@@ -366,20 +233,6 @@ impl Form {
         }
     }
 }
-fn urls(text: &str) -> Vec<String> {
-    text.lines()
-        .map(str::trim)
-        .filter(|u| !u.is_empty())
-        .map(|u| {
-            if let Some((scheme, rest)) = u.split_once(':') {
-                format!("{}:{rest}", scheme.to_ascii_lowercase())
-            } else {
-                u.into()
-            }
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,7 +269,7 @@ mod tests {
         form.values.experimental_chroma_444 = true;
         #[cfg(feature = "vendor-video")]
         {
-            form.values.experimental_zero_copy = true;
+            form.values.zero_copy = true;
         }
         for vendor in [Some(0x10de), Some(0x8086), Some(0x1002), None] {
             for hevc in [false, true] {
@@ -430,7 +283,7 @@ mod tests {
                 assert_eq!(form.values.experimental_chroma_444, eligible);
                 assert!(form.values.experimental_ten_bit);
                 #[cfg(feature = "vendor-video")]
-                assert!(form.values.experimental_zero_copy);
+                assert!(form.values.zero_copy);
             }
         }
         // A selected adapter overrides Automatic's vendor; a missing list
@@ -456,8 +309,8 @@ mod tests {
         form.values.experimental_surround_audio = true;
         #[cfg(feature = "bud")]
         {
-            form.values.experimental_hid_mouse = true;
-            form.values.experimental_hid_keyboard = true;
+            form.values.hid_mouse = true;
+            form.values.hid_keyboard = true;
         }
         form.turn_urls = "turns:example.invalid:443?transport=tcp".into();
         for cloudflare in [false, true] {
@@ -488,8 +341,8 @@ mod tests {
         {
             form.values.bud = true;
             assert!(form.availability().bud);
-            assert!(form.values.experimental_hid_mouse);
-            assert!(form.values.experimental_hid_keyboard);
+            assert!(form.values.hid_mouse);
+            assert!(form.values.hid_keyboard);
         }
         assert!(form.values.allow_raw_audio && form.values.experimental_surround_audio);
         assert!(form.turn_urls.ends_with("transport=tcp"));

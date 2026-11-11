@@ -3,6 +3,10 @@ package app.evoparseq.tv
 /** Control/lifecycle commands only. Decoded pixels never cross JNI. */
 internal object NativeCore {
     init { System.loadLibrary("evoparseq_tv") }
+    external fun configureDiagnostics(directory: String, enabled: Boolean): String
+    external fun flushDiagnostics(): String
+    external fun checkUpdate(installed: String, prerelease: Boolean): String
+    external fun downloadUpdate(destination: String): String
     external fun signIn(email: String, password: String, tfa: String): String
     external fun rememberSession(vault: SessionVault): String
     external fun restoreSession(token: ByteArray): String
@@ -17,7 +21,7 @@ internal object NativeCore {
     external fun releaseSession()
     external fun settings(current: String, field: String, index: Int): String
     external fun startStream(surface: android.view.Surface, peer: String, preferences: String,
-        decoders: String, width: Int, height: Int): String
+        decoders: String, audioOutputs: String, width: Int, height: Int): String
     external fun stopStream()
     external fun streamStatus(): String
     external fun controllerAdapter(adapter: ControllerInput?)

@@ -57,19 +57,62 @@ jobs:
             printf 'set(ANDROID_ABI "%s" CACHE STRING "")\nset(ANDROID_PLATFORM android-29 CACHE STRING "")\ninclude("%s/build/cmake/android.toolchain.cmake")\n' "$abi" "$ANDROID_NDK_HOME" > "$CMAKE_TOOLCHAIN_FILE"
             cargo ndk -t "$abi" --platform 29 -o ../app/src/main/jniLibs build --locked --release
             cargo ndk -t "$abi" --platform 29 clippy --locked -- -D warnings
+            # API-32 mask functions must remain optional runtime lookups. A strong
+            # import would prevent loading the whole core on API 29-31.
+            "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" --dyn-syms --wide "../app/src/main/jniLibs/$abi/libevoparseq_tv.so" > "$RUNNER_TEMP/audio-symbols-$abi.txt"
+            if grep -E 'UND.*AAudioStream(Builder_setChannelMask|_getChannelMask)' "$RUNNER_TEMP/audio-symbols-$abi.txt"; then
+              echo 'New AAudio API was linked strongly; older Android loading would fail'
+              exit 1
+            fi
           done
+      - name: Restore protected release signing key
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_TV_KEYSTORE_BASE64 }}
+          PASSWORD: ${{ secrets.ANDROID_TV_KEYSTORE_PASSWORD }}
+        shell: bash
+        run: |
+          test -n "$KEYSTORE" && test -n "$PASSWORD" || { echo 'Android release signing secrets are required'; exit 1; }
+          umask 077
+          printf '%s' "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/evoparseq-tv.p12"
+          keytool -list -keystore "$RUNNER_TEMP/evoparseq-tv.p12" -storetype PKCS12 -storepass:env PASSWORD -alias evoparseq-tv > /dev/null
       - name: Build and lint TV application
         working-directory: android-tv
-        run: gradle --no-daemon assembleDebug lintDebug
+        env:
+          ANDROID_TV_KEYSTORE: ${{ runner.temp }}/evoparseq-tv.p12
+          ANDROID_TV_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_TV_KEYSTORE_PASSWORD }}
+        run: gradle --no-daemon assembleRelease lintRelease
+      - name: Verify signed APK
+        run: '"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs android-tv/app/build/outputs/apk/release/app-release.apk'
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/evoparseq-tv.p12"
       - name: Describe preview artifact
         run: |
           mkdir -p dist/android-tv
-          cp android-tv/app/build/outputs/apk/debug/app-debug.apk dist/android-tv/EvoParseq-TV-preview.apk
+          cp android-tv/app/build/outputs/apk/release/app-release.apk dist/android-tv/EvoParseq-TV.apk
           cp android-tv/README.md LICENSE dist/android-tv/
+          cp src-native/vendor/webrtc-0.14.0/LICENSE-MIT dist/android-tv/WEBRTC-LICENSE-MIT.txt
+          cp src-native/vendor/webrtc-0.14.0/LICENSE-APACHE dist/android-tv/WEBRTC-LICENSE-APACHE.txt
+          cp src-native/vendor/webrtc-util-0.12.0/LICENSE-MIT dist/android-tv/WEBRTC-UTIL-LICENSE-MIT.txt
+          cp src-native/vendor/webrtc-util-0.12.0/LICENSE-APACHE dist/android-tv/WEBRTC-UTIL-LICENSE-APACHE.txt
+          cp src-native/vendor/webrtc-0.14.0/LOCAL-CHANGES.md dist/android-tv/WEBRTC-LOCAL-CHANGES.md
+          cp src-native/vendor/dtls-0.13.0/LICENSE-MIT dist/android-tv/DTLS-LICENSE-MIT.txt
+          cp src-native/vendor/dtls-0.13.0/LICENSE-APACHE dist/android-tv/DTLS-LICENSE-APACHE.txt
+          cp src-native/vendor/webrtc-util-0.12.0/LOCAL-CHANGES.md dist/android-tv/WEBRTC-UTIL-LOCAL-CHANGES.md
+          cp src-native/vendor/dtls-0.13.0/EVOPARSEQ.md dist/android-tv/DTLS-LOCAL-CHANGES.md
+          cp src-native/vendor/webrtc-ice-0.14.0/LOCAL-CHANGES.md dist/android-tv/ICE-LOCAL-CHANGES.md
+          cp src-native/vendor/turn-0.11.0/LOCAL-CHANGES.md dist/android-tv/TURN-LOCAL-CHANGES.md
+          for opus in "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/libopus_sys-0.3.3; do
+            if [ -f "$opus/LICENSE" ]; then
+              cp "$opus/LICENSE" dist/android-tv/LIBOPUS-SYS-LICENSE.txt
+              cp "$opus/opus/COPYING" dist/android-tv/OPUS-LICENSE.txt
+            fi
+          done
+          test -s dist/android-tv/OPUS-LICENSE.txt
           cp src-native/crates/bud/vendor/lowlat-client/LICENSE dist/android-tv/LOWLAT-LICENSE.txt
           git rev-parse HEAD > dist/android-tv/SOURCE.txt
-          sha256sum dist/android-tv/EvoParseq-TV-preview.apk > dist/android-tv/SHA256.txt
-          cp android-tv/app/build/reports/lint-results-debug.html dist/android-tv/
+          sha256sum dist/android-tv/EvoParseq-TV.apk > dist/android-tv/SHA256.txt
+          cp android-tv/app/build/reports/lint-results-release.html dist/android-tv/
       - uses: actions/upload-artifact@v4
         with:
           name: EvoParseq-Android-TV-preview

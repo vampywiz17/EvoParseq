@@ -100,6 +100,8 @@ pub struct Session {
     audio_layout: Option<(u8, u32)>,
     hid_input: (bool, bool),
     cipher: Option<&'static str>,
+    #[cfg(target_os = "linux")]
+    linux_qos: bool,
 }
 
 impl Session {
@@ -141,6 +143,8 @@ impl Session {
             audio_layout: None,
             hid_input: (false, false),
             cipher: None,
+            #[cfg(target_os = "linux")]
+            linux_qos: false,
         })
     }
 
@@ -229,10 +233,22 @@ impl Session {
         self.client.send_user_data(id, text)
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn set_linux_qos(&mut self, enabled: bool) {
+        self.linux_qos = enabled;
+    }
+
     pub fn offer(&mut self, id: &str, route: Route) -> Result<Credentials> {
         ensure!(!id.is_empty() && id.len() <= 256, "invalid BUD attempt id");
         ensure!(self.attempt.is_none(), "BUD attempt already active");
         let mut config = route.configure();
+        #[cfg(target_os = "linux")]
+        {
+            config.linux_qos = self.linux_qos;
+            if let Some(relay) = &mut config.relay {
+                relay.tcp_qos = self.linux_qos;
+            }
+        }
         config.video.hevc = self.prefer_hevc;
         config.video.ten_bit = self.ten_bit;
         config.video.chroma_444 = self.chroma_444;

@@ -405,15 +405,12 @@ fn build(mtm: MainThreadMarker, manager: Arc<Manager>) {
     let input = b.popup("Input mode", &InputMode::LABELS);
     #[cfg(feature = "bud")]
     for (caption, text) in [
-        ("", crate::settings_model::INPUT_MODE_HINT),
+        ("", crate::app_style::forms::INPUT_MODE.help),
         (
             "HID requirements",
-            crate::settings_model::HID_REQUIREMENTS_HINT,
+            crate::app_style::forms::HID_REQUIREMENTS.help,
         ),
-        (
-            "Compatibility",
-            crate::settings_model::HID_COMPATIBILITY_HINT,
-        ),
+        ("Compatibility", crate::app_style::forms::COMPATIBILITY.help),
     ] {
         b.hint(caption, text);
     }

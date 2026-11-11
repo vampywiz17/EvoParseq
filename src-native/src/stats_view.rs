@@ -31,15 +31,19 @@ impl Tab {
     }
     fn section(label: &str) -> Self {
         match label {
-            "NETWORK" | "BUD DELIVERY" | "SECURITY" => Self::Network,
-            "VIDEO" => Self::Video,
-            "AUDIO" => Self::Audio,
-            "LOCAL VIDEO TIMING" | "HOST TIMING" => Self::Timing,
+            crate::app_style::forms::STAT_NETWORK
+            | crate::app_style::forms::STAT_BUD_DELIVERY
+            | crate::app_style::forms::STAT_SECURITY => Self::Network,
+            crate::app_style::forms::STAT_VIDEO => Self::Video,
+            crate::app_style::forms::STAT_AUDIO => Self::Audio,
+            crate::app_style::forms::STAT_LOCAL_VIDEO_TIMING
+            | crate::app_style::forms::STAT_HOST_TIMING_SECTION => Self::Timing,
             _ => Self::Overview,
         }
     }
 }
 
+#[derive(Clone)]
 pub struct Presentation<'a> {
     pub status: &'a str,
     pub cards: Vec<(&'static str, String)>,
@@ -57,10 +61,16 @@ impl<'a> Presentation<'a> {
             section == tab
                 || (tab == Tab::Overview
                     && match section {
-                        Tab::Network => matches!(label.as_str(), "Transport" | "Route"),
+                        Tab::Network => matches!(
+                            label.as_str(),
+                            crate::app_style::forms::STAT_TRANSPORT
+                                | crate::app_style::forms::STAT_ROUTE
+                        ),
                         Tab::Video => matches!(
                             label.as_str(),
-                            "Codec" | "Resolution" | "Present submissions"
+                            crate::app_style::forms::STAT_CODEC
+                                | crate::app_style::forms::STAT_RESOLUTION
+                                | crate::app_style::forms::STAT_PRESENT_SUBMISSIONS
                         ),
                         _ => false,
                     })
@@ -89,6 +99,18 @@ impl<'a> Presentation<'a> {
         memory: Option<MemoryUsage>,
         timing: &crate::frame_timing::Snapshot,
     ) -> Self {
+        Self::with_missing_values(sample, values, usage, memory, timing, false)
+    }
+    /// A view can retain unavailable metrics without inventing values or
+    /// changing the established compact BUD presentation on other surfaces.
+    pub fn with_missing_values(
+        sample: &'a Sample,
+        values: &Values,
+        usage: (Option<f64>, Option<f64>, Option<f64>),
+        memory: Option<MemoryUsage>,
+        timing: &crate::frame_timing::Snapshot,
+        keep_missing: bool,
+    ) -> Self {
         let stale = sample.at.elapsed().as_secs() > 4 && sample.state == "connected";
         let status = if stale {
             "Waiting for fresh telemetry"
@@ -102,7 +124,7 @@ impl<'a> Presentation<'a> {
             ("Outgoing traffic", number(values.outgoing, "Mbps")),
         ];
         #[cfg(feature = "bud")]
-        let mut cards: Vec<_> = if sample.bud.is_some() {
+        let mut cards: Vec<_> = if sample.bud.is_some() && !keep_missing {
             cards
                 .into_iter()
                 .filter(|(_, value)| value != "—")
@@ -120,16 +142,19 @@ impl<'a> Presentation<'a> {
                 value.push('—');
             }
         }
-        let mut rows = rows(sample, values, usage);
+        let mut rows = rows_with_missing(sample, values, usage, keep_missing);
         if let Some(memory) = memory {
             for (label, bytes) in [
-                ("Memory resident (total)", Some(memory.working_set_bytes)),
                 (
-                    "Memory resident (private)",
+                    crate::app_style::forms::STAT_MEMORY_RESIDENT_TOTAL,
+                    Some(memory.working_set_bytes),
+                ),
+                (
+                    crate::app_style::forms::STAT_MEMORY_RESIDENT_PRIVATE,
                     memory.private_working_set_bytes,
                 ),
                 (
-                    "Memory committed (private)",
+                    crate::app_style::forms::STAT_MEMORY_COMMITTED_PRIVATE,
                     Some(memory.private_committed_bytes),
                 ),
             ] {
@@ -183,13 +208,19 @@ fn host_timing_rows(s: &crate::frame_timing::Snapshot) -> Vec<(String, String)> 
     if !s.requested && !s.request_failed {
         return rows;
     }
-    rows.push(("HOST TIMING".into(), String::new()));
+    rows.push((
+        crate::app_style::forms::STAT_HOST_TIMING_SECTION.into(),
+        String::new(),
+    ));
     if s.request_failed {
-        rows.push(("Host timing".into(), "Unavailable (request failed)".into()));
+        rows.push((
+            crate::app_style::forms::STAT_HOST_TIMING.into(),
+            "Unavailable (request failed)".into(),
+        ));
         return rows;
     }
     rows.push((
-        "Timing values".into(),
+        crate::app_style::forms::STAT_TIMING_VALUES.into(),
         "Latest / average / peak (ms)".into(),
     ));
     let value = |series: &crate::frame_timing::Series, i: usize| {
@@ -216,7 +247,10 @@ fn host_timing_rows(s: &crate::frame_timing::Snapshot) -> Vec<(String, String)> 
         }
     };
     if s.video.iter().all(Option::is_none) {
-        rows.push(("Video timing".into(), "Not reported by host".into()));
+        rows.push((
+            crate::app_style::forms::STAT_VIDEO_TIMING.into(),
+            "Not reported by host".into(),
+        ));
     }
     for (stream, series) in s.video.iter().enumerate() {
         let Some(series) = series else {
@@ -245,37 +279,67 @@ fn host_timing_rows(s: &crate::frame_timing::Snapshot) -> Vec<(String, String)> 
         rows.push((format!("{prefix}Video report age"), age(series)));
     }
     if let Some(series) = &s.audio {
-        rows.push(("Audio processing".into(), value(series, 0)));
-        rows.push(("Audio block interval".into(), value(series, 2)));
+        rows.push((
+            crate::app_style::forms::STAT_AUDIO_PROCESSING.into(),
+            value(series, 0),
+        ));
+        rows.push((
+            crate::app_style::forms::STAT_AUDIO_BLOCK_INTERVAL.into(),
+            value(series, 2),
+        ));
         // The intermediate host slot is not a complete per-peer codec timing.
-        rows.push(("Audio timing reports".into(), series.count.to_string()));
-        rows.push(("Audio report age".into(), age(series)));
+        rows.push((
+            crate::app_style::forms::STAT_AUDIO_TIMING_REPORTS.into(),
+            series.count.to_string(),
+        ));
+        rows.push((
+            crate::app_style::forms::STAT_AUDIO_REPORT_AGE.into(),
+            age(series),
+        ));
     } else {
-        rows.push(("Audio timing".into(), "Not reported by host".into()));
+        rows.push((
+            crate::app_style::forms::STAT_AUDIO_TIMING.into(),
+            "Not reported by host".into(),
+        ));
     }
     if s.rejected > 0 {
-        rows.push(("Invalid timing reports".into(), s.rejected.to_string()));
+        rows.push((
+            crate::app_style::forms::STAT_INVALID_TIMING_REPORTS.into(),
+            s.rejected.to_string(),
+        ));
     }
     if s.unknown > 0 {
-        rows.push(("Unknown timing formats".into(), s.unknown.to_string()));
+        rows.push((
+            crate::app_style::forms::STAT_UNKNOWN_TIMING_FORMATS.into(),
+            s.unknown.to_string(),
+        ));
     }
     rows
 }
 fn webrtc_network_rows(s: &Sample, row: &mut impl FnMut(&str, String)) {
-    row("NETWORK", String::new());
+    row(crate::app_style::forms::STAT_NETWORK, String::new());
     row(
-        "Route",
+        crate::app_style::forms::STAT_ROUTE,
         if s.state == "connected" && s.at.elapsed().as_secs() > 4 {
             "Unverified (telemetry unavailable)".into()
         } else {
             s.route.into()
         },
     );
-    row("Local candidate", reported(&s.local));
-    row("Remote candidate", reported(&s.remote));
-    row("Transport", reported(&s.protocol));
     row(
-        "TURN server in use",
+        crate::app_style::forms::STAT_LOCAL_CANDIDATE,
+        reported(&s.local),
+    );
+    row(
+        crate::app_style::forms::STAT_REMOTE_CANDIDATE,
+        reported(&s.remote),
+    );
+    row(
+        crate::app_style::forms::STAT_TRANSPORT,
+        reported(&s.protocol),
+    );
+    row(
+        crate::app_style::forms::STAT_TURN_SERVER_IN_USE,
         s.turn_server.clone().unwrap_or_else(|| {
             if s.route == "Direct — no TURN" {
                 "None".into()
@@ -285,17 +349,17 @@ fn webrtc_network_rows(s: &Sample, row: &mut impl FnMut(&str, String)) {
         }),
     );
     row(
-        "TURN transport",
+        crate::app_style::forms::STAT_TURN_TRANSPORT,
         s.turn_protocol
             .clone()
             .unwrap_or_else(|| "Not reported".into()),
     );
 }
 fn webrtc_security_rows(s: &Sample, row: &mut impl FnMut(&str, String)) {
-    row("SECURITY", String::new());
-    row("DTLS state", s.dtls.clone());
+    row(crate::app_style::forms::STAT_SECURITY, String::new());
+    row(crate::app_style::forms::STAT_DTLS_STATE, s.dtls.clone());
     row(
-        "Encryption",
+        crate::app_style::forms::STAT_ENCRYPTION,
         if s.dtls == "connected" {
             "DTLS protects SCTP data channels".into()
         } else {
@@ -303,10 +367,19 @@ fn webrtc_security_rows(s: &Sample, row: &mut impl FnMut(&str, String)) {
         },
     );
 }
+#[cfg(test)]
 fn rows(
     s: &Sample,
     v: &Values,
     cpu: (Option<f64>, Option<f64>, Option<f64>),
+) -> Vec<(String, String)> {
+    rows_with_missing(s, v, cpu, false)
+}
+fn rows_with_missing(
+    s: &Sample,
+    v: &Values,
+    cpu: (Option<f64>, Option<f64>, Option<f64>),
+    keep_missing: bool,
 ) -> Vec<(String, String)> {
     let values = v;
     let recent_fresh = s.at.elapsed() <= crate::stats_recent::WINDOW;
@@ -314,30 +387,33 @@ fn rows(
     let mut row = |a: &str, b: String| rows.push((a.into(), b));
     #[cfg(feature = "bud")]
     if let Some(bud) = &s.bud {
-        row("NETWORK", String::new());
-        row("Transport", "BUD / UDP".into());
+        row(crate::app_style::forms::STAT_NETWORK, String::new());
+        row(crate::app_style::forms::STAT_TRANSPORT, "BUD / UDP".into());
         if bud.connected {
             row(
-                "Route",
+                crate::app_style::forms::STAT_ROUTE,
                 if bud.relay { "TURN relay" } else { "Direct" }.into(),
             );
         }
         if let Some(carrier) = bud.relay_transport.filter(|_| bud.relay) {
-            row("TURN transport", carrier.to_uppercase());
+            row(
+                crate::app_style::forms::STAT_TURN_TRANSPORT,
+                carrier.to_uppercase(),
+            );
         }
         row(
-            "Host encode time",
+            crate::app_style::forms::STAT_HOST_ENCODE_TIME,
             bud.encode_ms
                 .map(|encode| number(Some(encode), "ms"))
                 .unwrap_or_else(|| "Waiting for host".into()),
         );
-        row("BUD DELIVERY", String::new());
+        row(crate::app_style::forms::STAT_BUD_DELIVERY, String::new());
         for (name, channel) in ["Control", "Video", "Audio"].iter().zip(&bud.channels) {
             row(&format!("{name} late fragments"), channel.late.to_string());
             row(&format!("{name} NACK requests"), channel.nacks.to_string());
         }
         row(
-            "Duplicate fragments",
+            crate::app_style::forms::STAT_DUPLICATE_FRAGMENTS,
             bud.channels
                 .iter()
                 .map(|c| c.duplicates)
@@ -345,7 +421,7 @@ fn rows(
                 .to_string(),
         );
         row(
-            "Outside receive window",
+            crate::app_style::forms::STAT_OUTSIDE_RECEIVE_WINDOW,
             bud.channels
                 .iter()
                 .map(|c| c.window_drops)
@@ -353,24 +429,33 @@ fn rows(
                 .to_string(),
         );
         row(
-            "Compressed video backlog",
+            crate::app_style::forms::STAT_COMPRESSED_VIDEO_BACKLOG,
             format!(
                 "{} messages / {} ms",
                 bud.video_backlog, bud.video_backlog_ms
             ),
         );
-        row("Skipped encoded pictures", bud.skipped_video.to_string());
-        row("Audio receive pool drops", bud.audio_pool_drops.to_string());
-        row("Input queue drops", bud.input_drops.to_string());
+        row(
+            crate::app_style::forms::STAT_SKIPPED_ENCODED_PICTURES,
+            bud.skipped_video.to_string(),
+        );
+        row(
+            crate::app_style::forms::STAT_AUDIO_RECEIVE_POOL_DROPS,
+            bud.audio_pool_drops.to_string(),
+        );
+        row(
+            crate::app_style::forms::STAT_INPUT_QUEUE_DROPS,
+            bud.input_drops.to_string(),
+        );
     } else {
         webrtc_network_rows(s, &mut row);
     }
     #[cfg(not(feature = "bud"))]
     webrtc_network_rows(s, &mut row);
-    row("VIDEO", String::new());
+    row(crate::app_style::forms::STAT_VIDEO, String::new());
     let video = s.video.as_ref();
     row(
-        "Codec",
+        crate::app_style::forms::STAT_CODEC,
         s.codec
             .or_else(|| video.and_then(|x| x.codec))
             .map(|c| c.name())
@@ -378,7 +463,7 @@ fn rows(
             .into(),
     );
     row(
-        "Profile",
+        crate::app_style::forms::STAT_PROFILE,
         s.profile
             .map(|p| {
                 if s.codec == Some(crate::video_stream::Codec::Hevc) {
@@ -400,60 +485,66 @@ fn rows(
             .unwrap_or_else(|| "Not reported".into()),
     );
     row(
-        "HEVC advertised",
+        crate::app_style::forms::STAT_HEVC_ADVERTISED,
         if s.hevc_advertised { "Yes" } else { "No" }.into(),
     );
     row(
-        "Resolution",
+        crate::app_style::forms::STAT_RESOLUTION,
         video
             .and_then(|x| x.width.zip(x.height))
             .map(|(w, h)| format!("{w} × {h}"))
             .unwrap_or_else(|| "Not reported".into()),
     );
     row(
-        "Decoder",
+        crate::app_style::forms::STAT_DECODER,
         video
             .and_then(|x| x.decoder)
             .unwrap_or("Not reported")
             .into(),
     );
     if video.is_some_and(|v| v.decoder_fallback.is_some()) {
-        row("Decoder fallback", "Compatibility decoder in use".into());
+        row(
+            crate::app_style::forms::STAT_DECODER_FALLBACK,
+            "Compatibility decoder in use".into(),
+        );
     }
     if let Some(depth) = video.and_then(|v| v.decoded_bit_depth) {
-        row("Decoded color depth", format!("{depth}-bit"));
+        row(
+            crate::app_style::forms::STAT_DECODED_COLOR_DEPTH,
+            format!("{depth}-bit"),
+        );
     }
     if let Some(chroma) = video.and_then(|v| v.decoded_chroma) {
-        row("Decoded chroma", chroma.into());
+        row(crate::app_style::forms::STAT_DECODED_CHROMA, chroma.into());
     }
     if let Some(depth) = video.and_then(|v| v.display_rgb_bit_depth) {
         row(
-            "RGB output",
+            crate::app_style::forms::STAT_RGB_OUTPUT,
             format!("{depth}-bit SDR (application output)"),
         );
     }
     if video.is_some_and(|v| v.display_output_fallback.is_some()) {
         row(
-            "RGB output fallback",
+            crate::app_style::forms::STAT_RGB_OUTPUT_FALLBACK,
             "Using compatible 8-bit output".into(),
         );
     }
     row(
-        "Renderer",
+        crate::app_style::forms::STAT_RENDERER,
         video
             .and_then(|x| x.renderer)
             .unwrap_or("Not reported")
             .into(),
     );
     row(
-        "GPU adapter",
+        crate::app_style::forms::STAT_GPU_ADAPTER,
         video
             .and_then(|x| x.adapter.clone())
             .unwrap_or_else(|| "Not reported".into()),
     );
     if let Some(status) = video.and_then(|v| v.zero_copy_status.as_deref()) {
         row(
-            "Zero copy (experimental)",
+            crate::app_style::forms::STAT_ZERO_COPY,
             if status.starts_with("Original NV12") || status.starts_with("Original P010") {
                 "Active"
             } else if status.starts_with("Starting") {
@@ -465,20 +556,20 @@ fn rows(
         );
         if status.starts_with("Original P010") {
             row(
-                "Display output",
+                crate::app_style::forms::STAT_DISPLAY_OUTPUT,
                 "Windows-managed; final color depth not verified".into(),
             );
         }
     }
     if video.is_some_and(|v| v.recovering) {
         row(
-            "Video status",
+            crate::app_style::forms::STAT_VIDEO_STATUS,
             "Recovering; waiting for a new keyframe.".into(),
         );
     }
     if let Some(stage) = video.and_then(|x| x.failure_stage) {
         row(
-            "Video status",
+            crate::app_style::forms::STAT_VIDEO_STATUS,
             match stage {
                 "video-selected-gpu-unavailable-select-automatic-in-settings" => {
                     "Selected GPU unavailable; reselect in Settings.".into()
@@ -491,7 +582,7 @@ fn rows(
         );
     }
     row(
-        "Hardware decode",
+        crate::app_style::forms::STAT_HARDWARE_DECODE,
         video
             .map(|x| match x.hardware_decode_status() {
                 "Likely (D3D11 decoder surface)" => "Likely (GPU decoder output)",
@@ -501,52 +592,60 @@ fn rows(
             .into(),
     );
     row(
-        "Decoder output",
+        crate::app_style::forms::STAT_DECODER_OUTPUT,
         video
-            .and_then(|x| x.d3d11_decoder_surface)
-            .map(|x| {
-                if x {
-                    "D3D11 decoder surface"
-                } else {
-                    "DXGI surface"
-                }
+            .and_then(|x| {
+                x.native_decoder_surface.map(str::to_owned).or_else(|| {
+                    x.d3d11_decoder_surface.map(|surface| {
+                        if surface {
+                            "D3D11 decoder surface".into()
+                        } else {
+                            "DXGI surface".into()
+                        }
+                    })
+                })
             })
-            .unwrap_or("Not reported")
-            .into(),
+            .unwrap_or_else(|| "Not reported".into()),
     );
     row(
-        "Local dropped frames",
+        crate::app_style::forms::STAT_LOCAL_DROPPED_FRAMES,
         video
             .map(|x| x.frames_dropped.to_string())
             .unwrap_or_else(|| "Not reported".into()),
     );
     if let Some(v) = video {
         if let Some(status) = v.vsr_status {
-            row("Video AI upscaling", status.into());
+            row(
+                crate::app_style::forms::STAT_VIDEO_AI_UPSCALING,
+                status.into(),
+            );
         }
         if let Some(mode) = v.presentation_mode {
-            row("Display timing", mode.into());
+            row(crate::app_style::forms::STAT_DISPLAY_TIMING, mode.into());
         }
         row(
-            "Decoded video rate",
+            crate::app_style::forms::STAT_DECODED_VIDEO_RATE,
             number(values.fps.filter(|_| recent_fresh), "fps"),
         );
         row(
-            "Present submissions",
+            crate::app_style::forms::STAT_PRESENT_SUBMISSIONS,
             number(values.present_fps.filter(|_| recent_fresh), "fps"),
         );
         row(
-            "Presentation rate scope",
+            crate::app_style::forms::STAT_PRESENTATION_RATE_SCOPE,
             "Accepted submissions; not monitor scanout".into(),
         );
         if v.local_timing.decoder_service.count > 0 {
-            row("LOCAL VIDEO TIMING", String::new());
             row(
-                "CPU timing values",
+                crate::app_style::forms::STAT_LOCAL_VIDEO_TIMING,
+                String::new(),
+            );
+            row(
+                crate::app_style::forms::STAT_CPU_TIMING_VALUES,
                 "Latest / recent avg / session avg / peak (ms)".into(),
             );
             row(
-                "Recent timing window",
+                crate::app_style::forms::STAT_RECENT_TIMING_WINDOW,
                 "Up to 2 s; — means no new samples".into(),
             );
             for (i, (name, value)) in v.local_timing.stages().into_iter().enumerate() {
@@ -568,25 +667,28 @@ fn rows(
                 );
             }
             row(
-                "Display catch-up skips",
+                crate::app_style::forms::STAT_DISPLAY_CATCH_UP_SKIPS,
                 v.display_updates_skipped.to_string(),
             );
             if v.adaptive_display_catch_up {
                 row(
-                    "Adaptive catch-up activations",
+                    crate::app_style::forms::STAT_ADAPTIVE_CATCH_UP_ACTIVATIONS,
                     v.adaptive_display_catch_up_activations.to_string(),
                 );
             }
             row(
-                "Timing scope",
+                crate::app_style::forms::STAT_TIMING_SCOPE,
                 "CPU wall time; excludes GPU completion and scanout".into(),
             );
         }
     }
-    row("AUDIO", String::new());
+    row(crate::app_style::forms::STAT_AUDIO, String::new());
     for (name, value) in [
-        ("Codec", s.audio_codec.unwrap_or("Opus")),
-        ("Sample rate", "48,000 Hz"),
+        (
+            crate::app_style::forms::STAT_CODEC,
+            s.audio_codec.unwrap_or("Opus"),
+        ),
+        (crate::app_style::forms::STAT_SAMPLE_RATE, "48,000 Hz"),
     ] {
         row(
             name,
@@ -598,7 +700,7 @@ fn rows(
         );
     }
     row(
-        "Channels",
+        crate::app_style::forms::STAT_CHANNELS,
         if s.audio_ready {
             s.audio_layout.map_or_else(
                 || "2 (stereo)".into(),
@@ -612,23 +714,30 @@ fn rows(
             "Not reported".into()
         },
     );
-    row("Measured audio traffic", number(v.audio, "kbps"));
+    row(
+        crate::app_style::forms::STAT_MEASURED_AUDIO_TRAFFIC,
+        number(v.audio, "kbps"),
+    );
+    #[cfg(windows)]
     if let Some(audio) = &s.audio_playback {
         if let Some(layout) = audio
             .layout
             .filter(|layout| Some(*layout) != s.audio_layout)
         {
-            row("Playback channels", layout.channels.to_string());
+            row(
+                crate::app_style::forms::STAT_PLAYBACK_CHANNELS,
+                layout.channels.to_string(),
+            );
         }
         row(
-            "Playback buffer",
+            crate::app_style::forms::STAT_PLAYBACK_BUFFER,
             number(
                 Some((audio.queued_frames as f64 + audio.device_padding as f64) / 48.0),
                 "ms",
             ),
         );
         row(
-            "Buffer limits",
+            crate::app_style::forms::STAT_BUFFER_LIMITS,
             format!(
                 "{} / {} ms{}",
                 audio.minimum_ms,
@@ -642,7 +751,7 @@ fn rows(
         );
         if audio.recovering || audio.recoveries > 0 || audio.failure_hresult.is_some() {
             row(
-                "Audio output",
+                crate::app_style::forms::STAT_AUDIO_OUTPUT,
                 if audio.recovering {
                     "Reconnecting"
                 } else if audio.failure_hresult.is_some() {
@@ -652,33 +761,81 @@ fn rows(
                 }
                 .into(),
             );
-            row("Audio recoveries", audio.recoveries.to_string());
+            row(
+                crate::app_style::forms::STAT_AUDIO_RECOVERIES,
+                audio.recoveries.to_string(),
+            );
         }
-        row("Audio underruns", audio.underruns.to_string());
         row(
-            "Audio device buffer",
+            crate::app_style::forms::STAT_AUDIO_UNDERRUNS,
+            audio.underruns.to_string(),
+        );
+        row(
+            crate::app_style::forms::STAT_AUDIO_DEVICE_BUFFER,
             number(Some(audio.device_capacity_frames as f64 / 48.0), "ms"),
         );
     }
+    #[cfg(target_os = "linux")]
+    if let Some(audio) = &s.audio_native {
+        row(
+            crate::app_style::forms::STAT_AUDIO_OUTPUT,
+            if audio.worker_finished {
+                "Stopped"
+            } else {
+                "PipeWire"
+            }
+            .into(),
+        );
+        row(
+            crate::app_style::forms::STAT_PLAYBACK_BUFFER,
+            format!(
+                "{:.1} ms (application queue; excludes device latency)",
+                audio.queued_frames as f64 / 48.
+            ),
+        );
+        row(
+            crate::app_style::forms::STAT_BUFFER_LIMITS,
+            "Not reported by output backend".into(),
+        );
+        row(
+            "Audio discarded packets",
+            format!("{} packets", audio.packets_dropped),
+        );
+        row("Audio decode errors", audio.decode_errors.to_string());
+        row("Audio decoded packets", audio.packets_decoded.to_string());
+        row("PCM frames consumed", audio.pcm_frames_consumed.to_string());
+    }
     if let Some(ms) = s.audio_decoded_queue_ms {
-        row("Decoded audio waiting", number(Some(ms), "ms"));
+        row(
+            crate::app_style::forms::STAT_DECODED_AUDIO_WAITING,
+            number(Some(ms), "ms"),
+        );
     }
     #[cfg(feature = "bud")]
     if let Some(bud) = &s.bud {
         if let Some(cipher) = bud.cipher {
-            row("SECURITY", String::new());
-            row("Media encryption", cipher.into());
+            row(crate::app_style::forms::STAT_SECURITY, String::new());
+            row(
+                crate::app_style::forms::STAT_MEDIA_ENCRYPTION,
+                cipher.into(),
+            );
         }
     } else {
         webrtc_security_rows(s, &mut row);
     }
     #[cfg(not(feature = "bud"))]
     webrtc_security_rows(s, &mut row);
-    row("APP PERFORMANCE", String::new());
-    row("CPU (all cores)", number(cpu.0, "%"));
-    row("GPU (busiest engine)", number(cpu.1, "%"));
+    row(crate::app_style::forms::STAT_APP_PERFORMANCE, String::new());
+    row(
+        crate::app_style::forms::STAT_CPU_ALL_CORES,
+        number(cpu.0, "%"),
+    );
+    row(
+        crate::app_style::forms::STAT_GPU_BUSIEST_ENGINE,
+        number(cpu.1, "%"),
+    );
     #[cfg(feature = "bud")]
-    if s.bud.is_some() {
+    if s.bud.is_some() && !keep_missing {
         rows.retain(|(_, value)| value != "Not reported" && value != "—");
     }
     rows
@@ -700,7 +857,8 @@ pub fn compact_metrics(
         .map(|v| v.latest_ms);
     let encode = sample
         .and_then(|s| s.bud.as_ref())
-        .and_then(|b| b.encode_ms);
+        .and_then(|b| b.encode_ms)
+        .or_else(|| sample.and_then(|s| s.host_encode_ms));
     format!(
         "Decode CPU {} | Encode {}\nRTT {} | RX {} | D/P {}/{} fps",
         metric(decode, "ms"),
@@ -752,17 +910,26 @@ mod tests {
                 "Missing row: {row:?}"
             );
         }
-        assert!(pages[1].rows.iter().any(|(k, _)| k == "SECURITY"));
+        assert!(pages[1]
+            .rows
+            .iter()
+            .any(|(k, _)| k == crate::app_style::forms::STAT_SECURITY));
         assert!(!pages[2]
             .rows
             .iter()
             .any(|(k, _)| k == "Decoder API service"));
-        assert!(pages[3].rows.iter().any(|(k, _)| k == "Sample rate"));
+        assert!(pages[3]
+            .rows
+            .iter()
+            .any(|(k, _)| k == crate::app_style::forms::STAT_SAMPLE_RATE));
         assert!(pages[4]
             .rows
             .iter()
             .any(|(k, _)| k == "Decoder API service"));
-        assert!(pages[0].rows.iter().any(|(k, _)| k == "CPU (all cores)"));
+        assert!(pages[0]
+            .rows
+            .iter()
+            .any(|(k, _)| k == crate::app_style::forms::STAT_CPU_ALL_CORES));
     }
     #[test]
     fn recent_timing_and_submission_rates_keep_scope_and_lifetime_values() {
@@ -793,17 +960,17 @@ mod tests {
             None,
             &Default::default(),
         );
-        assert!(view
-            .rows
-            .contains(&("Present submissions".into(), "30.0 fps".into())));
+        assert!(view.rows.contains(&(
+            crate::app_style::forms::STAT_PRESENT_SUBMISSIONS.into(),
+            "30.0 fps".into()
+        )));
         assert!(view.rows.contains(&(
             "Decoder API service".into(),
             "9.00 / 2.00 / 9.00 / 9.00".into()
         )));
-        assert!(view
-            .rows
-            .iter()
-            .any(|(k, v)| k == "Presentation rate scope" && v.contains("not monitor scanout")));
+        assert!(view.rows.iter().any(|(k, v)| k
+            == crate::app_style::forms::STAT_PRESENTATION_RATE_SCOPE
+            && v.contains("not monitor scanout")));
         sample.at -= std::time::Duration::from_secs(3);
         let stale = Presentation::new(
             &sample,
@@ -816,9 +983,10 @@ mod tests {
             "Decoder API service".into(),
             "9.00 / — / 9.00 / 9.00".into()
         )));
-        assert!(stale
-            .rows
-            .contains(&("Present submissions".into(), "—".into())));
+        assert!(stale.rows.contains(&(
+            crate::app_style::forms::STAT_PRESENT_SUBMISSIONS.into(),
+            "—".into()
+        )));
     }
     #[test]
     fn cards_preserve_units_unknowns_and_stale_connection_policy() {
@@ -849,9 +1017,10 @@ mod tests {
         let view = Presentation::new(&sample, &values, (None, None, None), None, &timing);
         assert_eq!(view.status, "Waiting for fresh telemetry");
         assert!(view.cards.iter().all(|(_, value)| value == "—"));
-        assert!(view
-            .rows
-            .contains(&("Route".into(), "Unverified (telemetry unavailable)".into())));
+        assert!(view.rows.contains(&(
+            crate::app_style::forms::STAT_ROUTE.into(),
+            "Unverified (telemetry unavailable)".into()
+        )));
         sample.state = "Disconnected".into();
         let view = Presentation::new(&sample, &values, (None, None, None), None, &timing);
         assert_eq!(view.status, "Disconnected");
@@ -882,7 +1051,10 @@ mod tests {
         );
         assert!(view.footer.contains("Stream framing padding is included"));
         assert!(view.footer.contains("not proven packet loss"));
-        assert!(!view.rows.iter().any(|(label, _)| label == "DTLS state"));
+        assert!(!view
+            .rows
+            .iter()
+            .any(|(label, _)| label == crate::app_style::forms::STAT_DTLS_STATE));
         sample.at = std::time::Instant::now() - std::time::Duration::from_secs(6);
         let view = Presentation::new(&sample, &values, (None, None, None), None, &timing);
         assert_eq!(view.cards.len(), 3);
@@ -912,18 +1084,26 @@ mod tests {
             &report,
         );
         let position = |label: &str| view.rows.iter().position(|(key, _)| key == label).unwrap();
-        assert!(position("APP PERFORMANCE") < position("Memory resident (total)"));
-        assert!(position("Memory committed (private)") < position("HOST TIMING"));
-        assert!(view
-            .rows
-            .contains(&("Memory resident (total)".into(), "3.0 MiB".into())));
-        assert!(view
-            .rows
-            .contains(&("CPU (all cores)".into(), "2.0 %".into())));
+        assert!(
+            position(crate::app_style::forms::STAT_APP_PERFORMANCE)
+                < position(crate::app_style::forms::STAT_MEMORY_RESIDENT_TOTAL)
+        );
+        assert!(
+            position(crate::app_style::forms::STAT_MEMORY_COMMITTED_PRIVATE)
+                < position(crate::app_style::forms::STAT_HOST_TIMING_SECTION)
+        );
+        assert!(view.rows.contains(&(
+            crate::app_style::forms::STAT_MEMORY_RESIDENT_TOTAL.into(),
+            "3.0 MiB".into()
+        )));
+        assert!(view.rows.contains(&(
+            crate::app_style::forms::STAT_CPU_ALL_CORES.into(),
+            "2.0 %".into()
+        )));
         assert!(!view
             .rows
             .iter()
-            .any(|(label, _)| label == "Memory resident (private)"));
+            .any(|(label, _)| label == crate::app_style::forms::STAT_MEMORY_RESIDENT_PRIVATE));
         assert!(view
             .rows
             .contains(&("Host encode".into(), "4.00 / 4.00 / 4.00".into())));
@@ -943,7 +1123,8 @@ mod tests {
         let waiting = super::host_timing_rows(&bus.snapshot(1));
         assert!(waiting
             .iter()
-            .any(|(k, v)| k == "Video timing" && v == "Not reported by host"));
+            .any(|(k, v)| k == crate::app_style::forms::STAT_VIDEO_TIMING
+                && v == "Not reported by host"));
         bus.receive(
             1,
             &crate::frame_timing::tests::packet(0, 0, &[12., 2., 4., 16.]),
@@ -968,7 +1149,8 @@ mod tests {
             .any(|(k, v)| k == "Video report age" && v.starts_with("Stale")));
         assert!(rows
             .iter()
-            .any(|(k, v)| k == "Audio processing" && v == "8.00 / 8.00 / 8.00"));
+            .any(|(k, v)| k == crate::app_style::forms::STAT_AUDIO_PROCESSING
+                && v == "8.00 / 8.00 / 8.00"));
         assert!(!rows.iter().any(|(k, _)| k == "Audio encode"));
         bus.failed(1);
         assert!(super::host_timing_rows(&bus.snapshot(1))
@@ -985,24 +1167,30 @@ mod tests {
             ..Default::default()
         };
         let displayed = rows(&sample, &Values::default(), (None, None, None));
-        assert!(!displayed.iter().any(|(k, _)| k == "RGB output"));
+        assert!(!displayed
+            .iter()
+            .any(|(k, _)| k == crate::app_style::forms::STAT_RGB_OUTPUT));
         let video = sample.video.as_mut().unwrap();
         video.display_rgb_bit_depth = Some(10);
         let displayed = rows(&sample, &Values::default(), (None, None, None));
         assert!(displayed
             .iter()
-            .any(|(k, v)| k == "RGB output" && v.starts_with("10-bit SDR")));
+            .any(|(k, v)| k == crate::app_style::forms::STAT_RGB_OUTPUT
+                && v.starts_with("10-bit SDR")));
         let video = sample.video.as_mut().unwrap();
         video.display_rgb_bit_depth = Some(8);
         video.display_output_fallback = Some("Driver rejected RGB10: 0x80070057".into());
         let displayed = rows(&sample, &Values::default(), (None, None, None));
         assert!(displayed
             .iter()
-            .any(|(k, v)| k == "Decoded color depth" && v == "10-bit"));
+            .any(|(k, v)| k == crate::app_style::forms::STAT_DECODED_COLOR_DEPTH && v == "10-bit"));
         assert!(displayed
             .iter()
-            .any(|(k, v)| k == "RGB output" && v.starts_with("8-bit SDR")));
-        assert!(displayed.iter().any(|(k, _)| k == "RGB output fallback"));
+            .any(|(k, v)| k == crate::app_style::forms::STAT_RGB_OUTPUT
+                && v.starts_with("8-bit SDR")));
+        assert!(displayed
+            .iter()
+            .any(|(k, _)| k == crate::app_style::forms::STAT_RGB_OUTPUT_FALLBACK));
         assert!(!displayed.iter().any(|(_, v)| v.contains("0x80070057")));
     }
 
@@ -1023,10 +1211,11 @@ mod tests {
         let displayed = rows(&sample, &Values::default(), (None, None, None));
         assert!(displayed
             .iter()
-            .any(|(k, v)| k == "Zero copy (experimental)" && v == "Active"));
+            .any(|(k, v)| k == crate::app_style::forms::STAT_ZERO_COPY && v == "Active"));
         assert!(displayed
             .iter()
-            .any(|(k, v)| k == "Decoder fallback" && v == "Compatibility decoder in use"));
+            .any(|(k, v)| k == crate::app_style::forms::STAT_DECODER_FALLBACK
+                && v == "Compatibility decoder in use"));
         assert!(!displayed.iter().any(|(_, v)| v.contains("internal detail")
             || v.contains("Scanout")
             || v.contains("video-vendor-process")
@@ -1042,20 +1231,23 @@ mod tests {
         let displayed = rows(&sample, &Values::default(), (None, None, None));
         assert!(displayed
             .iter()
-            .any(|(k, v)| k == "Zero copy (experimental)" && v == "Active"));
+            .any(|(k, v)| k == crate::app_style::forms::STAT_ZERO_COPY && v == "Active"));
         assert!(displayed
             .iter()
-            .any(|(k, v)| k == "Decoded color depth" && v == "10-bit"));
+            .any(|(k, v)| k == crate::app_style::forms::STAT_DECODED_COLOR_DEPTH && v == "10-bit"));
         assert!(displayed
             .iter()
-            .any(|(k, v)| k == "Display output" && v.contains("not verified")));
-        assert!(!displayed.iter().any(|(k, _)| k == "RGB output"));
+            .any(|(k, v)| k == crate::app_style::forms::STAT_DISPLAY_OUTPUT
+                && v.contains("not verified")));
+        assert!(!displayed
+            .iter()
+            .any(|(k, _)| k == crate::app_style::forms::STAT_RGB_OUTPUT));
         sample.video.as_mut().unwrap().zero_copy_status =
             Some("Fallback: unsupported allocation".into());
         let displayed = rows(&sample, &Values::default(), (None, None, None));
         assert!(displayed
             .iter()
-            .any(|(k, v)| k == "Zero copy (experimental)"
+            .any(|(k, v)| k == crate::app_style::forms::STAT_ZERO_COPY
                 && v == "Unavailable; using normal GPU rendering"));
     }
 
@@ -1080,18 +1272,18 @@ mod tests {
         assert!(rows
             .iter()
             .any(|(k, v)| k == "Video late fragments" && v == "7"));
+        assert!(rows.iter().any(
+            |(k, v)| k == crate::app_style::forms::STAT_MEDIA_ENCRYPTION && v == "AES-256-GCM"
+        ));
         assert!(rows
             .iter()
-            .any(|(k, v)| k == "Media encryption" && v == "AES-256-GCM"));
-        assert!(rows
-            .iter()
-            .any(|(k, v)| k == "TURN transport" && v == "TLS"));
+            .any(|(k, v)| k == crate::app_style::forms::STAT_TURN_TRANSPORT && v == "TLS"));
         assert!(!rows
             .iter()
             .any(|(k, v)| k.contains("candidate") || k.contains("DTLS") || v == "Not reported"));
         let position = rows
             .iter()
-            .position(|(k, _)| k == "Host encode time")
+            .position(|(k, _)| k == crate::app_style::forms::STAT_HOST_ENCODE_TIME)
             .unwrap();
         assert_eq!(rows[position].1, "Waiting for host");
         let mut updated = sample.clone();
@@ -1100,7 +1292,10 @@ mod tests {
         assert_eq!(refreshed.len(), rows.len());
         assert_eq!(
             refreshed[position],
-            ("Host encode time".into(), "3.4 ms".into())
+            (
+                crate::app_style::forms::STAT_HOST_ENCODE_TIME.into(),
+                "3.4 ms".into()
+            )
         );
     }
 
@@ -1112,8 +1307,11 @@ mod tests {
             ..Default::default()
         };
         let rows = rows(&sample, &Values::default(), (None, None, None));
-        assert!(rows.contains(&("Codec".into(), "Opus".into())));
-        assert!(rows.contains(&("TURN server in use".into(), "None".into())));
+        assert!(rows.contains(&(crate::app_style::forms::STAT_CODEC.into(), "Opus".into())));
+        assert!(rows.contains(&(
+            crate::app_style::forms::STAT_TURN_SERVER_IN_USE.into(),
+            "None".into()
+        )));
         assert!(rows.iter().all(|(label, _)| ![
             "Configured bitrate",
             "Packets lost",

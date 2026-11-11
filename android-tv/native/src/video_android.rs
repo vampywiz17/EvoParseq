@@ -149,6 +149,16 @@ impl Pipeline {
             started: Instant::now(),
         }))
     }
+    pub fn encoder_rebuilt(&self) {
+        self.state
+            .queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .encoder_rebuilt(Instant::now());
+        if let Some(worker) = self.state.thread.get() {
+            worker.unpark();
+        }
+    }
     pub fn submit(&self, bytes: &[u8], info: PacketInfo) -> bool {
         let mut q = self.state.queue.lock().unwrap_or_else(|e| e.into_inner());
         let mut data = q.take_buffer();

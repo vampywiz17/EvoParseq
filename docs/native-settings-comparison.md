@@ -17,7 +17,7 @@ This comparison does not add the other listed features to the application.
 | Audio codec | Opus; optional raw PCM over BUD | Existing; raw PCM is not offered on the restored WebRTC path |
 | Audio buffer | Optional bounded custom minimum/maximum | Existing |
 | Immersive mode | Mouse, keyboard or both | Existing |
-| HID compatibility | Experimental physical USB HID mouse/keyboard over BUD | Different from generic USB-device passthrough |
+| HID compatibility | Physical USB HID mouse/keyboard over BUD | Different from generic USB-device passthrough |
 | Yubikey passthrough / selection | No local physical Yubikey enumeration/forwarding | Requires device enumeration, permissions and a complete USB exchange; no libusb dependency added |
 | Microphone passthrough / selection | Not implemented | Requires capture, negotiated USB/audio device and bounded host delivery; existing HID transport alone is insufficient |
 | Camera passthrough / selection (stock Warp) | Not implemented | Requires capture, encoding and host-device integration |
