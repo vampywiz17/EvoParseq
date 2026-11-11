@@ -14,7 +14,7 @@ impl Refresh {
     pub fn quiet(self) -> bool {
         self == Self::Background
     }
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub fn poll_ms(self) -> u32 {
         if self.quiet() {
             500
@@ -37,7 +37,7 @@ struct Request {
 pub struct ListChange {
     pub selected: Option<usize>,
     // List scrolling exists only in the Windows list box.
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub top: usize,
     pub peer: Option<String>,
 }

@@ -22,7 +22,7 @@ impl NetworkSettings for crate::connection_settings::Manager {
     fn tcp_qos(&self) -> bool {
         self.view().0.experimental_tcp_qos
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     fn video_gpu(&self) -> Option<crate::connection_settings::GpuPreference> {
         self.view().0.video_gpu
     }

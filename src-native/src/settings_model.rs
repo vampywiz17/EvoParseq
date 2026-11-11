@@ -1,6 +1,6 @@
 //! Editable Settings state and rules without window/control APIs.
 // Parts of this shared model serve only the Windows decoder and controls.
-#![cfg_attr(not(windows), allow(dead_code))]
+#![cfg_attr(target_os = "macos", allow(dead_code))]
 use crate::connection_settings::{full_chroma_vendor_allowed, GpuPreference, Manager, Settings};
 use anyhow::{Context, Result};
 use zeroize::Zeroizing;

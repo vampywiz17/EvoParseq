@@ -1,6 +1,6 @@
 //! Persisted native connection settings and RTCIceServer configuration.
 // Parts of this shared model serve only the Windows decoder and controls.
-#![cfg_attr(not(windows), allow(dead_code))]
+#![cfg_attr(target_os = "macos", allow(dead_code))]
 #[cfg(test)]
 use crate::turn_configuration::parse_cloudflare;
 use crate::turn_configuration::{cloudflare_request, validate_urls};

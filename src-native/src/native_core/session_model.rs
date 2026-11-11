@@ -12,7 +12,7 @@ use std::sync::{
 
 // Text, pointer coordinates in buttons and the size payload are read by the
 // Windows window only.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 #[derive(Clone, Debug)]
 pub enum Event {
     NativeSession(Command),

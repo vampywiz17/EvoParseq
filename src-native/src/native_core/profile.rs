@@ -3,7 +3,6 @@ use anyhow::{ensure, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 
-#[cfg(windows)]
 pub use crate::session_preferences::Resolution;
 pub use crate::session_preferences::Video;
 

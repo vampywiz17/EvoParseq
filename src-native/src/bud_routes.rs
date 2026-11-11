@@ -70,7 +70,7 @@ pub(crate) async fn turn_relays(
 
 // Force TURN starts on the selected relay carrier; otherwise try direct UDP first.
 #[cfg(any(
-    all(windows, feature = "bud"),
+    all(any(windows, target_os = "macos"), feature = "bud"),
     all(target_os = "linux", feature = "desktop-telemetry")
 ))]
 pub(crate) async fn route(
@@ -108,7 +108,7 @@ pub(crate) async fn route(
 }
 
 #[cfg(any(
-    all(windows, feature = "bud"),
+    all(any(windows, target_os = "macos"), feature = "bud"),
     all(target_os = "linux", feature = "desktop-telemetry")
 ))]
 pub(crate) async fn relay_route(
@@ -122,7 +122,7 @@ pub(crate) async fn relay_route(
 }
 
 #[cfg(any(
-    all(windows, feature = "bud"),
+    all(any(windows, target_os = "macos"), feature = "bud"),
     all(target_os = "linux", feature = "desktop-telemetry")
 ))]
 pub(crate) fn native_attempt_id() -> Result<String> {

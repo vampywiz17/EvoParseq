@@ -6,6 +6,7 @@ pub enum Command {
     SelectDisplay(String),
     RefreshDisplays,
     Disconnect,
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     HideButton,
     SecureAttention,
     #[cfg(target_os = "linux")]
