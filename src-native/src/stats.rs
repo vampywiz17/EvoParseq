@@ -30,6 +30,13 @@ pub struct Sample {
     pub turn_server: Option<String>,
     pub turn_protocol: Option<String>,
     pub rtt_ms: Option<f64>,
+    #[cfg_attr(
+        target_os = "macos",
+        expect(
+            dead_code,
+            reason = "Legacy field read by the Windows compact overlay; AppKit uses the shared detailed rows"
+        )
+    )]
     pub host_encode_ms: Option<f64>,
     pub received: Option<u64>,
     pub sent: Option<u64>,

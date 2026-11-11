@@ -2,12 +2,19 @@
 pub const REPOSITORY: &str = "https://github.com/vampywiz17/EvoParseq";
 pub const TITLE: &str = "About EvoParseq";
 pub const HEADING: &str = "EvoParseq";
+#[cfg(not(target_os = "macos"))]
 pub const UPDATES_TITLE: &str = "EvoParseq - Updates";
+#[cfg(not(target_os = "macos"))]
 pub const UPDATES_HEADING: &str = "Updates";
+#[cfg(not(target_os = "macos"))]
 pub const CHECK_AGAIN: &str = "Check again";
+#[cfg(not(target_os = "macos"))]
 pub const UPDATES_SIZE: [f32; 2] = [740., 720.];
+#[cfg(not(target_os = "macos"))]
 pub const PROJECT: &str = "Project page";
+#[cfg(not(target_os = "macos"))]
 pub const CLOSE: &str = "Close";
+#[cfg(not(target_os = "macos"))]
 pub const SIZE: [f32; 2] = [740., 640.];
 pub struct Content {
     pub version: String,
@@ -22,6 +29,7 @@ pub fn content(version: &str, platform: &str, credit: &str, migration: &str) -> 
     }
 }
 /// Icon, heading, version, status, notes, check, download, close, in that order.
+#[cfg(not(target_os = "macos"))]
 pub fn rectangles(width: i32, height: i32) -> [[i32; 4]; 8] {
     let inner = (width - 48).max(1);
     let bottom = height - 62;

@@ -50,10 +50,13 @@ define_class!(
     impl Actions {
         #[unsafe(method(about:))]
         fn about(&self, _sender: &NSObject) {
-            message(&format!(
-                "EvoParseq {}\nNative Rust client for existing Parsec hosts.",
-                env!("CARGO_PKG_VERSION")
-            ));
+            let content = crate::about::content(
+                env!("CARGO_PKG_VERSION"),
+                "macOS",
+                "Experimental macOS adapter using AppKit, Core Audio and AVFoundation.",
+                "See docs/macos.md for supported features and validation limits.",
+            );
+            message(&format!("{}\n\n{}\n\n{}", content.version, content.status, content.notes));
         }
         #[unsafe(method(settings:))]
         fn settings(&self, _sender: &NSObject) {
@@ -230,7 +233,7 @@ fn install_menu(mtm: MainThreadMarker, app: &NSApplication) {
         mtm,
         "EvoParseq",
         vec![
-            item(mtm, "About EvoParseq", Some(sel!(about:)), ""),
+            item(mtm, crate::about::TITLE, Some(sel!(about:)), ""),
             separator(),
             item(mtm, "Settings…", Some(sel!(settings:)), ","),
             separator(),
@@ -327,7 +330,7 @@ fn message(text: &str) {
     let text = text.to_owned();
     on_main(move |mtm| {
         let alert = NSAlert::new(mtm);
-        alert.setMessageText(&NSString::from_str("EvoParseq"));
+        alert.setMessageText(&NSString::from_str(crate::about::HEADING));
         alert.setInformativeText(&NSString::from_str(&text));
         alert.runModal();
     });
@@ -387,7 +390,7 @@ fn create_launcher(mtm: MainThreadMarker, email: &str, peer: &str, remember: boo
         )
     };
     unsafe { window.setReleasedWhenClosed(false) };
-    window.setTitle(&NSString::from_str("EvoParseq"));
+    window.setTitle(&NSString::from_str(crate::about::HEADING));
     let content = window.contentView().expect("window content view");
     let heading = label(mtm, "EvoParseq", frame(32.0, 24.0, 300.0, 36.0));
     heading.setFont(Some(&NSFont::boldSystemFontOfSize(26.0)));

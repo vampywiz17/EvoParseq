@@ -6,6 +6,14 @@ use {rcgen as _, rustls as _, tokio_rustls as _};
 
 const APP_TITLE: &str = "EvoParseq";
 mod about;
+// Shared Win32/egui geometry and control metadata are only partly consumed by AppKit.
+#[cfg_attr(
+    target_os = "macos",
+    expect(
+        dead_code,
+        reason = "AppKit consumes shared copy; full Windows/Linux layout metadata is not yet rendered by this experimental adapter"
+    )
+)]
 mod app_style;
 mod attempt;
 #[cfg(windows)]

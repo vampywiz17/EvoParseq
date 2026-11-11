@@ -135,12 +135,7 @@ impl Panel {
             fps: &field(2),
             constant_fps: selected(&self.pacing) == 1,
             rotated: selected(&self.orientation) == 1,
-            immersive: match selected(&self.immersive) {
-                1 => 3,
-                2 => 2,
-                3 => 1,
-                _ => 0,
-            },
+            immersive: crate::input_state::immersive_value(selected(&self.immersive)),
             fullscreen: self.fullscreen.state() != 0,
         }
         .parse()
@@ -303,13 +298,8 @@ fn build(mtm: MainThreadMarker, stream: Weak<Window>, video: &super::profile::Vi
     let immersive = popup("Immersive mode");
     select(
         &immersive,
-        &["Disabled", "Mouse", "Keyboard", "Mouse + keyboard"],
-        match video.immersive {
-            1 => "Mouse + keyboard",
-            2 => "Keyboard",
-            3 => "Mouse",
-            _ => "Disabled",
-        },
+        &crate::input_state::IMMERSIVE_LABELS,
+        crate::input_state::IMMERSIVE_LABELS[crate::input_state::immersive_index(video.immersive)],
     );
     let fullscreen = unsafe {
         NSButton::checkboxWithTitle_target_action(

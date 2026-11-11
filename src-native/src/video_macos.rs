@@ -645,15 +645,6 @@ pub fn hevc_444_available(
 }
 
 #[cfg(test)]
-pub(crate) fn display_extents(width: u32, height: u32, rotation: u8) -> (u32, u32) {
-    if rotation & 1 != 0 {
-        (height, width)
-    } else {
-        (width, height)
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
