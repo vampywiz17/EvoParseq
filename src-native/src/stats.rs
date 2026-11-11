@@ -31,7 +31,7 @@ pub struct Sample {
     pub turn_protocol: Option<String>,
     pub rtt_ms: Option<f64>,
     #[cfg_attr(
-        target_os = "macos",
+        all(target_os = "macos", not(test)),
         expect(
             dead_code,
             reason = "Legacy field read by the Windows compact overlay; AppKit uses the shared detailed rows"

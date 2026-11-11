@@ -4,6 +4,23 @@ An experimental native macOS build of EvoParseq. It shares the Rust account,
 signaling, WebRTC, BUD, settings and statistics code with the Windows client and
 replaces only the platform adapters. WebRTC remains the default transport.
 
+## Integration branch
+
+`codex/macos-pr-10` integrates PR #10 through `6ef85c3` with `dev` through
+`9f991ad`, including the BUD terminal-event deadlock fix. It is isolated from
+`main` and `dev`; updating it does not merge the macOS port into either branch.
+
+The adapter uses the current common BUD ingress, relay resolution, session
+commands, preferences, immersive mapping and About content. Platform media types
+resolve statically to the existing Windows backend or the macOS backend.
+
+Full canonical desktop GUI geometry is not yet implemented by AppKit. Shared
+Win32/egui control descriptors remain defined for those ports; the macOS adapter
+currently consumes their shared copy only where its controls are implemented.
+This limitation does not imply support for the unavailable features listed below.
+Windows/macOS CI checks compilation, strict Clippy, offline protocol/model tests
+and packaging; it cannot replace the outstanding live validation below.
+
 ## Requirements and build
 
 macOS 11 or later. Apple Silicon is the tested platform; the Intel target builds
