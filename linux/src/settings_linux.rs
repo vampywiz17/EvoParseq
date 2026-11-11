@@ -57,6 +57,19 @@ mod tests {
         assert_eq!(value["futurePreference"], input["futurePreference"]);
         assert_eq!(value["experimentalZeroCopy"], true);
         assert_eq!(value["bud"], false);
+        let mut saved = manager.view().0;
+        saved.video_gpu = Some(crate::connection_settings::GpuPreference {
+            name: "NVIDIA GeForce RTX 3060".into(),
+            vendor_id: 0x10de,
+            device_id: 0x2504,
+            subsystem_id: 0,
+            revision: 0,
+            luid: 0,
+        });
+        let expected = saved.video_gpu.clone();
+        manager.save(saved, "", "", false, false).unwrap();
+        let reopened = crate::connection_settings::Manager::open(path.clone());
+        assert_eq!(reopened.view().0.video_gpu, expected);
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600

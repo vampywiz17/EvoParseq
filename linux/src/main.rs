@@ -525,6 +525,7 @@ impl Drop for Desktop {
 }
 
 fn main() -> anyhow::Result<()> {
+    native_loop::report_framework_errors();
     cursor_theme::prepare();
     if std::env::args_os()
         .skip(1)

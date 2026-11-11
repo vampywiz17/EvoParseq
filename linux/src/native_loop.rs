@@ -13,6 +13,33 @@ use winit::{
     window::WindowId,
 };
 
+// The external event-loop API reports renderer/window initialization errors via
+// log, while run_app itself can return Ok. Forward only framework errors; never
+// enable transport/authentication logging or persist raw messages in JSON logs.
+struct FrameworkErrors;
+impl log::Log for FrameworkErrors {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() == log::Level::Error && metadata.target().starts_with("eframe::")
+    }
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            eprintln!("{}: {}", record.target(), record.args());
+            crate::event_log::record(
+                "ERROR",
+                "desktop_framework_failed",
+                serde_json::json!({"component":"eframe"}),
+            );
+        }
+    }
+    fn flush(&self) {}
+}
+pub fn report_framework_errors() {
+    static LOGGER: FrameworkErrors = FrameworkErrors;
+    if log::set_logger(&LOGGER).is_ok() {
+        log::set_max_level(log::LevelFilter::Error);
+    }
+}
+
 #[derive(Default)]
 pub struct KeyboardBridge {
     target: Mutex<Option<Arc<Playback>>>,
@@ -350,6 +377,19 @@ mod tests {
 
 #[cfg(test)]
 mod focus_tests {
+    #[test]
+    fn linux_framework_error_output_excludes_authentication_transport_and_non_errors() {
+        use log::Log as _;
+        let enabled = |target, level| {
+            super::FrameworkErrors
+                .enabled(&log::Metadata::builder().target(target).level(level).build())
+        };
+        assert!(enabled("eframe::native::run", log::Level::Error));
+        assert!(!enabled("eframe::native::run", log::Level::Info));
+        assert!(!enabled("webrtc", log::Level::Error));
+        assert!(!enabled("reqwest", log::Level::Error));
+        assert!(!enabled("account", log::Level::Error));
+    }
     #[test]
     fn linux_focus_loss_revokes_controller_and_clipboard_without_mouse_capture() {
         let p = crate::playback::Playback::new(eframe::egui::Context::default());

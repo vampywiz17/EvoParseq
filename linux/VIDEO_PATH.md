@@ -21,6 +21,15 @@ access guard is released before importing textures through the wgpu API.
 Initialization-only log events identify the last completed setup stage without
 per-frame logging, pixel readback, raw error text or additional rendering.
 
+The first decode also records parameter creation, decode-command recording,
+submission and presentation-view setup. The first graphics submission records its
+timeline dependency values once. Startup records requested/actual adapter identity.
+eframe window/renderer errors are forwarded to stderr, because the external
+event-loop API can otherwise return successfully after an internal framework error.
+Only eframe error-level records are forwarded; authentication/transport logs remain
+disabled and raw framework messages are not persisted in JSON. The existing `log`
+package is now a direct dependency for this adapter; no additional package is added.
+
 The native image handle is wrapped with wgpu HAL `texture_from_raw` and
 `create_texture_from_hal`. These wrappers do not create a second decoded image
 or copy its contents. The Y and UV views in `src/video_vulkan/mod.rs` refer to

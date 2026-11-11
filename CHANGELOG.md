@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Linux: surface eframe window/renderer errors in the terminal instead of a silent
+  startup exit. Record requested/actual Vulkan adapter identity and first-decode /
+  presentation checkpoints in opt-in local logs. Verify GPU preference persistence
+  through the actual settings file. These diagnostics do not change synchronization,
+  decode resources or add rendering passes; AMD/NVIDIA playback remains under investigation.
+
 - Linux: restrict whole-NV12 video image views to their decode usage; presentation
   continues sampling separate R8/RG8 plane views without a YCbCr sampler. Release
   the HAL access guard before importing the texture into wgpu. Add initialization

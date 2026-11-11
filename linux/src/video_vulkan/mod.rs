@@ -314,6 +314,14 @@ impl Decoder {
         let session = self.session.as_ref().unwrap();
         let key = (visible, crop, full_range, rotation);
         if self.presentation != Some(key) {
+            let first = self.presentation.is_none();
+            if first {
+                session::initializing(
+                    &self.context,
+                    "presentation_views_begin",
+                    codec == crate::video_stream::Codec::Hevc,
+                );
+            }
             self.frames.clear();
             for (surface, texture) in session.textures.iter().enumerate() {
                 let y = texture.create_view(&wgpu::TextureViewDescriptor {
@@ -395,6 +403,13 @@ impl Decoder {
                 }));
             }
             self.presentation = Some(key);
+            if first {
+                session::initializing(
+                    &self.context,
+                    "presentation_views_ready",
+                    codec == crate::video_stream::Codec::Hevc,
+                );
+            }
         }
         if let Some(slot) = output {
             if let Some(sync) = &session.sync {
