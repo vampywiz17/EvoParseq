@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Linux: restrict whole-NV12 video image views to their decode usage; presentation
+  continues sampling separate R8/RG8 plane views without a YCbCr sampler. Release
+  the HAL access guard before importing the texture into wgpu. Add initialization
+  metadata to local logs for AMD/NVIDIA freeze diagnosis; hardware validation
+  of the reported freeze is still required.
+
 - Linux: support Vulkan Video layered reference storage and distinct DPB/output
   images for AMD/NVIDIA capability layouts, retaining the existing Intel path,
   bounded surface lifetime tracking and GPU-resident presentation. Enable the

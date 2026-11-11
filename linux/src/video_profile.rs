@@ -14,6 +14,16 @@ pub struct Surfaces {
     pub distinct: bool,
 }
 impl Surfaces {
+    /// Whole-NV12 video views must not inherit SAMPLED: that would require
+    /// a YCbCr sampler conversion. Presentation samples separate R8/RG8 views.
+    pub fn view_usage(self, output: bool) -> vk::ImageUsageFlags {
+        let usage = if output {
+            self.output_usage()
+        } else {
+            self.reference_usage()
+        };
+        usage & !vk::ImageUsageFlags::SAMPLED
+    }
     pub fn output_usage(self) -> vk::ImageUsageFlags {
         let usage = vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR | vk::ImageUsageFlags::SAMPLED;
         if self.distinct {
@@ -152,6 +162,15 @@ mod tests {
                         .reference_usage()
                         .contains(vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR)
                 );
+                for output in [false, true] {
+                    let view = surfaces.view_usage(output);
+                    assert!(!view.contains(vk::ImageUsageFlags::SAMPLED));
+                    assert!(view.contains(if output {
+                        vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
+                    } else {
+                        vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR
+                    }));
+                }
             }
         }
         let both = vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE

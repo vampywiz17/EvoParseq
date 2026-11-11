@@ -13,6 +13,14 @@ output images, written together by decoding. Reference storage may be separate
 images or layers of one array image. Unsupported combinations fail capability
 checks instead of selecting a copy-based fallback.
 
+Whole-NV12 views passed to Vulkan Video explicitly restrict image-view usage to
+decode output and/or reference access. They do not inherit `SAMPLED`, which would
+require a YCbCr sampler conversion (VUID-VkImageViewCreateInfo-format-06415).
+Presentation retains the existing separate R8/RG8 sampled plane views. The HAL
+access guard is released before importing textures through the wgpu API.
+Initialization-only log events identify the last completed setup stage without
+per-frame logging, pixel readback, raw error text or additional rendering.
+
 The native image handle is wrapped with wgpu HAL `texture_from_raw` and
 `create_texture_from_hal`. These wrappers do not create a second decoded image
 or copy its contents. The Y and UV views in `src/video_vulkan/mod.rs` refer to

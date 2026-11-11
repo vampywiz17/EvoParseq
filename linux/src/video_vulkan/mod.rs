@@ -192,6 +192,15 @@ impl Decoder {
             "Unexpected video codec change"
         );
         self.codec = codec;
+        if self.stream.is_none() && self.hevc.is_none() {
+            crate::event_log::record(
+                "INFO",
+                "vulkan_video_input",
+                serde_json::json!({
+                    "adapter": self.context.adapter_name, "codec": format!("{codec:?}"), "encoded_bytes": bytes.len(),
+                }),
+            );
+        }
         let (visible, crop, full_range, output) = match codec {
             Codec::H264 => {
                 let stream = self.stream.get_or_insert_with(Stream::new);

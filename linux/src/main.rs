@@ -411,7 +411,8 @@ impl eframe::App for Desktop {
                     event_log::record(
                         "ERROR",
                         "video_backend_failed",
-                        serde_json::json!({"backend":"Vulkan Video","decoded_pictures":decoder.decoded}),
+                        serde_json::json!({"backend":"Vulkan Video","decoded_pictures":decoder.decoded,
+                            "vulkan_result": error.downcast_ref::<ash::vk::Result>().map(|result| result.as_raw())}),
                     );
                     eprintln!("{message}");
                     self.error = Some(message);

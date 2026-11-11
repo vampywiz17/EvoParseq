@@ -7,6 +7,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 const WAIT_NS: u64 = 100_000_000;
 const MAX_INPUT: u64 = 8 * 1024 * 1024;
 
+// Initialization-only metadata: no per-frame logging, driver strings or pixels.
+fn initializing(context: &Context, stage: &'static str, hevc: bool) {
+    crate::event_log::record(
+        "INFO",
+        "vulkan_video_initializing",
+        serde_json::json!({
+            "stage": stage, "codec": if hevc { "HEVC" } else { "H.264" },
+            "adapter": context.adapter_name,
+        }),
+    );
+}
+
 pub struct Session {
     resources: Option<Box<Resources>>,
     pub textures: Vec<wgpu::Texture>,
@@ -306,6 +318,7 @@ impl Session {
                 )
             }
         };
+        initializing(context, "capabilities_begin", hevc);
         // Entry is needed only to load instance-level Vulkan Video dispatch.
         let entry = unsafe { ash::Entry::load()? };
         let video = ash::khr::video_queue::Instance::new(&entry, &context.instance);
@@ -333,6 +346,7 @@ impl Session {
                 self.size.1.div_ceil(granularity.height.max(1)) * granularity.height.max(1),
             );
         }
+        initializing(context, "capabilities_queried", hevc);
         let max_coded_extent = caps.max_coded_extent;
         let max_dpb_slots = caps.max_dpb_slots;
         let max_active_reference_pictures = caps.max_active_reference_pictures;
@@ -385,6 +399,7 @@ impl Session {
                 None,
             )?
         };
+        initializing(context, "session_created", hevc);
         let requirements = unsafe {
             context
                 .video
@@ -416,6 +431,7 @@ impl Session {
                 .video
                 .bind_video_session_memory(resources.session, &bindings)?
         };
+        initializing(context, "session_memory_bound", hevc);
         let profiles = [profile];
         unsafe {
             crate::video_profile::validate_formats(
@@ -447,6 +463,15 @@ impl Session {
             } else {
                 resources.surfaces.reference_usage()
             };
+            initializing(
+                context,
+                if output {
+                    "output_images_begin"
+                } else {
+                    "reference_images_begin"
+                },
+                hevc,
+            );
             for _ in 0..count {
                 let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
                 let mut info = vk::ImageCreateInfo::default()
@@ -494,9 +519,12 @@ impl Session {
                 };
                 allocation.memory = memory;
                 unsafe { raw.bind_image_memory(image, memory, 0)? };
+                let mut view_usage = vk::ImageViewUsageCreateInfo::default()
+                    .usage(resources.surfaces.view_usage(output));
                 let view = unsafe {
                     raw.create_image_view(
                         &vk::ImageViewCreateInfo::default()
+                            .push_next(&mut view_usage)
                             .image(image)
                             .view_type(if layers > 1 {
                                 vk::ImageViewType::TYPE_2D_ARRAY
@@ -548,6 +576,7 @@ impl Session {
                         Some(Box::new(move || drop(allocation))),
                     )
                 };
+                drop(hal);
                 let texture = unsafe {
                     context
                         .device
@@ -567,6 +596,15 @@ impl Session {
                 };
                 self.textures.extend((0..layers).map(|_| texture.clone()));
             }
+            initializing(
+                context,
+                if output {
+                    "output_images_ready"
+                } else {
+                    "reference_images_ready"
+                },
+                hevc,
+            );
         }
         // Establish wgpu's RESOURCE state before the first native decode.
         // Subsequent native operations restore SHADER_READ_ONLY_OPTIMAL.
@@ -588,8 +626,11 @@ impl Session {
                     state: wgpu::TextureUses::RESOURCE,
                 }),
         );
+        initializing(context, "graphics_transition_begin", hevc);
         context.queue.submit([encoder.finish()]);
+        initializing(context, "graphics_transition_submitted", hevc);
         context.wait_graphics()?;
+        initializing(context, "graphics_transition_ready", hevc);
         resources.pool = unsafe {
             raw.create_command_pool(
                 &vk::CommandPoolCreateInfo::default()
