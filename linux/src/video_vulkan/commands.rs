@@ -105,6 +105,11 @@ impl Commands {
         parameters: vk::VideoSessionParametersKHR,
         _: Option<&vk::AllocationCallbacks<'_>>,
     ) {
+        // No object exists before the first parameter creation or on partial
+        // initialization failure. Older RADV dereferences this null handle.
+        if parameters == vk::VideoSessionParametersKHR::null() {
+            return;
+        }
         unsafe {
             (self.queue.fp().destroy_video_session_parameters_khr)(
                 self.device,
@@ -140,5 +145,71 @@ impl Commands {
         info: &vk::VideoDecodeInfoKHR<'_>,
     ) {
         unsafe { (self.decode.fp().cmd_decode_video_khr)(command, info) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        ffi::{CStr, c_char, c_void},
+        sync::atomic::{AtomicU64, Ordering},
+    };
+    use vk::Handle as _;
+
+    static LAST_DESTROYED: AtomicU64 = AtomicU64::new(u64::MAX);
+    unsafe extern "system" fn destroy_parameters(
+        _: vk::Device,
+        parameters: vk::VideoSessionParametersKHR,
+        _: *const vk::AllocationCallbacks<'_>,
+    ) {
+        LAST_DESTROYED.store(parameters.as_raw(), Ordering::SeqCst);
+    }
+    unsafe extern "system" fn get_proc(
+        _: vk::Device,
+        name: *const c_char,
+    ) -> vk::PFN_vkVoidFunction {
+        if unsafe { CStr::from_ptr(name) } == c"vkDestroyVideoSessionParametersKHR" {
+            Some(unsafe {
+                std::mem::transmute::<
+                    vk::PFN_vkDestroyVideoSessionParametersKHR,
+                    unsafe extern "system" fn(),
+                >(destroy_parameters)
+            })
+        } else {
+            None
+        }
+    }
+    #[test]
+    fn linux_parameter_first_creation_and_partial_cleanup_never_dispatch_null_destroy() {
+        // CPU-only dispatch fixture: no loader, driver or Vulkan device is used.
+        let instance = unsafe {
+            ash::Instance::load_with(
+                |name| {
+                    if name == c"vkGetDeviceProcAddr" {
+                        get_proc as *const () as *const c_void
+                    } else {
+                        std::ptr::null()
+                    }
+                },
+                vk::Instance::null(),
+            )
+        };
+        let device = unsafe { ash::Device::load_with(|_| std::ptr::null(), vk::Device::null()) };
+        let commands = Commands::new(&instance, &device);
+        LAST_DESTROYED.store(u64::MAX, Ordering::SeqCst);
+        unsafe {
+            commands.destroy_video_session_parameters(vk::VideoSessionParametersKHR::null(), None);
+        }
+        assert_eq!(LAST_DESTROYED.load(Ordering::SeqCst), u64::MAX);
+        unsafe {
+            commands
+                .destroy_video_session_parameters(vk::VideoSessionParametersKHR::from_raw(7), None);
+        }
+        assert_eq!(LAST_DESTROYED.load(Ordering::SeqCst), 7);
+        unsafe {
+            commands.destroy_video_session_parameters(vk::VideoSessionParametersKHR::null(), None);
+        }
+        assert_eq!(LAST_DESTROYED.load(Ordering::SeqCst), 7);
     }
 }

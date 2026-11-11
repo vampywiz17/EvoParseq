@@ -5,6 +5,18 @@ This establishes application behavior, not driver/compositor/scanout behavior.
 
 ## Decoded images
 
+Parameter objects are destroyed only when a non-null handle exists. The Vulkan
+API permits null destruction, but Mesa RADV 25.2.8's
+`radv_DestroyVideoSessionParametersKHR` dereferences the parameter pointer without
+a null guard. The first SPS/PPS replacement previously dispatched this call with
+a null previous handle. A CPU-only dispatch fixture now checks that first setup
+and partial cleanup skip null handles while valid handles still reach the driver.
+This adds no decode resources, frame copies or synchronization changes. Physical
+validation of the reported AMD exit is still required.
+
+References: [Vulkan parameter destruction](https://docs.vulkan.org/refpages/latest/refpages/source/vkDestroyVideoSessionParametersKHR.html),
+[Mesa RADV 25.2.8 source mirror](https://github.com/chaotic-cx/mesa-mirror/blob/mesa-25.2.8/src/amd/vulkan/radv_video.c#L666).
+
 `src/video_vulkan/session.rs` creates device-local NV12 images from the profile's
 capabilities. Coinciding output uses `VIDEO_DECODE_DST_KHR |
 VIDEO_DECODE_DPB_KHR | SAMPLED` on the same image. Distinct output uses

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Linux: skip destruction of absent Vulkan Video parameter objects, including
+  the first SPS/PPS setup and partial-initialization cleanup. This avoids a null
+  handle dereference in older Mesa RADV implementations. Add a driver-free
+  dispatch regression test; keep decoding, queues and synchronization unchanged.
+
 - Linux: surface eframe window/renderer errors in the terminal instead of a silent
   startup exit. Record requested/actual Vulkan adapter identity and first-decode /
   presentation checkpoints in opt-in local logs. Verify GPU preference persistence
