@@ -2578,7 +2578,12 @@ impl crate::Adapter for super::Adapter {
                 )
             } {
                 Ok(true) => (),
-                Ok(false) => return None,
+                Ok(false) => {
+                    log::error!(
+                        "Vulkan queue family {queue_family_index} cannot present to this window surface"
+                    );
+                    return None;
+                }
                 Err(e) => {
                     log::error!("get_physical_device_surface_support: {e}");
                     return None;

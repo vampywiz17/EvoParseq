@@ -11,8 +11,11 @@ API permits null destruction, but Mesa RADV 25.2.8's
 a null guard. The first SPS/PPS replacement previously dispatched this call with
 a null previous handle. A CPU-only dispatch fixture now checks that first setup
 and partial cleanup skip null handles while valid handles still reach the driver.
-This adds no decode resources, frame copies or synchronization changes. Physical
-validation of the reported AMD exit is still required.
+This adds no decode resources, frame copies or synchronization changes. The user
+confirmed H.264 playback on Radeon 780M with normal GPU timeline synchronization
+in 0.1.24; that version changed only this destruction behavior, plus its regression
+test and documentation/version metadata. The exact Flatpak Mesa version was not
+captured, so the source example does not establish the runtime driver version.
 
 References: [Vulkan parameter destruction](https://docs.vulkan.org/refpages/latest/refpages/source/vkDestroyVideoSessionParametersKHR.html),
 [Mesa RADV 25.2.8 source mirror](https://github.com/chaotic-cx/mesa-mirror/blob/mesa-25.2.8/src/amd/vulkan/radv_video.c#L666).
@@ -30,17 +33,17 @@ decode output and/or reference access. They do not inherit `SAMPLED`, which woul
 require a YCbCr sampler conversion (VUID-VkImageViewCreateInfo-format-06415).
 Presentation retains the existing separate R8/RG8 sampled plane views. The HAL
 access guard is released before importing textures through the wgpu API.
-Initialization-only log events identify the last completed setup stage without
-per-frame logging, pixel readback, raw error text or additional rendering.
+Temporary initialization, first-packet and first-submit checkpoints were removed
+after isolating the AMD exit. The compact initialization summary, adapter identity
+and failure records remain. HAL guard release only shortens an access lifetime;
+it is not the identified AMD fix.
 
-The first decode also records parameter creation, decode-command recording,
-submission and presentation-view setup. The first graphics submission records its
-timeline dependency values once. Startup records requested/actual adapter identity.
-eframe window/renderer errors are forwarded to stderr, because the external
-event-loop API can otherwise return successfully after an internal framework error.
-Only eframe error-level records are forwarded; authentication/transport logs remain
-disabled and raw framework messages are not persisted in JSON. The existing `log`
-package is now a direct dependency for this adapter; no additional package is added.
+Startup records requested/actual adapter identity. eframe window/renderer and
+Vulkan adapter errors are forwarded to stderr, because the external event-loop
+API can otherwise return successfully after an internal framework error.
+Authentication/transport logs remain disabled and raw framework/driver messages
+are not persisted in JSON. The existing `log` package is a direct dependency for
+this adapter; no additional package is added.
 
 The native image handle is wrapped with wgpu HAL `texture_from_raw` and
 `create_texture_from_hal`. These wrappers do not create a second decoded image
@@ -336,8 +339,27 @@ write bandwidth. This remains GPU-resident conversion, not strict Zero copy.
 The GUI enumerates Vulkan hardware adapters and persists the existing
 `videoGpu` preference. Changes require restart so decode and UI retain the same
 Vulkan device. The command-line override remains available. Live sustained
-playback on AMD/NVIDIA is still pending validation of this build.
+playback on NVIDIA is still pending; AMD H.264 startup/playback was confirmed
+with the null-parameter destruction guard in 0.1.24. HEVC on AMD remains unverified.
 
 References: [DPB storage capabilities](https://docs.vulkan.org/refpages/latest/refpages/source/VkVideoCapabilityFlagBitsKHR.html),
 [coinciding/distinct decode output](https://docs.vulkan.org/refpages/latest/refpages/source/VkVideoDecodeCapabilityFlagBitsKHR.html),
 [video picture array layers](https://docs.vulkan.org/refpages/latest/refpages/source/VkVideoPictureResourceInfoKHR.html).
+
+## NVIDIA surface investigation (0.1.25)
+
+The reported NVIDIA failure occurs during window-surface setup, before video
+parameters or decode submission. An empty wgpu surface format list may also
+mean presentation support/capability queries failed; forcing a pixel format does
+not fix that. Forward only Vulkan adapter error messages to the terminal alongside
+eframe errors, and report a failed presentation-support check explicitly. JSON
+logs retain only the component category, never raw driver messages. These error
+paths add no per-frame work or successful-path rendering changes.
+
+Pop!_OS documents `__NV_PRIME_RENDER_OFFLOAD=1` for Vulkan applications in hybrid
+mode. Testing that launch on the affected machine is still pending. No vendor
+switch, alternative decoder, cross-GPU image copy or synchronization workaround
+is enabled automatically.
+
+References: [System76 hybrid graphics](https://system76.com/support/graphics-switch-pop/),
+[Vulkan surface format requirements](https://docs.vulkan.org/refpages/latest/refpages/source/vkGetPhysicalDeviceSurfaceFormatsKHR.html).

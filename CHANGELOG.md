@@ -7,17 +7,14 @@
   handle dereference in older Mesa RADV implementations. Add a driver-free
   dispatch regression test; keep decoding, queues and synchronization unchanged.
 
-- Linux: surface eframe window/renderer errors in the terminal instead of a silent
-  startup exit. Record requested/actual Vulkan adapter identity and first-decode /
-  presentation checkpoints in opt-in local logs. Verify GPU preference persistence
-  through the actual settings file. These diagnostics do not change synchronization,
-  decode resources or add rendering passes; AMD/NVIDIA playback remains under investigation.
+- Linux: retain renderer startup error reporting and requested/actual GPU identity,
+  and expose Vulkan surface-query failures in the terminal for NVIDIA diagnosis.
+  Remove temporary first-packet, initialization-stage and first-submit checkpoints
+  after AMD H.264 playback was confirmed. Retain GPU preference persistence tests.
 
 - Linux: restrict whole-NV12 video image views to their decode usage; presentation
-  continues sampling separate R8/RG8 plane views without a YCbCr sampler. Release
-  the HAL access guard before importing the texture into wgpu. Add initialization
-  metadata to local logs for AMD/NVIDIA freeze diagnosis; hardware validation
-  of the reported freeze is still required.
+  continues sampling separate R8/RG8 plane views without a YCbCr sampler. Keep
+  explicit short HAL access lifetimes; no additional render pass or frame copy.
 
 - Linux: support Vulkan Video layered reference storage and distinct DPB/output
   images for AMD/NVIDIA capability layouts, retaining the existing Intel path,

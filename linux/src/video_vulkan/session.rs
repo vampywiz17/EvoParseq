@@ -7,18 +7,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 const WAIT_NS: u64 = 100_000_000;
 const MAX_INPUT: u64 = 8 * 1024 * 1024;
 
-// Initialization-only metadata: no per-frame logging, driver strings or pixels.
-pub(super) fn initializing(context: &Context, stage: &'static str, hevc: bool) {
-    crate::event_log::record(
-        "INFO",
-        "vulkan_video_initializing",
-        serde_json::json!({
-            "stage": stage, "codec": if hevc { "HEVC" } else { "H.264" },
-            "adapter": context.adapter_name,
-        }),
-    );
-}
-
 pub struct Session {
     resources: Option<Box<Resources>>,
     pub textures: Vec<wgpu::Texture>,
@@ -210,13 +198,6 @@ impl Drop for Session {
 }
 
 impl Session {
-    fn first_decode(&self, stage: &'static str, hevc: bool) {
-        if !self.initialized
-            && let Some(resources) = &self.resources
-        {
-            initializing(&resources.context, stage, hevc);
-        }
-    }
     pub fn output_layer(&self, slot: usize) -> u32 {
         self.resources.as_ref().map_or(0, |resources| {
             if resources.surfaces.layered && !resources.surfaces.distinct {
@@ -325,7 +306,6 @@ impl Session {
                 )
             }
         };
-        initializing(context, "capabilities_begin", hevc);
         // Entry is needed only to load instance-level Vulkan Video dispatch.
         let entry = unsafe { ash::Entry::load()? };
         let video = ash::khr::video_queue::Instance::new(&entry, &context.instance);
@@ -353,7 +333,6 @@ impl Session {
                 self.size.1.div_ceil(granularity.height.max(1)) * granularity.height.max(1),
             );
         }
-        initializing(context, "capabilities_queried", hevc);
         let max_coded_extent = caps.max_coded_extent;
         let max_dpb_slots = caps.max_dpb_slots;
         let max_active_reference_pictures = caps.max_active_reference_pictures;
@@ -406,7 +385,6 @@ impl Session {
                 None,
             )?
         };
-        initializing(context, "session_created", hevc);
         let requirements = unsafe {
             context
                 .video
@@ -438,7 +416,6 @@ impl Session {
                 .video
                 .bind_video_session_memory(resources.session, &bindings)?
         };
-        initializing(context, "session_memory_bound", hevc);
         let profiles = [profile];
         unsafe {
             crate::video_profile::validate_formats(
@@ -470,15 +447,6 @@ impl Session {
             } else {
                 resources.surfaces.reference_usage()
             };
-            initializing(
-                context,
-                if output {
-                    "output_images_begin"
-                } else {
-                    "reference_images_begin"
-                },
-                hevc,
-            );
             for _ in 0..count {
                 let mut list = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
                 let mut info = vk::ImageCreateInfo::default()
@@ -603,15 +571,6 @@ impl Session {
                 };
                 self.textures.extend((0..layers).map(|_| texture.clone()));
             }
-            initializing(
-                context,
-                if output {
-                    "output_images_ready"
-                } else {
-                    "reference_images_ready"
-                },
-                hevc,
-            );
         }
         // Establish wgpu's RESOURCE state before the first native decode.
         // Subsequent native operations restore SHADER_READ_ONLY_OPTIMAL.
@@ -633,11 +592,8 @@ impl Session {
                     state: wgpu::TextureUses::RESOURCE,
                 }),
         );
-        initializing(context, "graphics_transition_begin", hevc);
         context.queue.submit([encoder.finish()]);
-        initializing(context, "graphics_transition_submitted", hevc);
         context.wait_graphics()?;
-        initializing(context, "graphics_transition_ready", hevc);
         resources.pool = unsafe {
             raw.create_command_pool(
                 &vk::CommandPoolCreateInfo::default()
@@ -767,9 +723,7 @@ impl Session {
     }
 
     pub fn decode(&mut self, job: &Job, bytes: &[u8]) -> Result<()> {
-        self.first_decode("parameters_begin", false);
         self.update_parameters(job)?;
-        self.first_decode("parameters_ready", false);
         for (slot, id) in self.slot_ids.iter_mut().enumerate() {
             if !job
                 .references
@@ -1018,9 +972,7 @@ impl Session {
         headers: &super::hevc_parameters::Headers,
         bytes: &[u8],
     ) -> Result<()> {
-        self.first_decode("parameters_begin", true);
         self.update_hevc_parameters(job, headers)?;
-        self.first_decode("parameters_ready", true);
         for (slot, id) in self.slot_ids.iter_mut().enumerate() {
             if !job
                 .references
@@ -1157,8 +1109,6 @@ impl Session {
         decode: &vk::VideoDecodeInfoKHR<'_>,
         used: &[usize],
     ) -> Result<()> {
-        let first = !self.initialized;
-        let hevc = self.last_hevc.is_some();
         let resources = self.resources.as_mut().context("Video session closed")?;
         let context = resources.context.clone();
         let raw = &context.raw;
@@ -1285,15 +1235,9 @@ impl Session {
                     vk::QueryControlFlags::empty(),
                 );
             }
-            if first {
-                initializing(&context, "decode_command_begin", hevc);
-            }
             context
                 .video
                 .cmd_decode_video(resources.jobs[resources.active].command, &decode);
-            if first {
-                initializing(&context, "decode_command_recorded", hevc);
-            }
             if resources.jobs[resources.active].query != vk::QueryPool::null() {
                 raw.cmd_end_query(
                     resources.jobs[resources.active].command,
@@ -1360,17 +1304,11 @@ impl Session {
                     .signal_semaphores(signals)
                     .push_next(&mut timeline);
             }
-            if first {
-                initializing(&context, "decode_submit_begin", hevc);
-            }
             raw.queue_submit(
                 context.decode_queue,
                 &[submit],
                 resources.jobs[resources.active].fence,
             )?;
-            if first {
-                initializing(&context, "decode_submitted", hevc);
-            }
             for &slot in used {
                 resources.reference_initialized[slot] = true;
             }

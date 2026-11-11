@@ -16,10 +16,13 @@ use winit::{
 // The external event-loop API reports renderer/window initialization errors via
 // log, while run_app itself can return Ok. Forward only framework errors; never
 // enable transport/authentication logging or persist raw messages in JSON logs.
+// Vulkan adapter errors explain failed surface queries before eframe's summary.
 struct FrameworkErrors;
 impl log::Log for FrameworkErrors {
     fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
-        metadata.level() == log::Level::Error && metadata.target().starts_with("eframe::")
+        metadata.level() == log::Level::Error
+            && (metadata.target().starts_with("eframe::")
+                || metadata.target() == "wgpu_hal::vulkan::adapter")
     }
     fn log(&self, record: &log::Record<'_>) {
         if self.enabled(record.metadata()) {
@@ -27,7 +30,11 @@ impl log::Log for FrameworkErrors {
             crate::event_log::record(
                 "ERROR",
                 "desktop_framework_failed",
-                serde_json::json!({"component":"eframe"}),
+                serde_json::json!({"component": if record.target().starts_with("eframe::") {
+                    "eframe"
+                } else {
+                    "vulkan_surface"
+                }}),
             );
         }
     }
@@ -385,6 +392,12 @@ mod focus_tests {
                 .enabled(&log::Metadata::builder().target(target).level(level).build())
         };
         assert!(enabled("eframe::native::run", log::Level::Error));
+        assert!(enabled("wgpu_hal::vulkan::adapter", log::Level::Error));
+        assert!(!enabled("wgpu_hal::vulkan::adapter", log::Level::Info));
+        assert!(!enabled(
+            "wgpu_hal::vulkan::adapter_extra",
+            log::Level::Error
+        ));
         assert!(!enabled("eframe::native::run", log::Level::Info));
         assert!(!enabled("webrtc", log::Level::Error));
         assert!(!enabled("reqwest", log::Level::Error));

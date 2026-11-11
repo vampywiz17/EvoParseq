@@ -91,15 +91,6 @@ impl Sync {
         else {
             return;
         };
-        if value == 1 {
-            crate::event_log::record(
-                "INFO",
-                "vulkan_first_graphics_submit",
-                serde_json::json!({
-                    "adapter": self.context.adapter_name, "decode_ready": ready, "graphics_signal": value,
-                }),
-            );
-        }
         // Called only from the Linux painter's immediate submit hook. No
         // other submission/mapping can consume the staged dependencies.
         let hal =
