@@ -2,36 +2,178 @@
 
 ## Unreleased
 
-- Linux: skip destruction of absent Vulkan Video parameter objects, including
-  the first SPS/PPS setup and partial-initialization cleanup. This avoids a null
-  handle dereference in older Mesa RADV implementations. Add a driver-free
-  dispatch regression test; keep decoding, queues and synchronization unchanged.
+## v0.9.8-dev.1 — Linux Flatpak, Vulkan Video and Windows session fixes (2026-11-12)
 
-- Linux: retain renderer startup error reporting and requested/actual GPU identity,
-  and expose Vulkan surface-query failures in the terminal for NVIDIA diagnosis.
-  Remove temporary first-packet, initialization-stage and first-submit checkpoints
-  after AMD H.264 playback was confirmed. Retain GPU preference persistence tests.
+This development preview builds on **EvoParseq v0.9.6-dev.5** and covers all
+implemented changes since that previous dev release. It brings the Linux port
+into the shared dev branch and includes Windows x64, a distribution-signed
+Android TV APK, and an experimental Linux x86_64 Flatpak. All application versions
+are now **0.9.8-dev.1**; Linux no longer uses a separate 0.1.x application version.
 
-- Linux: restrict whole-NV12 video image views to their decode usage; presentation
-  continues sampling separate R8/RG8 plane views without a YCbCr sampler. Keep
-  explicit short HAL access lifetimes; no additional render pass or frame copy.
+**This is a development preview. EvoParseq v0.9.7 remains the stable release.**
 
-- Linux: support Vulkan Video layered reference storage and distinct DPB/output
-  images for AMD/NVIDIA capability layouts, retaining the existing Intel path,
-  bounded surface lifetime tracking and GPU-resident presentation. Enable the
-  Video GPU selector with persisted hardware selection (restart required).
-  No Windows/Android backend changes or alternative decode API.
+## What's new and improved
 
-- Fix a Windows BUD disconnect deadlock: terminal transport events update the
-  already-locked attempt state instead of reacquiring its mutex. A delivery
-  timeout or host disconnect can now reach the existing teardown and UI error
-  handling instead of freezing the client. Preserve host status codes, retry
-  policy, transport deadlines and the decoder/presentation path.
-- Remove the experimental designation from Windows Display timing, VRR, Zero copy
-  presentation and BUD USB HID input in shared UI text, code names and documentation.
-  Keep defaults, hardware requirements and runtime behavior unchanged. Saved Windows
-  profiles accept the former keys and write the current names. Linux retains its
-  experimental labels and existing JSON keys.
+- **Linux desktop client:** introduce Wayland windowing, a Vulkan-rendered egui
+  interface, Vulkan Video hardware decoding and PipeWire audio. Reuse shared Rust
+  authentication/2FA, discovery, protocol, settings, input and presentation models;
+  keep operating-system operations in Linux adapters. No VAAPI, OpenGL or software
+  decode fallback is introduced.
+- **Linux Vulkan Video playback:** support progressive H.264 and HEVC Main,
+  8-bit 4:2:0 without frame reordering. Handle parameter changes, reference-picture
+  lifetimes, slice offsets, coded-image padding and crop/range metadata. Check
+  decode status where supported. Original decoder NV12 surfaces feed the existing
+  same-device presentation shader without an application decoded-frame copy,
+  intermediate RGBA video texture or CPU readback. Shader conversion still costs
+  GPU work; this is GPU-resident rendering, not the application's Zero copy mode.
+- **Cross-vendor Vulkan resources and GPU choice:** support capability-selected
+  separate/layered DPB storage and coinciding/distinct decoder output, retaining
+  the established Intel layout. Distinct output is written by decoding, without
+  adding an application image copy. Enumerate hardware GPUs and persist the
+  selected Video GPU; changes require restart. Restrict whole-NV12 video views
+  to decode usage while presentation samples the separate plane views.
+- **AMD startup fix:** avoid destroying absent Vulkan Video parameter objects
+  during first SPS/PPS setup or partial cleanup. This avoids a null-handle
+  dereference present in older RADV implementations. Retain a driver-free
+  regression test. Radeon 780M H.264 playback now works in the physical test.
+- **Linux GPU synchronization:** hand decode/render dependencies through timeline
+  semaphores where supported. Track reference images, the selected presentation
+  output and outstanding graphics readers separately. Use two bounded reusable
+  decode submission slots without deepening the media queue; retain resources
+  until their final GPU/render owner finishes. Preserve the synchronous path
+  when timeline handoff is unavailable. No new rendering pass or frame copy.
+- **Linux media delivery and recovery:** reuse the Windows/shared BUD media ingress
+  with bounded video-first batches and prompt burst draining. Decouple compressed
+  video draining from display refresh, retain output leases and recover from
+  background-window stalls at a keyframe. Feed WebRTC media from the detached
+  reader, wake control consumers promptly and use the shared host-certificate
+  compatibility policy while retaining fingerprint/signature verification.
+- **Linux relay/network settings:** integrate the shared STUN, custom TURN and
+  Cloudflare configuration, direct-only and Force TURN policies, including the
+  existing UDP/TCP/TLS relay routes. Protect saved relay secrets and preserve
+  in-memory Cloudflare credentials where selected. BUD remains an explicit choice;
+  failures never silently change the selected transport.
+- **Linux QoS:** connect the existing optional QoS setting to DSCP AF21 and
+  SO_PRIORITY 6, including configured BUD route attempts. The switch remains
+  opt-in; these are scheduling/network hints, not guaranteed latency reductions.
+- **Linux audio:** support stereo WebRTC Opus, BUD Opus/raw PCM and verified
+  default-output 5.1/7.1 layouts. Wire local mute/volume, configurable bounded
+  buffering and automatic output reopening through PipeWire and the shared audio
+  policies. Keep callbacks nonblocking and channel/layout validation explicit.
+- **Linux input:** implement normal Parsec keyboard/mouse and opt-in BUD USB HID,
+  focused text clipboard synchronization, controllers and rumble. Share input
+  policy, HID reports and controller lifecycle with the existing platforms.
+  Include orientation, manual immersive modes and compositor-supported shortcut
+  inhibition. Preserve focus-loss releases, drag/cursor transitions, clipboard
+  permission/echo rules, deferred paste during static video and rumble duration.
+- **Desktop UI parity on Linux:** use shared Windows labels, geometry, styles and
+  control ordering for sign-in, computer selection, Settings, menus, the draggable
+  translucent session icon and overlay. Use native desktop decorations. Keep
+  launcher/Settings and Connection stats fixed-size; restore resizable streaming,
+  first-frame window fitting and centered aspect fitting. Repair cursor restoration,
+  resize cursor transitions and window size restoration after Disconnect.
+- **Linux session controls:** wire display refresh/selection, resolution, bandwidth,
+  FPS/frame pacing and Apply, orientation, immersive modes, fullscreen, local
+  audio controls, Settings, Hide/Close and Disconnect. Handle late host replies
+  without overwriting user edits, including stock-host NUL-terminated messages.
+  Ctrl+Alt+Del requires a host reporting Windows and normal host authorization.
+- **Linux statistics and logging:** populate shared overlay and Connection stats
+  models with the four Overview cards arranged two per row. Expose available
+  transport, format, FPS, timing, queue and audio measurements; keep unavailable
+  data explicit. Sample process CPU/RAM only while stats is open, at most once per
+  second, without a GPU utilization polling worker or extra render. Add bounded,
+  opt-in event logging and actionable renderer/surface errors; remove temporary
+  first-decode investigation checkpoints after the AMD issue was isolated.
+- **Linux persistence, About and updates:** use the Windows-compatible settings
+  schema and encrypted remembered sessions through the Secret portal. Passwords
+  and 2FA codes are not saved. Add native About/Updates windows and GitHub release
+  checks with verified Flatpak downloads handed to the system installer for user
+  confirmation. Package Wayland cursor resources and the Flatpak runtime reference;
+  default ANV_DEBUG=video-decode for Mesa Intel's experimental video path.
+- **Windows BUD freeze fix:** terminal transport events update their already-locked
+  attempt state instead of reacquiring the same mutex. Delivery timeout/host
+  disconnect can reach existing teardown/error handling instead of freezing the
+  application. Preserve status codes, retry policy and video presentation.
+- **Windows feature status and information pages:** remove the experimental label
+  from Display timing, VRR, Zero copy presentation and BUD USB HID input. Defaults
+  and hardware requirements are unchanged; old saved profile keys remain accepted.
+  Linux retains its experimental labels. Remove the duplicate inner scrollbar
+  from About and Check for updates.
+- **Release security and maintenance:** add VirusTotal scans and public SHA-256-linked
+  reports for final release EXE/APK/Flatpak assets and the embedded Linux executable.
+  Scan fully prepared drafts and block publication on detections, errors or
+  incomplete analyses, except the explicitly disclosed, owner-approved sole
+  Trapmine suspicious.low.ml.score finding on a Windows EXE. Harden CI action/tool
+  download references, extend measured coverage/regression checks, trim unused
+  Linux vendor backends/helpers and update the unified platform documentation,
+  AI-assisted development disclosure and Star History chart. Research-only work
+  and the separate macOS branch are not shipped features.
+
+## Compatibility and validation
+
+**Linux Intel/AMD:** live playback has been tested on Intel HD Graphics 520 in
+the HP EliteBook 840 G3 (H.264 and HEVC 8-bit) and AMD Radeon 780M (H.264).
+These tests do not establish every GPU, driver, profile or codec combination.
+
+**Linux NVIDIA: not yet validated.** RTX 3060 / driver 595.84 on the tested hybrid
+AMD/NVIDIA Pop!_OS system fails Vulkan presentation-mode queries before decoding.
+Native vkcube outside EvoParseq and Flatpak fails as well, even with only the
+NVIDIA ICD selected. This independently reproduces a system-side Vulkan failure;
+it is not an EvoParseq-only failure. It resembles a known class of NVIDIA/Wayland
+and hybrid presentation issues ([wgpu report](https://github.com/gfx-rs/wgpu/issues/5382),
+[Flatpak NVIDIA report](https://github.com/flathub/org.freedesktop.Platform.GL.nvidia/issues/327)).
+The exact cause and role of hybrid presentation remain unconfirmed. Validation
+on a dedicated NVIDIA machine is pending; implemented layered-DPB support is
+not a claim of successful NVIDIA playback.
+
+Linux requires a working Wayland/PipeWire desktop and compatible Vulkan Video
+hardware/driver. Flatpak supplies runtime components and matching graphics-driver
+extensions, not missing GPU features or a replacement kernel driver. Linux
+10-bit/4:4:4, AI upscaling, the application's Zero copy mode, verified VRR control,
+runtime GPU switching and simultaneous multi-display windows remain unimplemented.
+HID requires the host driver/permissions and verified primary-display constraints.
+
+Windows x64 and Android 10+ ARMv7/ARM64 requirements remain as documented. Android
+receives aligned version metadata and a signed rebuild; no new Android-only
+feature beyond v0.9.6-dev.5 is claimed. Shared-source fixes/maintenance are included.
+Existing Android 4:2:0/SDR and transport-specific limitations remain applicable.
+
+VirusTotal reports are point-in-time evidence, not a safety certification or
+Google Play Protect approval. Detection counts and any accepted exception remain
+visible; no finding is silently discarded. No universal performance gain is claimed.
+
+## Updating
+
+**Windows:** close the client and extract **EvoParseq-v0.9.8-dev.1-win64.zip**,
+retaining settings.json under the same Windows account. The migration package
+**ParsecWebTurn-v0.9.8-dev.1-win64.zip** contains the identical executable under
+the old filename. ZIPs exclude user settings and the optional NVIDIA runtime.
+
+**Android TV:** install **EvoParseq-TV.apk**, or select the prerelease channel in
+Settings > Updates. Android versionCode is 32, above stable v0.9.7's 31. The
+distribution signing key is unchanged; normal updates retain settings/sign-in.
+**EvoParseq-TV-v0.9.8-dev.1.zip** includes the APK, setup guide and notices. Old
+debug-signed previews may still require the previously documented one-time reinstall.
+
+**Linux:** install **EvoParseq-Linux-v0.9.8-dev.1-x86_64.flatpak**:
+
+```sh
+flatpak install --user --reinstall EvoParseq-Linux-v0.9.8-dev.1-x86_64.flatpak
+flatpak run io.github.vampywiz17.EvoParseq
+```
+
+The application ID remains io.github.vampywiz17.EvoParseq. Upgrading the earlier
+0.1.x Flatpak retains its private settings and protected session under the same
+Linux account. GitHub update checks can offer this build when prereleases are
+included; the system installer still asks for confirmation.
+
+Verify downloads with SHA256SUMS.txt. This prerelease does not replace v0.9.7 as
+the stable updater's latest release. Protected credentials are not portable
+between OS accounts or machines.
+
+Source changes since the previous dev release:
+https://github.com/vampywiz17/EvoParseq/compare/v0.9.6-dev.5...v0.9.8-dev.1
+
 
 ## v0.9.6-dev.5 — Audio controls, Android TV updates and recovery (2026-11-06)
 

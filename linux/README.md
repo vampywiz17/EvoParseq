@@ -1,6 +1,6 @@
 # EvoParseq Linux Flatpak preview
 
-Current preview: **0.1.25**, developed on `dev`. This is an
+Current preview: **0.9.8-dev.1**, developed on `dev`. This is an
 experimental Linux client for unmodified Parsec hosts, not a stable release.
 Windows and Android TV feature availability differs; see the [root README](../README.md).
 
@@ -27,10 +27,10 @@ single host display is supported; HID mouse pins the verified primary output.
 
 Download the `EvoParseq-Linux-Flatpak` artifact from a successful
 [Linux CI run](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Adev),
-then extract `EvoParseq-Linux-v0.1.25-x86_64.flatpak` from the artifact ZIP.
+then extract `EvoParseq-Linux-v0.9.8-dev.1-x86_64.flatpak` from the artifact ZIP.
 
 ```sh
-flatpak install --user --reinstall EvoParseq-Linux-v0.1.25-x86_64.flatpak
+flatpak install --user --reinstall EvoParseq-Linux-v0.9.8-dev.1-x86_64.flatpak
 flatpak run io.github.vampywiz17.EvoParseq
 ```
 
@@ -46,10 +46,19 @@ rendering support alone does not establish Vulkan Video decode support.
 Flatpak packages the runtime and uses its matching graphics driver extensions;
 it cannot supply missing GPU features or replace the host kernel driver.
 
-Playback has been live-tested on the maintainer's HP EliteBook 840 G3 with
-Intel HD Graphics 520. Compatibility still depends on the actual driver and
-profile checks; this is not a guarantee for all Skylake systems. A software-only
-VM can test sign-in and discovery but is not a Vulkan Video playback target.
+Playback has been live-tested on Intel HD Graphics 520 (HP EliteBook 840 G3,
+H.264 and HEVC 8-bit) and AMD Radeon 780M (H.264). Compatibility still depends
+on actual driver/profile checks; this is not universal Intel/AMD compatibility.
+A software-only VM can test sign-in and discovery but is not a playback target.
+
+NVIDIA playback is **not yet hardware-validated**. On the tested hybrid
+AMD/NVIDIA Pop!_OS system, RTX 3060 / driver 595.84 fails Vulkan present-mode
+queries before decoding. Native `vkcube` outside the app/Flatpak fails too,
+even with only the NVIDIA ICD selected. The failure is independently reproducible;
+the exact driver/compositor cause and hybrid-GPU contribution remain unconfirmed.
+This resembles known [NVIDIA Wayland/PRIME presentation failures](https://github.com/gfx-rs/wgpu/issues/5382).
+Testing on a dedicated NVIDIA system remains pending. The implemented layered
+DPB support is not a claim of successful NVIDIA playback.
 
 The Flatpak **already defaults to `ANV_DEBUG=video-decode`** for the experimental
 Mesa Intel video path. No extra launch option is needed. This is vendor-specific,

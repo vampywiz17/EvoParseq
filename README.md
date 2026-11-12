@@ -28,12 +28,13 @@ Parsec, Unity or lowlat.** A Parsec account and a compatible host are required.
 
 **This is the development branch: Windows, Android TV and experimental Linux Flatpak support.**
 The latest stable Windows/Android release is
-[**EvoParseq v0.9.6**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6)
-on `main`. The last published dev release,
-[**v0.9.6-dev.5**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6-dev.5),
-contains Windows ZIPs and the signed Android TV APK, but not Linux.
-The Linux preview is **0.1.17** and is now developed here on `dev`; download its
-Flatpak from successful [dev Linux CI runs](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Adev).
+[**EvoParseq v0.9.7**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.7)
+on `main`. The current dev release,
+[**v0.9.8-dev.1**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8-dev.1),
+includes Windows ZIPs, the signed Android TV APK and the experimental Linux Flatpak.
+All three report version **0.9.8-dev.1**; development continues here on `dev`.
+Linux development artifacts are also available from successful
+[dev Linux CI runs](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Adev).
 Windows previews are installed manually; signed Android builds can check the
 prerelease channel in Settings > Updates. Platform capabilities differ; see below.
 
@@ -66,7 +67,8 @@ prerelease channel in Settings > Updates. Platform capabilities differ; see belo
   published as versioned release assets to be discoverable.
 - **Network:** shared Windows STUN/custom TURN/Cloudflare configuration,
   direct-only and Force TURN for WebRTC and BUD; protected relay secrets and
-  optional in-memory Cloudflare credentials. Windows-only TCP/TLS QoS stays disabled.
+  optional in-memory Cloudflare credentials. The QoS switch enables Linux DSCP AF21
+  and SO_PRIORITY 6; network equipment may ignore these hints.
 - **Persistence:** Windows-compatible `settings.json` schema and encrypted
   remembered sessions through the Linux Secret portal. Passwords and 2FA codes
   are never saved; protected credentials are not portable between platforms.
@@ -74,9 +76,20 @@ prerelease channel in Settings > Updates. Platform capabilities differ; see belo
 Linux currently requires a working Wayland desktop, PipeWire and a driver
 exposing the necessary Vulkan Video H.264 decode and sampleable NV12 surfaces.
 A Flatpak runtime cannot add missing GPU/kernel capabilities. Intel HD 520
-H.264 and HEVC 8-bit playback have been reported working on the maintainer's HP EliteBook 840 G3; that does not
-establish support on every Skylake system or driver. The package defaults to
+H.264 and HEVC 8-bit playback have been reported working on the maintainer's HP EliteBook 840 G3.
+AMD Radeon 780M H.264 playback has also been tested. These observations do not
+establish support for every GPU, driver or codec. The package defaults to
 `ANV_DEBUG=video-decode` for Mesa Intel's experimental video path.
+
+**NVIDIA Linux validation is pending.** On the tested AMD/NVIDIA hybrid Pop!_OS
+system, RTX 3060 / driver 595.84 fails Vulkan presentation before decoding.
+The failure also reproduces in native `vkcube` outside EvoParseq/Flatpak, including
+with only the NVIDIA ICD selected. This establishes an independent system-level
+reproducer, not successful NVIDIA playback. It resembles a known class of
+[NVIDIA/Wayland presentation issues](https://github.com/gfx-rs/wgpu/issues/5382);
+the exact cause and contribution of hybrid presentation remain unconfirmed.
+Validation on a dedicated NVIDIA system is planned; no alternative decoder or
+cross-GPU copy fallback has been introduced.
 
 **Not yet integrated on Linux:** 10-bit/4:4:4 playback, the application's
 Zero copy mode, AI upscaling, runtime GPU switching, verified VRR control and simultaneous multi-display windows.
