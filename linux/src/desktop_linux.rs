@@ -20,6 +20,7 @@ pub struct DesktopInput {
     last_absolute: Option<Pos2>,
     capture_anchor: Option<Pos2>,
     restored_position: Option<Pos2>,
+    peer_restore: Option<(usize, i32, i32)>,
 }
 impl DesktopInput {
     pub fn keyboard(&self) -> std::sync::Arc<crate::native_loop::KeyboardBridge> {
@@ -56,6 +57,7 @@ impl DesktopInput {
         self.unlock_after_present = false;
         self.capture_anchor = None;
         self.restored_position = None;
+        self.peer_restore = None;
         playback.take_cursor_restore();
         self.controls = None;
         self.badge = None;
@@ -74,6 +76,22 @@ impl DesktopInput {
         }
     }
     pub fn cursor(&mut self, ctx: &egui::Context, playback: &Playback) {
+        if let Some((stream, x, y)) = self.peer_restore.take() {
+            if self.enabled && ctx.input(|i| i.focused) {
+                if let Some(position) = playback.cursor_endpoint(stream, x, y) {
+                    ctx.send_viewport_cmd_to(
+                        if stream == 0 {
+                            egui::ViewportId::ROOT
+                        } else {
+                            crate::display_routes::viewport(stream)
+                        },
+                        egui::ViewportCommand::CursorPosition(position),
+                    );
+                }
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
+            ctx.set_cursor_icon(egui::CursorIcon::Default);
+        }
         let grab = self.enabled && playback.capture() && ctx.input(|i| i.focused);
         if grab && self.unlock_after_present {
             self.unlock_after_present = false;
@@ -87,23 +105,18 @@ impl DesktopInput {
         {
             if let Some((stream, x, y)) = playback.take_cursor_restore() {
                 if stream != playback.stream() {
-                    if let Some(position) = playback.cursor_endpoint(stream, x, y) {
-                        // Unlock the old surface before requesting a same-client peer warp.
+                    if playback.cursor_endpoint(stream, x, y).is_some() {
+                        // Commit the source unlock before sending a peer warp on
+                        // the next presentation. Viewport command order is not global.
                         ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(
                             egui::CursorGrab::None,
                         ));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
-                        ctx.send_viewport_cmd_to(
-                            if stream == 0 {
-                                egui::ViewportId::ROOT
-                            } else {
-                                crate::display_routes::viewport(stream)
-                            },
-                            egui::ViewportCommand::CursorPosition(position),
-                        );
+                        ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(false));
+                        self.peer_restore = Some((stream, x, y));
                         self.grabbed = false;
                         self.confined = false;
-                        ctx.set_cursor_icon(egui::CursorIcon::Default);
+                        ctx.set_cursor_icon(egui::CursorIcon::None);
+                        ctx.request_repaint();
                         return;
                     }
                     // A disappeared peer must not warp inside the wrong window.
@@ -579,8 +592,18 @@ mod peer_cursor_tests {
             ..Default::default()
         };
         primary.host_cursor(true, 20, 30);
-        ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &primary));
+        let _ = ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &primary));
         primary.release_peer_cursor(1, 1440, 810);
+        let unlock = ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &primary));
+        assert!(
+            unlock.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|cmd| matches!(
+                    cmd,
+                    egui::ViewportCommand::CursorGrab(egui::CursorGrab::None)
+                ))
+        );
         let out = ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &primary));
         assert!(out.viewport_output[&crate::display_routes::viewport(1)].commands.iter().any(|cmd| matches!(cmd,egui::ViewportCommand::CursorPosition(p) if *p==egui::pos2(730.,429.))));
         assert!(

@@ -1566,15 +1566,14 @@ fn process_viewport_command(
         }),
         ViewportCommand::ContentProtected(v) => window.set_content_protected(v),
         ViewportCommand::CursorPosition(pos) => {
-            let handler = egui_ctx.data(|d| d.get_temp::<CursorPositionHandler>(egui::Id::new("cursor-position-handler")));
-            if handler.is_some_and(|h| h(window, PhysicalPosition::new(f64::from(pixels_per_point * pos.x), f64::from(pixels_per_point * pos.y)))) {
-                return;
-            }
-            if let Err(err) = window.set_cursor_position(PhysicalPosition::new(
-                pixels_per_point * pos.x,
-                pixels_per_point * pos.y,
-            )) {
-                log::warn!("{command:?}: {err}");
+            let position = PhysicalPosition::new(f64::from(pixels_per_point * pos.x), f64::from(pixels_per_point * pos.y));
+            // Preserve winit's locked-pointer hints; use the optional protocol
+            // only for positions which the native backend cannot restore.
+            if let Err(err) = window.set_cursor_position(position) {
+                let handler = egui_ctx.data(|d| d.get_temp::<CursorPositionHandler>(egui::Id::new("cursor-position-handler")));
+                if !handler.is_some_and(|h| h(window, position)) {
+                    log::warn!("{command:?}: {err}");
+                }
             }
         }
         ViewportCommand::CursorGrab(o) => {

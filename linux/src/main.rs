@@ -647,7 +647,6 @@ fn main() -> anyhow::Result<()> {
                         error: settings_error.clone(),
                         show_video: false,
                         ui_state: desktop_ui::State {
-                            prefer_hevc: saved.prefer_hevc,
                             ..Default::default()
                         },
                         badge: Default::default(),

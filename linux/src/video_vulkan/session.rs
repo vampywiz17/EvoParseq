@@ -316,6 +316,7 @@ impl Session {
                     context.hevc && (!self.ten_bit || context.hevc10),
                     "HEVC Vulkan Video is unavailable on the selected device/queue"
                 );
+                h265.std_profile_idc = sps.profile_idc.into();
                 profile.video_codec_operation = vk::VideoCodecOperationFlagsKHR::DECODE_H265;
                 profile = profile.push_next(&mut h265);
                 (

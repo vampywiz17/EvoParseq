@@ -76,7 +76,7 @@ prerelease channel in Settings > Updates. Platform capabilities differ; see belo
 Linux currently requires a working Wayland desktop, PipeWire and a driver
 exposing the necessary Vulkan Video H.264 decode and sampleable NV12 surfaces.
 A Flatpak runtime cannot add missing GPU/kernel capabilities. Intel HD 520
-H.264 and HEVC 8-bit playback have been reported working on the maintainer's HP EliteBook 840 G3.
+H.264 and HEVC 8-bit playback have been reported working on the maintainer's HP EliteBook 840 G3, with Intel HEVC reconfirmed under Nobara Live.
 AMD Radeon 780M H.264 playback has also been tested. These observations do not
 establish support for every GPU, driver or codec. The package defaults to
 `ANV_DEBUG=video-decode` for Mesa Intel's experimental video path.
@@ -93,15 +93,19 @@ the exact cause and contribution of hybrid presentation remain unconfirmed.
 The successful Nobara test shows that hybrid hardware alone is not a blocker;
 no alternative decoder or cross-GPU copy fallback has been introduced.
 
-**Not yet integrated on Linux:** 10-bit/4:4:4 playback, the application's
+HEVC Main10/P010 decoding is now available after selected-device capability checks,
+with SDR presentation and live validation pending. Display timing VRR requests
+adaptive presentation; physical VRR remains unverified.
+
+**Not yet integrated on Linux:** 4:4:4 playback, the application's
 Zero copy mode, AI upscaling, runtime GPU switching and verified VRR control.
 The full Settings layout is present; unimplemented controls remain disabled.
 
 Linux now implements up to three simultaneous host-listed display windows on
 one BUD or WebRTC connection, with one decoder per active display and one audio
 output. Additional windows have independent resolution controls and input;
-Connection stats remains on the primary window. Multi-display Linux hardware
-validation is pending. GPU selection is saved with the shared Windows settings
+Connection stats remains on the primary window. Multi-display playback is now
+live-confirmed by the maintainer. GPU selection is saved with the shared Windows settings
 schema and matching policy; changing the Vulkan GPU requires an app restart.
 
 See [Linux installation, current scope and diagnostics](linux/README.md) and
@@ -424,27 +428,3 @@ Unity names and marks belong to their owners; no affiliation is implied.
     <img alt="EvoParseq GitHub star history" src="https://api.star-history.com/svg?repos=vampywiz17/EvoParseq&amp;type=Date" width="800">
   </picture>
 </a>
-
-
-### Nobara live validation and video extensions (2026-11-13)
-
-The maintainer reports working Linux multi-display playback and HEVC playback
-on the Intel notebook and the test notebook under Nobara Live. This confirms
-the tested Linux HEVC path, not Windows HEVC, Main10, 4:4:4 or HDR. The additional
-notebook's exact HEVC GPU/profile was not recorded.
-
-HEVC Main10 is available when the selected GPU/queue and original P010 surface
-sampling pass capability checks. Presentation remains SDR RGB; HDR output is
-not implied. Main10 live validation is pending. Display timing VRR requests
-Vulkan AutoNoVsync with the documented supported-mode fallback. Physical VRR
-remains compositor-, monitor- and driver-controlled and unverified.
-
-Cross-display cursor restoration targets the destination viewport using the
-public Wayland pointer-warp protocol when advertised. A request is not an
-acknowledgement; older compositors may lack it or decline a cross-window warp.
-Same-window locked-pointer hints remain the fallback.
-
-AI upscaling stays disabled on Linux, as requested. Application Zero copy stays
-disabled because the presentation pass performs YUV-to-RGB conversion. The
-current wgpu format API exposes NV12/P010 but no 4:4:4 multiplanar format;
-4:4:4 needs further renderer integration, not just a host-request switch.

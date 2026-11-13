@@ -165,7 +165,7 @@ pub const DISPLAY_TIMING: SettingRow = SettingRow {
     group: 0,
     label: "Display timing",
     help: if cfg!(target_os = "linux") {
-        "Experimental: normal GPU rendering; reconnect to apply.\nVRR needs an enabled compatible monitor and driver.\nZero copy keeps Windows-managed timing."
+        "Experimental: normal GPU rendering; reconnect to apply.\nVRR requests adaptive Vulkan presentation.\nMonitor/driver/compositor VRR is not verified."
     } else {
         "Normal GPU rendering; reconnect to apply.\nVRR needs an enabled compatible monitor and driver.\nZero copy keeps Windows-managed timing."
     },
@@ -175,7 +175,21 @@ pub const DISPLAY_TIMING: SettingRow = SettingRow {
     kind: Kind::Choice,
     control_text: "",
 };
-pub const CHROMA:SettingRow=SettingRow{tab:1,group:0,label:"Chroma",help:"NVIDIA tested; Intel not live-validated. AMD unavailable.\nHEVC 8/10-bit; requires compatible host and GPU.\nNormal GPU rendering; host may send 4:2:0 instead.",y:438,help_height:60,field_height:32,kind:Kind::Choice,control_text:""};
+pub const CHROMA: SettingRow = SettingRow {
+    tab: 1,
+    group: 0,
+    label: "Chroma",
+    help: if cfg!(target_os = "linux") {
+        "4:4:4 needs a compatible Vulkan renderer; not integrated.\nHEVC Main/Main10 currently use 4:2:0 surfaces."
+    } else {
+        "NVIDIA tested; Intel not live-validated. AMD unavailable.\nHEVC 8/10-bit; requires compatible host and GPU.\nNormal GPU rendering; host may send 4:2:0 instead."
+    },
+    y: 438,
+    help_height: 60,
+    field_height: 32,
+    kind: Kind::Choice,
+    control_text: "",
+};
 pub const SESSION_MENU: SettingRow = SettingRow {
     tab: 1,
     group: 0,
@@ -199,7 +213,21 @@ pub const AI_UPSCALING_EXPERIMENTAL: SettingRow = SettingRow {
     control_text: "",
 };
 pub const TRANSPORT:SettingRow=SettingRow{tab:0,group:0,label:"Transport",help:"WebRTC or BUD: direct UDP or TURN over UDP/TLS/TCP.\nUses the TURN URLs above. Reconnect after changing.",y:844,help_height:40,field_height:32,kind:Kind::Choice,control_text:""};
-pub const VIDEO_PRESENTATION:SettingRow=SettingRow{tab:1,group:0,label:"Video presentation",help:"HEVC 4:2:0: NV12 (8-bit) or P010 (10-bit).\nRequires driver support; otherwise MF. Reconnect after changing.",y:532,help_height:40,field_height:32,kind:Kind::Choice,control_text:""};
+pub const VIDEO_PRESENTATION: SettingRow = SettingRow {
+    tab: 1,
+    group: 0,
+    label: "Video presentation",
+    help: if cfg!(target_os = "linux") {
+        "Vulkan renders original NV12/P010 decoder surfaces.\nA color-conversion pass is required; Zero copy is unavailable."
+    } else {
+        "HEVC 4:2:0: NV12 (8-bit) or P010 (10-bit).\nRequires driver support; otherwise MF. Reconnect after changing."
+    },
+    y: 532,
+    help_height: 40,
+    field_height: 32,
+    kind: Kind::Choice,
+    control_text: "",
+};
 #[cfg(not(target_os = "linux"))]
 pub const TCP_TLS_QOS:SettingRow=SettingRow{tab:0,group:0,label:"TCP/TLS QoS",help:"Windows outgoing TURN traffic only; network support varies.\nUnsupported or refused: continue unmarked.\nReconnect after changing.",y:844 + 94,help_height:60,field_height:32,kind:Kind::Choice,control_text:""};
 #[cfg(target_os = "linux")]
