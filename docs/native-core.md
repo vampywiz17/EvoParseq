@@ -450,8 +450,15 @@ Each additional window uses the existing D3D11 decoder/presenter once for its
 stream, with its own bounded reference/queue state. No decoded readback, screen
 composition or additional decoded-image copy is introduced. One audio pipeline
 and one connection remain active. Additional windows use the draggable session
-icon for Fullscreen, Release/Capture input and Close screen; the main window owns session settings and
-Disconnect. Closing an extra window sends only its stream-disable request. If
+icon for independent Resolution/Apply, Fullscreen, Release/Capture input and
+Close screen; the main window owns session settings and Disconnect. Connection
+stats is disabled on additional windows. Resolution writes refresh the complete
+host configuration, patch only the selected stream's dimensions and confirm that
+slot through the existing bounded readback transaction. Other stream settings
+and unknown host fields are preserved; changes are serialized across windows.
+Normal absolute mouse clicks send the target stream/position before button-down
+on the same ordered input channel. Relative camera input and HID do not receive
+an extra absolute warp. Closing an extra window sends only its stream-disable request. If
 the host rejects it or no picture is decoded within ten seconds, that window
 closes and the event log records its stream/status. Existing presentation-mode
 costs and the project's strict Zero copy definition remain unchanged.

@@ -325,6 +325,12 @@ pub(super) fn run(
                 _ => {}
             }
         }
+        if host_settings
+            .secondary_stream()
+            .is_some_and(|stream| platform.additional_displays().get(stream).is_none())
+        {
+            host_settings.cancel_secondary(view);
+        }
         host_settings.poll(&attempt, view)?;
         if audio_source.is_none() {
             audio_source = attempt.audio_pipeline();
@@ -382,11 +388,32 @@ pub(super) fn run(
             local.clipboard_event(&event, established, platform, |frame| attempt.send(frame))?;
             if let Event::NativeSession(action) = &event {
                 match action {
+                    session_model::Command::DisplayResolution {
+                        stream,
+                        resolution,
+                        size,
+                    } => {
+                        if platform.additional_displays().get(*stream).is_some() {
+                            if host_settings
+                                .display_resolution(&attempt, view, *stream, *resolution, *size)
+                                .is_err()
+                            {
+                                view.notify(Notification::DisplayResolution {
+                                    stream: *stream,
+                                    status: Status::Failed,
+                                    resolution: None,
+                                });
+                            }
+                        }
+                    }
                     session_model::Command::AddDisplay(stream) => {
-                        let result =
+                        let result = if host_settings.busy() {
+                            Err(anyhow::anyhow!("Waiting for the previous host request"))
+                        } else {
                             platform
                                 .additional_displays()
-                                .open(*stream, &attempt, manager.clone());
+                                .open(*stream, &attempt, manager.clone())
+                        };
                         crate::event_log::record(
                             if result.is_ok() { "INFO" } else { "WARN" },
                             "additional_display_requested",

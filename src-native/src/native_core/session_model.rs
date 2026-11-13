@@ -82,6 +82,11 @@ pub enum Notification {
     Status(Status),
     DisplaysChanged,
     DisplaySelected,
+    DisplayResolution {
+        stream: usize,
+        status: Status,
+        resolution: Option<crate::session_preferences::Resolution>,
+    },
 }
 
 /// Only the services needed by the host-settings controller. A view translates
@@ -118,6 +123,7 @@ pub use crate::session_preferences::HostVideo;
 #[derive(Default)]
 pub struct State {
     pub host_video: Mutex<HostVideo>,
+    pub display_resolution: Mutex<crate::session_preferences::Resolution>,
     pub displays: Mutex<Displays>,
     pub video_pending: AtomicBool,
     pub hid_primary_ready: AtomicBool,

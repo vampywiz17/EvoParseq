@@ -126,6 +126,9 @@ impl Window {
     }
 
     unsafe fn open_stats(&self) {
+        if self.display_stream.load(Ordering::Acquire) != 0 {
+            return;
+        }
         let existing = self.stats_page.load(Ordering::Acquire) as HWND;
         if !existing.is_null() {
             ShowWindow(existing, SW_RESTORE);
@@ -895,6 +898,12 @@ impl Window {
         }
     }
 
+    pub(crate) fn native_relative_mouse(&self) -> bool {
+        // Focus/capture reacquisition must not warp a relative camera.
+        self.relative_requested.load(Ordering::Acquire)
+            || self.relative_mouse.load(Ordering::Acquire)
+    }
+
     pub fn native_fullscreen(&self) -> bool {
         self.fullscreen_active.load(Ordering::Acquire)
     }
@@ -1163,7 +1172,14 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
             }
             m if m == WM_APP + 8 => {
                 crate::connection_settings_ui::install_menu(hwnd);
-
+                if s.display_stream.load(Ordering::Acquire) != 0 {
+                    EnableMenuItem(
+                        GetMenu(hwnd),
+                        crate::stats_ui::OPEN as u32,
+                        MF_BYCOMMAND | MF_GRAYED,
+                    );
+                    DrawMenuBar(hwnd);
+                }
                 crate::native_core::session_ui::install(s);
                 return 0;
             }

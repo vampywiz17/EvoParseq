@@ -12,7 +12,8 @@ pub struct Confirmation {
     expected: Value,
     poll_at: Instant,
     deadline: Instant,
-    output_only: bool,
+    fields: &'static [&'static str],
+    stream: usize,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verification {
@@ -26,7 +27,15 @@ impl Confirmation {
         let value: Value = serde_json::from_slice(&frame[13..frame.len() - 1])?;
         Ok(Self {
             expected: value["video"][0].clone(),
-            output_only: false,
+            fields: &[
+                "encoderFPS",
+                "encoderMaxBitrate",
+                "resolutionX",
+                "resolutionY",
+                "fullFPS",
+                "rotated",
+            ],
+            stream: 0,
             poll_at: now + Duration::from_millis(150),
             deadline: now + Duration::from_secs(5),
         })
@@ -36,24 +45,35 @@ impl Confirmation {
             expected: serde_json::json!({"output":id}),
             poll_at: now + Duration::from_millis(150),
             deadline: now + Duration::from_secs(5),
-            output_only: true,
+            fields: &["output"],
+            stream: 0,
         }
+    }
+    #[cfg(windows)]
+    pub fn resolution(frame: &[u8], stream: usize, now: Instant) -> Result<Self> {
+        ensure!(
+            (1..3).contains(&stream),
+            "Invalid additional display stream"
+        );
+        let value: Value = serde_json::from_slice(&frame[13..frame.len() - 1])?;
+        let expected = value["video"]
+            .get(stream)
+            .filter(|v| v.is_object())
+            .context("Host display stream is unavailable")?
+            .clone();
+        Ok(Self {
+            expected,
+            fields: &["resolutionX", "resolutionY"],
+            stream,
+            poll_at: now + Duration::from_millis(150),
+            deadline: now + Duration::from_secs(5),
+        })
     }
     pub fn poll(&mut self, config: &Config, now: Instant) -> Verification {
         if config.value.as_ref().is_some_and(|v| {
-            if self.output_only {
-                return v["video"][0]["output"] == self.expected["output"];
-            }
-            [
-                "encoderFPS",
-                "encoderMaxBitrate",
-                "resolutionX",
-                "resolutionY",
-                "fullFPS",
-                "rotated",
-            ]
-            .iter()
-            .all(|key| v["video"][0][*key] == self.expected[*key])
+            self.fields
+                .iter()
+                .all(|key| v["video"][self.stream][*key] == self.expected[*key])
         }) {
             return Verification::Confirmed;
         }
@@ -115,6 +135,33 @@ impl Config {
         }
         crate::control::text(17, 11, &value.to_string())
     }
+    #[cfg(windows)]
+    pub fn resolution(
+        &self,
+        stream: usize,
+        resolution: Resolution,
+        size: (u32, u32),
+    ) -> Result<bytes::Bytes> {
+        ensure!(
+            (1..3).contains(&stream),
+            "Invalid additional display stream"
+        );
+        let patch = Video {
+            resolution,
+            ..Default::default()
+        }
+        .request(size)?;
+        let patch: Value = serde_json::from_slice(&patch[13..patch.len() - 1])?;
+        let mut value = self.value.clone().context("Waiting for host settings")?;
+        let target = value["video"]
+            .get_mut(stream)
+            .and_then(Value::as_object_mut)
+            .context("Host display stream is unavailable")?;
+        for key in ["resolutionX", "resolutionY"] {
+            target.insert(key.into(), patch["video"][0][key].clone());
+        }
+        crate::control::text(17, 11, &value.to_string())
+    }
     pub fn windows_host(&self) -> bool {
         // Stock Windows host's sub-ID 9 handler calls its serializer with 1,
         // which is written to every video slot's hostOS field.
@@ -158,6 +205,70 @@ pub fn diagnostic(bytes: &[u8]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn independent_resolution_patches_keep_all_other_fields_and_verify_the_right_slot() {
+        let base = serde_json::json!({"virtualMicrophone":1,"unknown":"keep","video":[
+            {"output":"first","resolutionX":1920,"resolutionY":1080,"encoderFPS":60},
+            {"output":"second","resolutionX":2560,"resolutionY":1440,"encoderMaxBitrate":15,"rotated":true},
+            {"output":"third","resolutionX":3840,"resolutionY":2160,"fullFPS":true}, {}, {}]});
+        let mut config = Config::default();
+        config.receive(base.to_string().as_bytes()).unwrap();
+        let now = Instant::now();
+        for stream in [1, 2] {
+            let frame = config
+                .resolution(stream, Resolution::Fixed(1280, 720), (3840, 2160))
+                .unwrap();
+            let patched: Value = serde_json::from_slice(&frame[13..frame.len() - 1]).unwrap();
+            let mut expected = base.clone();
+            expected["video"][stream]["resolutionX"] = 1280.into();
+            expected["video"][stream]["resolutionY"] = 720.into();
+            assert_eq!(patched, expected);
+            let mut confirmation = Confirmation::resolution(&frame, stream, now).unwrap();
+            let mut wrong = base.clone();
+            wrong["video"][0]["resolutionX"] = 1280.into();
+            wrong["video"][0]["resolutionY"] = 720.into();
+            config.receive(wrong.to_string().as_bytes()).unwrap();
+            assert_eq!(confirmation.poll(&config, now), Verification::Waiting);
+            assert_eq!(
+                confirmation.poll(&config, now + Duration::from_millis(151)),
+                Verification::Query
+            );
+            config.receive(expected.to_string().as_bytes()).unwrap();
+            assert_eq!(
+                confirmation.poll(&config, now + Duration::from_millis(152)),
+                Verification::Confirmed
+            );
+            config.receive(base.to_string().as_bytes()).unwrap();
+            assert_eq!(
+                Confirmation::resolution(&frame, stream, now)
+                    .unwrap()
+                    .poll(&config, now + Duration::from_secs(6)),
+                Verification::TimedOut
+            );
+        }
+        for (resolution, expected) in [
+            (Resolution::Host, (0, 0)),
+            (Resolution::Client, (1600, 900)),
+        ] {
+            let frame = config.resolution(1, resolution, (1600, 900)).unwrap();
+            let value: Value = serde_json::from_slice(&frame[13..frame.len() - 1]).unwrap();
+            assert_eq!(value["video"][1]["resolutionX"], expected.0);
+            assert_eq!(value["video"][1]["resolutionY"], expected.1);
+        }
+        for stream in [0, 3, usize::MAX] {
+            assert!(config
+                .resolution(stream, Resolution::Host, (1920, 1080))
+                .is_err());
+        }
+        assert!(config
+            .resolution(1, Resolution::Fixed(0, 0), (1920, 1080))
+            .is_err());
+        config.receive(br#"{"video":[{}]}"#).unwrap();
+        assert!(config
+            .resolution(1, Resolution::Host, (1920, 1080))
+            .is_err());
+    }
     #[test]
     fn explicit_keep_host_releases_previous_fixed_size_without_touching_other_slots() {
         let base = serde_json::json!({"video":[{"output":"same","resolutionX":1920,"resolutionY":1080,"encoderFPS":60},{"output":"other","resolutionX":2560,"resolutionY":1440}]});

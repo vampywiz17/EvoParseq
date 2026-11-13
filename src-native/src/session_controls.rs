@@ -7,6 +7,12 @@ pub enum Command {
     RefreshDisplays,
     #[cfg(windows)]
     AddDisplay(usize),
+    #[cfg(windows)]
+    DisplayResolution {
+        stream: usize,
+        resolution: crate::session_preferences::Resolution,
+        size: (u32, u32),
+    },
     Disconnect,
     HideButton,
     SecureAttention,

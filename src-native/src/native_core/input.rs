@@ -50,6 +50,24 @@ impl Input {
             _ => return None,
         })
     }
+    fn frames(
+        &mut self,
+        event: &Event,
+        viewport: Option<crate::viewport::Viewport>,
+        absolute_click: bool,
+    ) -> [Option<bytes::Bytes>; 2] {
+        let position = match event {
+            Event::Button(true, 0..=4, x, y) if absolute_click => {
+                let Some(position) = self.frame(&Event::Motion(*x, *y), viewport) else {
+                    // An unready viewport must not click the old host position.
+                    return [None, None];
+                };
+                Some(position)
+            }
+            _ => None,
+        };
+        [position, self.frame(event, viewport)]
+    }
     pub(super) fn send(&mut self, attempt: &Attempt, window: &Window, event: &Event) -> Result<()> {
         if matches!(event, Event::RelativeMode(_)) && !attempt.hid_mouse_enabled() {
             return Ok(());
@@ -68,22 +86,28 @@ impl Input {
             return Ok(());
         }
         let viewport = window.presented_viewport();
-        let Some(mut packet) = self.frame(event, viewport) else {
-            return Ok(());
-        };
         let stream = window
             .display_stream
             .load(std::sync::atomic::Ordering::Acquire);
-        if stream != 0 && packet[12] == 3 {
-            let Ok(motion) = crate::display_stream::motion(stream, &packet) else {
-                return Ok(());
-            };
-            packet = motion;
-        }
-        if window.native_input_allowed()
-            || matches!(event, Event::Focus(false) | Event::HidInputRelease)
+        let absolute_click = !attempt.hid_mouse_enabled() && !window.native_relative_mouse();
+        for mut packet in self
+            .frames(event, viewport, absolute_click)
+            .into_iter()
+            .flatten()
         {
-            attempt.native_input(&packet, viewport)?;
+            if stream != 0 && packet[12] == 3 {
+                let Ok(motion) = crate::display_stream::motion(stream, &packet) else {
+                    return Ok(());
+                };
+                packet = motion;
+            }
+            if window.native_input_allowed()
+                || matches!(event, Event::Focus(false) | Event::HidInputRelease)
+            {
+                // Position/stream selection precedes the button on the same
+                // reliable ordered control channel, including an activating click.
+                attempt.native_input(&packet, viewport)?;
+            }
         }
         Ok(())
     }
@@ -92,6 +116,52 @@ impl Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn activating_click_positions_the_host_before_pressing_on_each_screen() {
+        let viewport = Some(crate::viewport::Viewport {
+            source: (1920, 1080),
+            client: (960, 540),
+        });
+        for stream in 0..3 {
+            let mut input = Input::default();
+            let frames = input.frames(&Event::Button(true, 0, 240, 135), viewport, true);
+            let motion = frames[0].as_ref().unwrap();
+            assert_eq!(*motion, crate::control::header(3, 0, 480, 270));
+            if stream != 0 {
+                assert_eq!(
+                    crate::display_stream::motion(stream, motion).unwrap()[12],
+                    26
+                );
+            }
+            assert_eq!(
+                frames[1].as_ref().unwrap(),
+                &crate::control::header(1, 1, 1, 0)
+            );
+            let released = input.frames(&Event::Button(false, 0, 240, 135), viewport, true);
+            assert!(released[0].is_none());
+            assert_eq!(
+                released[1].as_ref().unwrap(),
+                &crate::control::header(1, 1, 0, 0)
+            );
+        }
+        // Relative camera and the existing HID path must not receive a warp.
+        let mut input = Input::default();
+        assert!(input.frames(&Event::Button(true, 0, 20, 20), viewport, false)[0].is_none());
+        assert!(input
+            .frames(&Event::Button(true, 0, 20, 20), None, true)
+            .iter()
+            .all(Option::is_none));
+        let letterbox = Some(crate::viewport::Viewport {
+            source: (1920, 1080),
+            client: (960, 720),
+        });
+        let frames = input.frames(&Event::Button(true, 0, 240, 10), letterbox, true);
+        assert_eq!(
+            frames[0].as_ref().unwrap(),
+            &crate::control::header(3, 0, 480, 0)
+        );
+        assert!(frames[1].is_some());
+    }
     #[test]
     fn unverified_primary_blocks_mouse_but_keeps_releases_and_keyboard() {
         for event in [

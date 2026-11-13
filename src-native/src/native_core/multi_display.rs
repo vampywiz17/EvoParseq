@@ -320,6 +320,22 @@ impl Displays {
             }
             for event in events.drain(..) {
                 match event {
+                    Event::NativeSession(crate::session_controls::Command::Apply(video)) => {
+                        if let Some(primary) = self
+                            .primary
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .upgrade()
+                        {
+                            primary.events.push(Event::NativeSession(
+                                crate::session_controls::Command::DisplayResolution {
+                                    stream,
+                                    resolution: video.resolution,
+                                    size: screen.window.native_display_size(),
+                                },
+                            ));
+                        }
+                    }
                     Event::NativeSession(crate::session_controls::Command::Disconnect)
                     | Event::Shortcut(crate::input::Shortcut::Disconnect) => closing = true,
                     Event::Shortcut(crate::input::Shortcut::Fullscreen) => screen
