@@ -264,7 +264,14 @@ impl Displays {
         }
     }
 
-    pub fn cursor_mode(&self, stream: usize, relative: bool, hidden: bool, suppressed: bool) {
+    pub fn cursor_mode(
+        &self,
+        stream: usize,
+        relative: bool,
+        hidden: bool,
+        suppressed: bool,
+        position: (i32, i32),
+    ) {
         use std::sync::atomic::Ordering;
         if stream >= STREAMS {
             return;
@@ -286,18 +293,26 @@ impl Displays {
         if screens.iter().all(Option::is_none) || (stream != 0 && screens[stream - 1].is_none()) {
             return;
         }
-        self.visible_cursor_stream
-            .store(stream + 1, Ordering::Release);
-        if let Some(primary) = self
+        let primary = self
             .primary
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .upgrade()
-        {
-            primary.release_peer_cursor(stream);
+            .upgrade();
+        let target = if stream == 0 {
+            primary.clone()
+        } else {
+            screens[stream - 1].as_ref().map(|s| s.window.clone())
+        };
+        let Some(target) = target else {
+            return;
+        };
+        self.visible_cursor_stream
+            .store(stream + 1, Ordering::Release);
+        if let Some(primary) = primary {
+            primary.release_peer_cursor(&target, position);
         }
         for screen in screens.iter().flatten() {
-            screen.window.release_peer_cursor(stream);
+            screen.window.release_peer_cursor(&target, position);
         }
     }
     pub fn pointer(&self, stream: usize, bytes: &[u8]) -> Result<()> {

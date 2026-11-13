@@ -111,6 +111,7 @@ impl Runtime for Windows {
             parsed.update.relative,
             parsed.update.hidden,
             parsed.update.suppressed,
+            (i32::from(parsed.update.x), i32::from(parsed.update.y)),
         );
         if stream == 0 {
             pointer.receive(frame, &self.window)

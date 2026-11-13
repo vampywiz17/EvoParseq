@@ -486,8 +486,13 @@ count field to the existing remote video configuration.
 
 A visible, unsuppressed absolute cursor on another live stream invalidates an
 old stream's hidden/relative cursor request. Clear that stale request without
-changing focus, releasing held buttons/keys or warping to the old display's
-coordinates. This lets cross-display window drags return from relative capture
+changing focus or releasing held buttons/keys. Restore the pointer once through
+the destination stream's current viewport and client-to-screen transform, with
+the existing Disable cursor warp preference respected. Never reuse the old
+display's coordinates. Both possible synthetic-move recipients (source capture
+and destination) suppress the warp echo, including negative client coordinates.
+The destination is held weakly and must remain live/visible; closed/minimized
+windows do not receive a restoration. This lets cross-display window drags return from relative capture
 when the host reports the visible cursor on the destination stream. Hidden or
 relative updates retain the existing SDK/lowlat capture rule; suppressed cursors
 never prove a visible endpoint. Closed/unknown streams do not trigger recovery.

@@ -247,10 +247,14 @@ pub fn captured_key_data(key: &KBDLLHOOKSTRUCT, down: bool, mods: usize) -> LPAR
 pub fn position(lp: LPARAM) -> (i32, i32) {
     (lp as i16 as i32, (lp >> 16) as i16 as i32)
 }
+/// Encode the signed 16-bit coordinates carried by WM_MOUSEMOVE; zero is
+/// reserved for no pending warp. Negative peer-window coordinates stay valid.
+pub fn motion_echo(x: i32, y: i32) -> u64 {
+    (u64::from(x as u16) << 16 | u64::from(y as u16)) + 1
+}
 pub fn motion(lp: LPARAM, warp_echo: u64) -> Option<Event> {
     let (x, y) = position(lp);
-    (warp_echo == 0 || warp_echo - 1 != (u64::from(x as u32) << 32 | u64::from(y as u32)))
-        .then_some(Event::Motion(x, y))
+    (warp_echo == 0 || warp_echo != motion_echo(x, y)).then_some(Event::Motion(x, y))
 }
 pub fn button(message: u32, wp: WPARAM, lp: LPARAM) -> Option<Event> {
     let (down, button) = match message {
@@ -365,7 +369,15 @@ mod tests {
             assert!(matches!(motion(point(x, y), 0), Some(Event::Motion(a, b))
                 if a == i32::from(x) && b == i32::from(y)));
         }
-        let echo = (u64::from(-50i32 as u32) << 32 | 25) + 1;
+        for x in [i16::MIN, -1, 0, i16::MAX] {
+            for y in [i16::MIN, -1, 0, i16::MAX] {
+                let echo = motion_echo(i32::from(x), i32::from(y));
+                assert_ne!(echo, 0);
+                assert!(motion(point(x, y), echo).is_none());
+                assert!(motion(point(x.wrapping_add(1), y), echo).is_some());
+            }
+        }
+        let echo = motion_echo(-50, 25);
         assert!(motion(point(-50, 25), echo).is_none());
         assert!(matches!(
             motion(point(-49, 25), echo),
