@@ -510,6 +510,15 @@ impl Playback {
     }
 }
 
+impl crate::bud_ingress::VideoTarget for Playback {
+    fn encoder_rebuilt(&self) {
+        self.encoder_rebuilt();
+    }
+    fn submit_oriented(&self, bytes: &[u8], info: PacketInfo, rotation: u8) -> Result<bool> {
+        self.submit_oriented(bytes, info, rotation)
+    }
+}
+
 impl crate::video_output::NativeSink for Playback {
     fn submit(&self, bytes: &[u8], info: PacketInfo) -> bool {
         self.submit_packet(bytes, info).unwrap_or(false)

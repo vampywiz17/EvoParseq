@@ -642,20 +642,6 @@ fn observe(
     }
 }
 
-impl crate::bud_ingress::VideoTarget for crate::playback::Playback {
-    fn encoder_rebuilt(&self) {
-        self.encoder_rebuilt();
-    }
-    fn submit_oriented(
-        &self,
-        bytes: &[u8],
-        info: crate::video_stream::PacketInfo,
-        rotation: u8,
-    ) -> Result<bool> {
-        self.submit_oriented(bytes, info, rotation)
-    }
-}
-
 /// Transport binding only: state, framing, release policy and geometry are shared.
 struct Input {
     engine: crate::desktop_input::Engine,
