@@ -157,6 +157,8 @@ struct Completion {
     video_stream: Arc<Mutex<crate::video_stream::Inspector>>,
     #[cfg(windows)]
     displays: std::sync::Weak<crate::native_core::multi_display::Displays>,
+    #[cfg(windows)]
+    encoder_flags: i32,
     audio_stream: Option<crate::audio_stream::Pipeline>,
     #[cfg(target_os = "linux")]
     linux_video: Option<Arc<dyn crate::video_output::NativeSink>>,
@@ -602,6 +604,8 @@ impl Attempt {
             video_stream: Arc::new(Mutex::new(video_stream)),
             #[cfg(windows)]
             displays: Default::default(),
+            #[cfg(windows)]
+            encoder_flags: 8,
             #[cfg(any(windows, target_os = "android"))]
             video_output: None,
             audio_stream: None,
@@ -793,6 +797,10 @@ impl Attempt {
             return;
         }
         state.displays = Arc::downgrade(&window.displays);
+        window
+            .displays
+            .flags
+            .store(state.encoder_flags, Ordering::Release);
         window.multidisplay_ready.store(true, Ordering::Release);
         state.telemetry = Some((window.stats.clone(), generation));
         state.audio_stream = Some(audio);
@@ -990,6 +998,14 @@ fn worker(
         )))]
         {
             config.allow_hevc = false;
+        }
+        #[cfg(windows)]
+        {
+            let mut state = shared.lock().unwrap_or_else(|e| e.into_inner());
+            state.encoder_flags = config.video_flags() as i32;
+            if let Some(displays) = state.displays.upgrade() {
+                displays.flags.store(state.encoder_flags, Ordering::Release);
+            }
         }
         let inspector = shared
             .lock()
@@ -1976,6 +1992,8 @@ mod tests {
             video_stream: Default::default(),
             #[cfg(windows)]
             displays: Default::default(),
+            #[cfg(windows)]
+            encoder_flags: 8,
             #[cfg(any(windows, target_os = "android"))]
             video_output: None,
             audio_stream: None,

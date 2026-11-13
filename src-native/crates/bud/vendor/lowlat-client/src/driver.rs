@@ -758,9 +758,7 @@ impl Driver {
                 // application request. Other platforms retain one stream.
                 let _ = self.units.secondary(message.a0 as usize, true);
             }
-            if message.opcode == op::ENCODER_CONFIG
-                && (message.a0 == 0 || (cfg!(windows) && message.a0 < 3))
-            {
+            if message.opcode == op::ENCODER_CONFIG && message.a0 == 0 {
                 message.a1 = negotiated_encoder_flags(message.a1, self.init.flags);
             }
             self.send_control(session, &message);

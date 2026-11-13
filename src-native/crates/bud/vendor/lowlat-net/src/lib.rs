@@ -30,13 +30,22 @@
 )]
 
 // The host candidates wait on the platform's interface walk.
-#[cfg_attr(not(any(target_os = "linux", target_os = "android", windows)), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "android", windows)),
+    allow(dead_code)
+)]
 pub mod addrs;
 #[cfg(any(target_os = "linux", target_os = "android", windows))]
 mod carrier;
-#[cfg(all(feature = "turn-stream", any(target_os = "linux", target_os = "android", windows)))]
+#[cfg(all(
+    feature = "turn-stream",
+    any(target_os = "linux", target_os = "android", windows)
+))]
 pub mod stream_io;
-#[cfg(all(feature = "turn-stream", any(target_os = "linux", target_os = "android", windows)))]
+#[cfg(all(
+    feature = "turn-stream",
+    any(target_os = "linux", target_os = "android", windows)
+))]
 mod tcp;
 pub mod turn_stream;
 

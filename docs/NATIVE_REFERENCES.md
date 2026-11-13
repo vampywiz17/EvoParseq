@@ -141,3 +141,22 @@ Synthetic wire/lifecycle tests do not establish stock-host live compatibility.
   policy retains Windows' bounds, UTF-8 truncation, echo suppression and focus
   revocation. Linux synchronizes on activation/paste; it does not monitor the
   background clipboard or record its contents.
+
+## Windows additional-display control
+
+Read-only inspection of the same installed 150-105c runtime/hash above established
+the directional opcode-27 contract. The client helper at RVA `0xa1920` sends
+`(stream, enabled, 0, 27)` and is called for creation at `0x8e82b` and closure at
+`0x8eb10`. The host sends opcode 27 back as `(stream, 0, status, 27)`. It is not
+an acknowledgement of successful client-side window creation. The secondary
+mouse encoder at `0x4aa39` uses opcode 26 with `(stream << 1) | relative` and
+packed unsigned-horizontal/signed-vertical 16-bit coordinate halves. No binary
+implementation is incorporated, no entitlement check is patched, and host
+acceptance without Warp remains an explicit live validation question.
+
+The initial Windows adapter opens streams 1/2 for the corresponding host-listed
+outputs; physical/virtual output creation remains the host's responsibility.
+Additional windows have fullscreen and Close screen controls; the original
+window retains session settings/audio/Disconnect. Normal Parsec input is the
+initial supported multi-display mode. Secondary HID desktop-coordinate mapping
+is not inferred from local window positions.

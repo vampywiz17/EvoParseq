@@ -436,3 +436,26 @@ driver; runtime capability checks and MF fallback remain necessary.
 Under the current unified policy, Intel HEVC variants (including VPL 8-bit)
 have not been live-tested: the available Intel test machine has HEVC disabled.
 Earlier hardware observations do not validate the current extended VPL paths.
+
+## Windows multi-display development build
+
+The session overlay's **Add screen** menu requests a second or third host display
+on the existing connection (BUD or WebRTC). The initial implementation exposes
+the host's stream slots 1/2, corresponding to its second/third listed outputs.
+Use extended host displays and normal Parsec mouse/keyboard input. Already-open
+outputs are not opened twice. This feature still needs a live multi-monitor
+host test; host acceptance, including account restrictions, is not guaranteed.
+
+Each additional window uses the existing D3D11 decoder/presenter once for its
+stream, with its own bounded reference/queue state. No decoded readback, screen
+composition or additional decoded-image copy is introduced. One audio pipeline
+and one connection remain active. Additional windows use the draggable session
+icon for Fullscreen/Close screen; the main window owns session settings and
+Disconnect. Closing an extra window sends only its stream-disable request. If
+the host rejects it or no picture is decoded within ten seconds, that window
+closes and the event log records its stream/status. Existing presentation-mode
+costs and the project's strict Zero copy definition remain unchanged.
+
+Android/Linux frontends do not enable this feature. The small vendored Rust
+formatting changes accompanying the Windows backend validation are mechanical;
+their media behavior is unchanged.

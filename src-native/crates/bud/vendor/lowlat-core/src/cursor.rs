@@ -173,4 +173,3 @@ pub fn parse<'a>(message: &Control<'a>) -> Result<Message<'a>> {
         image,
     })
 }
-

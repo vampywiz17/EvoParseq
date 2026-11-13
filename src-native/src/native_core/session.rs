@@ -264,7 +264,16 @@ pub(super) fn run(
             if frame.get(12) == Some(&27) && frame.len() >= 13 {
                 let stream = u32::from_be_bytes(frame[..4].try_into().unwrap()) as usize;
                 if stream != 0 {
+                    let status = i32::from_be_bytes(frame[8..12].try_into().unwrap());
+                    crate::event_log::record(
+                        "INFO",
+                        "host_display_ended",
+                        serde_json::json!({"stream":stream,"host_status":status}),
+                    );
                     platform.additional_displays().close(stream);
+                    if status != 0 {
+                        view.notify(Notification::Status(Status::Failed));
+                    }
                 }
                 continue;
             }

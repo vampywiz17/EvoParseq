@@ -7,22 +7,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::display_stream::{enable, STREAMS};
 
-fn flags(manager: &Manager) -> i32 {
-    let settings = manager.view().0;
-    crate::control::Config {
-        allow_hevc: settings.prefer_hevc,
-        ten_bit: settings.experimental_ten_bit,
-        chroma_444: settings.experimental_chroma_444,
-        video_protocol: crate::video_stream::VideoProtocol {
-            version: 1,
-            message_size: 11,
-            version_offset: 0,
-            flag_offset: 4,
-        },
-    }
-    .video_flags() as i32
-}
-
 pub unsafe fn controls(window: &Window) {
     use windows_sys::Win32::{Foundation::POINT, UI::WindowsAndMessaging::*};
     let menu = CreatePopupMenu();
@@ -101,7 +85,7 @@ pub struct Screen {
     ingress: Mutex<crate::bud_ingress::VideoState>,
     input: Mutex<Input>,
     pointer: Mutex<Pointer>,
-    flags: i32,
+    flags: std::sync::atomic::AtomicI32,
     opened: std::time::Instant,
     failed: std::sync::atomic::AtomicBool,
 }
@@ -111,6 +95,7 @@ pub struct Displays {
     screens: Mutex<[Option<Arc<Screen>>; STREAMS - 1]>,
     primary: Mutex<std::sync::Weak<Window>>,
     focus: std::sync::atomic::AtomicUsize,
+    pub flags: std::sync::atomic::AtomicI32,
 }
 
 impl Displays {
@@ -221,40 +206,32 @@ impl Displays {
             version_offset: 0,
             flag_offset: 4,
         });
-        inspector.enable_hevc(manager.view().0.prefer_hevc);
+        let flags = self.flags.load(std::sync::atomic::Ordering::Acquire);
+        inspector.enable_hevc(flags & 1 != 0);
         let screen = Arc::new(Screen {
             window,
             video,
             inspector: Arc::new(Mutex::new(inspector)),
             ingress: Mutex::new(crate::bud_ingress::VideoState::new(
-                manager.view().0.prefer_hevc,
-                manager.view().0.experimental_ten_bit,
-                manager.view().0.experimental_chroma_444,
+                flags & 1 != 0,
+                flags & 0x10 != 0,
+                flags & 2 != 0,
             )),
             input: Default::default(),
             pointer: Default::default(),
-            flags: flags(&manager),
+            flags: std::sync::atomic::AtomicI32::new(
+                self.flags.load(std::sync::atomic::Ordering::Acquire),
+            ),
             opened: std::time::Instant::now(),
             failed: std::sync::atomic::AtomicBool::new(false),
         });
         self.screens.lock().unwrap_or_else(|e| e.into_inner())[stream - 1] = Some(screen);
+        self.changed();
         let result = (|| {
-            let settings = manager.view().0;
-            let config = crate::control::Config {
-                allow_hevc: settings.prefer_hevc,
-                ten_bit: settings.experimental_ten_bit,
-                chroma_444: settings.experimental_chroma_444,
-                video_protocol: crate::video_stream::VideoProtocol {
-                    version: 1,
-                    message_size: 11,
-                    version_offset: 0,
-                    flag_offset: 4,
-                },
-            };
             attempt.send(&crate::control::header(
                 13,
                 stream as i32,
-                config.video_flags() as i32,
+                self.flags.load(std::sync::atomic::Ordering::Acquire),
                 0,
             ))?;
             attempt.send(&enable(stream, true)?)
@@ -263,6 +240,20 @@ impl Displays {
             self.close(stream);
         }
         result
+    }
+
+    fn changed(&self) {
+        if let Some(primary) = self
+            .primary
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .upgrade()
+        {
+            super::session_model::View::notify(
+                primary.as_ref(),
+                super::session_model::Notification::DisplaysChanged,
+            );
+        }
     }
 
     pub fn close(&self, stream: usize) {
@@ -278,6 +269,7 @@ impl Displays {
             screen.window.end_session();
             screen.window.request_stop();
             screen.window.close();
+            self.changed();
         }
     }
 
@@ -335,10 +327,12 @@ impl Displays {
             };
             let mut events = std::collections::VecDeque::new();
             screen.window.events.take_batch(&mut events);
-            let mut closing =
-                screen.window.stop.stopped() || screen.video.snapshot().failure_stage.is_some();
+            let snapshot = screen.video.snapshot();
+            let mut closing = screen.failed.load(std::sync::atomic::Ordering::Acquire)
+                || screen.window.stop.stopped()
+                || snapshot.failure_stage.is_some();
             if screen.opened.elapsed() > std::time::Duration::from_secs(10)
-                && screen.video.snapshot().frames_decoded == 0
+                && snapshot.frames_decoded == 0
             {
                 closing = true;
             }
@@ -371,20 +365,19 @@ impl Displays {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .wait_for_keyframe();
-                let flags = if fallback {
-                    8
-                } else {
-                    // The primary transport normalizes primary encoder requests;
-                    // secondary requests keep this stream's declared format.
-                    screen.flags
-                };
+                if fallback {
+                    screen
+                        .flags
+                        .fetch_and(!2, std::sync::atomic::Ordering::AcqRel);
+                }
+                let flags = screen.flags.load(std::sync::atomic::Ordering::Acquire);
                 attempt.send(&crate::control::header(13, stream as i32, flags, 1))?;
             }
             if closing {
                 crate::event_log::record(
                     "INFO",
                     "additional_display_ended",
-                    serde_json::json!({"stream":stream,"decoded":screen.video.snapshot().frames_decoded}),
+                    serde_json::json!({"stream":stream,"decoded":snapshot.frames_decoded}),
                 );
                 let _ = screen.input.lock().unwrap_or_else(|e| e.into_inner()).send(
                     attempt,

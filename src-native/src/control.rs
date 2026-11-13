@@ -36,8 +36,7 @@ impl Config {
         if bytes.len() < 13 || bytes[12] != 13 {
             return bytes;
         }
-        let stream = u32::from_be_bytes(bytes[..4].try_into().unwrap());
-        if stream != 0 && !(cfg!(windows) && stream < 3) {
+        if bytes[..4] != [0; 4] {
             return bytes;
         }
         let old = u32::from_be_bytes(bytes[4..8].try_into().unwrap());
@@ -326,7 +325,7 @@ mod tests {
         );
         assert_eq!(
             config.encoder_request(header(13, 1, 2, 1)),
-            header(13, 1, if cfg!(windows) { 0x19 } else { 2 }, 1)
+            header(13, 1, 2, 1)
         );
         assert_eq!(
             config.encoder_request(header(12, 0, 2, 1)),

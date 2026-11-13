@@ -102,3 +102,14 @@ On 2026-10-26, video encode telemetry adopts the kind filter from upstream
 kinds do not. The existing last-nonzero-video value and per-session reset
 behavior are retained. This is telemetry-only; no packet timing, decoding,
 frame copies or GPU work changes.
+
+## Windows additional display streams
+
+The Windows external-video adapter can receive stream 1/2 on independent BUD
+channels 3/4. Its extra receive rings use the original bounded ring size and
+sequence/ACK policy. Compressed handoff pools are created only after an explicit
+stream-enable request and retained within the connection's fixed two extra slots.
+No SDK decoder, audio pipeline, timer, socket or rendering pass is added. The
+existing keyframe-aligned catch-up helper accepts the selected channel; the
+primary stream passes its original channel 1. This code is `cfg(windows)`;
+Android/Linux retain their original single-stream receipt behavior.

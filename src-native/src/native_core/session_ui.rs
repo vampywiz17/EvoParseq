@@ -163,7 +163,10 @@ unsafe fn update_displays(hwnd: HWND, panel: &mut Panel) {
     SendMessageW(combo, CB_RESETCONTENT, 0, 0);
     panel.display_ids.clear();
     let mut selected = None;
-    for output in &displays.outputs {
+    for (stream, output) in displays.outputs.iter().enumerate() {
+        if stream != 0 && window.displays.get(stream).is_some() {
+            continue;
+        }
         let label = format!(
             "{}{}",
             output.name,

@@ -38,6 +38,12 @@ impl Media {
             .sender()
             .ok_or_else(|| anyhow::anyhow!("native audio sender unavailable"))?;
         let displays = Arc::downgrade(&window.displays);
+        window.displays.flags.store(
+            (8 | u32::from(hevc_available)
+                | if ten_bit { 16 } else { 0 }
+                | if chroma_444 { 2 } else { 0 }) as i32,
+            std::sync::atomic::Ordering::Release,
+        );
         window
             .multidisplay_ready
             .store(true, std::sync::atomic::Ordering::Release);
