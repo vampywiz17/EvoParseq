@@ -2004,6 +2004,26 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn optional_display_channels_do_not_fail_or_allocate_the_primary_pipeline() {
+        let mut state = empty_completion();
+        let displays = Arc::new(crate::native_core::multi_display::Displays::default());
+        state.displays = Arc::downgrade(&displays);
+        for channel in [3, 4] {
+            assert!(matches!(
+                state.prepare_receive(channel, false, &[0; 13]),
+                Some(Delivery::EmptyMessage)
+            ));
+            state.fail_channel(FailureStage::DataChannelClosed, channel);
+            assert!(!state.progress.failed);
+        }
+        assert!(state.video_output.is_none());
+        assert_eq!(state.progress.channel_messages_received, [0; 3]);
+        state.fail_channel(FailureStage::DataChannelClosed, 1);
+        assert!(state.progress.failed);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_control_receipt_wakes_the_existing_consumer() {

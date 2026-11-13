@@ -7,35 +7,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::display_stream::{enable, STREAMS};
 
-pub unsafe fn controls(window: &Window) {
-    use windows_sys::Win32::{Foundation::POINT, UI::WindowsAndMessaging::*};
-    let menu = CreatePopupMenu();
-    if menu.is_null() {
-        return;
-    }
-    AppendMenuW(menu, MF_STRING, 1, super::ui::wide("Fullscreen").as_ptr());
-    AppendMenuW(menu, MF_STRING, 2, super::ui::wide("Close screen").as_ptr());
-    let mut position = POINT { x: 0, y: 0 };
-    GetCursorPos(&mut position);
-    let selected = TrackPopupMenu(
-        menu,
-        TPM_RETURNCMD | TPM_NONOTIFY,
-        position.x,
-        position.y,
-        0,
-        window.handle(),
-        std::ptr::null(),
-    );
-    DestroyMenu(menu);
-    match selected {
-        1 => window.set_fullscreen(!window.native_fullscreen()),
-        2 => window.events.push(Event::NativeSession(
-            crate::session_controls::Command::Disconnect,
-        )),
-        _ => {}
-    }
-}
-
 pub unsafe fn add_menu(window: &Window) {
     use windows_sys::Win32::{Foundation::POINT, UI::WindowsAndMessaging::*};
     let menu = CreatePopupMenu();
@@ -84,6 +55,7 @@ pub struct Screen {
     pub inspector: Arc<Mutex<crate::video_stream::Inspector>>,
     ingress: Mutex<crate::bud_ingress::VideoState>,
     input: Mutex<Input>,
+    batch: Mutex<std::collections::VecDeque<Event>>,
     pointer: Mutex<Pointer>,
     flags: std::sync::atomic::AtomicI32,
     opened: std::time::Instant,
@@ -120,7 +92,11 @@ impl Displays {
                     .upgrade()
                     .is_some_and(|w| w.native_input_allowed()))
     }
-    pub fn synchronize_input(&self, attempt: &Attempt, primary_input: &mut Input) -> Result<()> {
+    pub(super) fn synchronize_input(
+        &self,
+        attempt: &Attempt,
+        primary_input: &mut Input,
+    ) -> Result<()> {
         use std::sync::atomic::Ordering;
         let screens = self
             .screens
@@ -164,7 +140,12 @@ impl Displays {
             .clone()
     }
 
-    pub fn open(&self, stream: usize, attempt: &Attempt, manager: Arc<Manager>) -> Result<()> {
+    pub(super) fn open(
+        &self,
+        stream: usize,
+        attempt: &Attempt,
+        manager: Arc<Manager>,
+    ) -> Result<()> {
         ensure!(
             (1..STREAMS).contains(&stream),
             "Invalid additional display stream"
@@ -218,6 +199,7 @@ impl Displays {
                 flags & 2 != 0,
             )),
             input: Default::default(),
+            batch: Default::default(),
             pointer: Default::default(),
             flags: std::sync::atomic::AtomicI32::new(
                 self.flags.load(std::sync::atomic::Ordering::Acquire),
@@ -320,12 +302,12 @@ impl Displays {
         Ok(())
     }
 
-    pub fn poll(&self, attempt: &Attempt) -> Result<()> {
+    pub(super) fn poll(&self, attempt: &Attempt) -> Result<()> {
         for stream in 1..STREAMS {
             let Some(screen) = self.get(stream) else {
                 continue;
             };
-            let mut events = std::collections::VecDeque::new();
+            let mut events = screen.batch.lock().unwrap_or_else(|e| e.into_inner());
             screen.window.events.take_batch(&mut events);
             let snapshot = screen.video.snapshot();
             let mut closing = screen.failed.load(std::sync::atomic::Ordering::Acquire)
@@ -336,14 +318,20 @@ impl Displays {
             {
                 closing = true;
             }
-            for event in events {
+            for event in events.drain(..) {
                 match event {
-                    Event::NativeSession(crate::session_controls::Command::Disconnect) => {
-                        closing = true
-                    }
+                    Event::NativeSession(crate::session_controls::Command::Disconnect)
+                    | Event::Shortcut(crate::input::Shortcut::Disconnect) => closing = true,
                     Event::Shortcut(crate::input::Shortcut::Fullscreen) => screen
                         .window
                         .set_fullscreen(!screen.window.native_fullscreen()),
+                    Event::Shortcut(crate::input::Shortcut::ReleaseInput) => {
+                        attempt.send(&crate::control::header(24, 0, 0, 0))?;
+                        *screen.input.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Default::default();
+                        screen.window.toggle_input_detached();
+                        screen.window.native_toggle_overlay();
+                    }
                     Event::NativeSession(_) | Event::Shortcut(_) | Event::Clipboard => {}
                     Event::Focus(false) if self.owns_input() => {
                         *screen.input.lock().unwrap_or_else(|e| e.into_inner()) =
@@ -379,11 +367,13 @@ impl Displays {
                     "additional_display_ended",
                     serde_json::json!({"stream":stream,"decoded":snapshot.frames_decoded}),
                 );
-                let _ = screen.input.lock().unwrap_or_else(|e| e.into_inner()).send(
-                    attempt,
-                    &screen.window,
-                    &Event::Focus(false),
-                );
+                if self.focus.load(std::sync::atomic::Ordering::Acquire) == stream + 1 {
+                    let _ = screen.input.lock().unwrap_or_else(|e| e.into_inner()).send(
+                        attempt,
+                        &screen.window,
+                        &Event::Focus(false),
+                    );
+                }
                 attempt.send(&enable(stream, false)?)?;
                 self.close(stream);
             }

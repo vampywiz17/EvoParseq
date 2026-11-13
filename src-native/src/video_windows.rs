@@ -375,6 +375,38 @@ fn check_native(q: &mut Queue, now: Instant) {
     }
 }
 
+fn previous_worker_busy(previous: &Option<std::sync::Weak<WorkerState>>) -> bool {
+    previous
+        .as_ref()
+        .and_then(std::sync::Weak::upgrade)
+        .is_some_and(|old| {
+            let mut q = old.0.lock().unwrap_or_else(|e| e.into_inner());
+            check_native(&mut q, Instant::now());
+            !q.report.worker_finished
+        })
+}
+
+#[cfg(test)]
+mod display_worker_tests {
+    use super::*;
+    #[test]
+    fn a_live_stream_blocks_only_its_own_replacement_until_finished() {
+        let first = Arc::new((Mutex::new(Queue::default()), Condvar::new(), None));
+        let second = Arc::new((Mutex::new(Queue::default()), Condvar::new(), None));
+        let mut slots = [None, None, None];
+        slots[0] = Some(Arc::downgrade(&first));
+        assert!(previous_worker_busy(&slots[0]));
+        assert!(!previous_worker_busy(&slots[1]));
+        assert!(!previous_worker_busy(&slots[2]));
+        slots[1] = Some(Arc::downgrade(&second));
+        first.0.lock().unwrap().report.worker_finished = true;
+        assert!(!previous_worker_busy(&slots[0]));
+        assert!(previous_worker_busy(&slots[1]));
+        drop(second);
+        assert!(!previous_worker_busy(&slots[1]));
+    }
+}
+
 #[derive(Default)]
 struct NativeRelease(Option<Shared>);
 impl Drop for NativeRelease {
@@ -422,14 +454,7 @@ impl Pipeline {
         let previous = &mut workers[window
             .display_stream
             .load(std::sync::atomic::Ordering::Acquire)];
-        let busy = previous
-            .as_ref()
-            .and_then(std::sync::Weak::upgrade)
-            .is_some_and(|old| {
-                let mut q = old.0.lock().unwrap_or_else(|e| e.into_inner());
-                check_native(&mut q, Instant::now());
-                !q.report.worker_finished
-            });
+        let busy = previous_worker_busy(previous);
         let spawned = if NATIVE_STALLED.load(std::sync::atomic::Ordering::Acquire) || busy {
             let mut q = error_state.0.lock().unwrap_or_else(|e| e.into_inner());
             q.fail(

@@ -899,6 +899,21 @@ impl Window {
         self.fullscreen_active.load(Ordering::Acquire)
     }
 
+    pub(crate) fn input_detached(&self) -> bool {
+        self.input_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .detached
+    }
+    pub(crate) fn toggle_input_detached(&self) {
+        let next = {
+            let mut state = *self.input_state.lock().unwrap_or_else(|e| e.into_inner());
+            state.detached = !state.detached;
+            state
+        };
+        self.set_input_state(next);
+    }
+
     pub fn native_toggle_overlay(&self) {
         unsafe {
             PostMessageW(
@@ -1107,10 +1122,6 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                     && lp as usize == s.native_session_button.load(Ordering::Acquire)
                     && wp >> 16 == BN_CLICKED as usize) =>
             {
-                if s.display_stream.load(Ordering::Acquire) != 0 {
-                    crate::native_core::multi_display::controls(s);
-                    return 0;
-                }
                 let manager = s
                     .connection_settings
                     .lock()

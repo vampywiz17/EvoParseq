@@ -24,6 +24,8 @@ use windows_sys::Win32::{
 pub const OPEN: usize = 4600;
 pub const OPEN_SHORTCUT: usize = 4610;
 const ADD_SCREEN: usize = 4618;
+const SECONDARY_FULLSCREEN: usize = 4619;
+const SECONDARY_INPUT: usize = 4620;
 const APPLY: usize = 4602;
 const CLOSE: usize = 4603;
 const DISCONNECT: usize = 4604;
@@ -44,6 +46,13 @@ const TBM_GETPOS: u32 = WM_USER;
 const DISPLAYS: u32 = WM_APP + 28;
 const DISPLAY_TIMING_CHANGED: u32 = WM_APP + 29;
 const PANEL_HEIGHT: i32 = 1000;
+fn panel_height(window: &crate::window::Window) -> i32 {
+    if window.display_stream.load(Ordering::Acquire) == 0 {
+        PANEL_HEIGHT
+    } else {
+        240
+    }
+}
 pub const RESULT: u32 = WM_APP + 26;
 pub const VISIBILITY: u32 = WM_APP + 27;
 impl Status {
@@ -370,14 +379,14 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             WM_SIZE => {
                 let mut r = std::mem::zeroed();
                 GetClientRect(hwnd, &mut r);
-                let max = (PANEL_HEIGHT - r.bottom).max(0);
+                let max = (panel_height(&*p.window) - r.bottom).max(0);
                 let target = p.scroll.min(max);
                 scroll(hwnd, p, target);
                 let info = SCROLLINFO {
                     cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
                     fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
                     nMin: 0,
-                    nMax: PANEL_HEIGHT - 1,
+                    nMax: panel_height(&*p.window) - 1,
                     nPage: r.bottom.max(1) as u32,
                     nPos: p.scroll,
                     ..std::mem::zeroed()
@@ -403,7 +412,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 scroll(
                     hwnd,
                     p,
-                    target.clamp(0, (PANEL_HEIGHT - info.nPage as i32).max(0)),
+                    target.clamp(0, (panel_height(&*p.window) - info.nPage as i32).max(0)),
                 );
                 return 0;
             }
@@ -453,6 +462,15 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             WM_COMMAND => {
                 match wp & 0xffff {
                     ADD_SCREEN => super::multi_display::add_menu(&*p.window),
+                    SECONDARY_FULLSCREEN => {
+                        let window = &*p.window;
+                        window.set_fullscreen(!window.native_fullscreen());
+                        close(hwnd);
+                    }
+                    SECONDARY_INPUT => {
+                        (&*p.window).toggle_input_detached();
+                        close(hwnd);
+                    }
                     MUTE => {
                         (&*p.window).audio_output.set_muted(
                             SendMessageW(GetDlgItem(hwnd, MUTE as i32), BM_GETCHECK, 0, 0)
@@ -679,7 +697,7 @@ pub unsafe fn raise(window: &crate::window::Window) {
             origin.x,
             origin.y + panel_offset,
             420,
-            (r.bottom - panel_offset - 32).clamp(120, PANEL_HEIGHT),
+            (r.bottom - panel_offset - 32).clamp(120, panel_height(window)),
             SWP_NOACTIVATE
                 | SWP_NOOWNERZORDER
                 | if insert_after.is_some() {
@@ -690,7 +708,7 @@ pub unsafe fn raise(window: &crate::window::Window) {
         );
         if (IsWindowVisible(panel) != 0) != visible {
             ShowWindow(panel, if visible { SW_SHOWNA } else { SW_HIDE });
-            if visible {
+            if visible && window.display_stream.load(Ordering::Acquire) == 0 {
                 SetTimer(panel, 1, 1000, None);
             } else {
                 KillTimer(panel, 1);
@@ -753,7 +771,7 @@ pub unsafe fn toggle(
         16,
         60,
         420,
-        PANEL_HEIGHT,
+        panel_height(window),
         parent,
         null_mut(),
         instance,
@@ -766,6 +784,39 @@ pub unsafe fn toggle(
     window.native_panel.store(hwnd as usize, Ordering::Release);
     SetLayeredWindowAttributes(hwnd, 0, 238, LWA_ALPHA);
     let p = &mut *Box::into_raw(panel);
+    if window.display_stream.load(Ordering::Acquire) != 0 {
+        let title = control(hwnd, p, "STATIC", "Session", 0, 0, [24, 18, 350, 36]);
+        SendMessageW(title, WM_SETFONT, p.heading as usize, 0);
+        for (id, label, x, y) in [
+            (SECONDARY_FULLSCREEN, "Fullscreen", 24, 76),
+            (
+                SECONDARY_INPUT,
+                if window.input_detached() {
+                    "Capture input"
+                } else {
+                    "Release input"
+                },
+                220,
+                76,
+            ),
+            (DISCONNECT, "Close screen", 24, 132),
+            (CLOSE, "Close", 220, 132),
+        ] {
+            control(
+                hwnd,
+                p,
+                "BUTTON",
+                label,
+                id,
+                BS_OWNERDRAW as u32 | WS_TABSTOP,
+                [x, y, 174, 36],
+            );
+        }
+        ShowWindow(hwnd, SW_SHOW);
+        SetForegroundWindow(hwnd);
+        SetFocus(GetDlgItem(hwnd, SECONDARY_FULLSCREEN as i32));
+        return;
+    }
     let title = control(hwnd, p, "STATIC", "Session", 0, 0, [24, 18, 350, 36]);
     SendMessageW(title, WM_SETFONT, p.heading as usize, 0);
     control(

@@ -1291,6 +1291,35 @@ fn negotiated_encoder_flags(external: u32, initial: u32) -> u32 {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn additional_stream_pools_are_lazy_and_never_share_sequences_or_leases() {
+        let units = Units::new();
+        for stream in [0, 1, 2, 3, usize::MAX] {
+            assert!(units.secondary(stream, false).is_none());
+        }
+        assert!(units.secondary(0, true).is_none());
+        assert!(units.secondary(3, true).is_none());
+        let one = units.secondary(1, true).unwrap();
+        let two = units.secondary(2, true).unwrap();
+        units.hand_over(&[0]);
+        one.hand_over(&[1]);
+        two.hand_over(&[2]);
+        assert_eq!(units.take().unwrap().bytes(), &[0]);
+        assert_eq!(
+            units.secondary(1, false).unwrap().take().unwrap().bytes(),
+            &[1]
+        );
+        assert!(one.take().is_none());
+        assert_eq!(two.take().unwrap().bytes(), &[2]);
+        one.hand_over(&[11]);
+        one.clear();
+        two.hand_over(&[22]);
+        assert!(one.take().is_none());
+        assert_eq!(two.take().unwrap().bytes(), &[22]);
+        assert!(units.take().is_none());
+    }
+
     #[test]
     fn output_flush_hint_tracks_only_accepted_control_messages() {
         let (emit, _) = events::queue();

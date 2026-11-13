@@ -311,15 +311,15 @@ pub mod polling {
             }
             if now >= self.next {
                 let scan = now >= self.scan;
-                for i in 0..PADS {
-                    if !self.connected[i] && !scan {
+                for (i, connected) in self.connected.iter_mut().enumerate() {
+                    if !*connected && !scan {
                         continue;
                     }
                     if let Some(state) = devices.read(i as u32) {
-                        self.connected[i] = true;
+                        *connected = true;
                         pads.update(i as i32, state, &mut send)?;
-                    } else if self.connected[i] {
-                        self.connected[i] = false;
+                    } else if *connected {
+                        *connected = false;
                         pads.remove(i as i32, devices, &mut send)?;
                     }
                 }

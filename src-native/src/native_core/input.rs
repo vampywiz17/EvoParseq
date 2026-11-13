@@ -50,7 +50,7 @@ impl Input {
             _ => return None,
         })
     }
-    pub fn send(&mut self, attempt: &Attempt, window: &Window, event: &Event) -> Result<()> {
+    pub(super) fn send(&mut self, attempt: &Attempt, window: &Window, event: &Event) -> Result<()> {
         if matches!(event, Event::RelativeMode(_)) && !attempt.hid_mouse_enabled() {
             return Ok(());
         }

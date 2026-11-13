@@ -57,6 +57,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path coverage -Force | Out-Null
+          cargo llvm-cov clean --workspace --manifest-path src-native/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'Instrumented workspace cleanup failed' }
           cargo llvm-cov --locked --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --lcov --output-path coverage/rust-raw.info -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'Instrumented Rust tests failed' }
           # The package must contain the normal executable, never an instrumented build.
