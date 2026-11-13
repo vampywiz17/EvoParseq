@@ -160,3 +160,49 @@ Additional windows have fullscreen and Close screen controls; the original
 window retains session settings/audio/Disconnect. Normal Parsec input is the
 initial supported multi-display mode. Secondary HID desktop-coordinate mapping
 is not inferred from local window positions.
+
+
+## Parsec VDD provisioning versus additional streams
+
+The official [Multiple Monitors and Virtual Displays](https://support.parsec.app/hc/en-us/articles/32381733729044-Multiple-Monitors-and-Virtual-Displays)
+guide separates Add Screens (opening a window for an existing extended output)
+from Virtual Displays (a host setting applied during owner connections).
+[Advanced configuration](https://support.parsec.app/hc/en-us/articles/32381443626516-All-Advanced-Configuration-Options)
+names `host_virtual_monitors` for the configured additional display count and
+`host_virtual_monitor_fallback` for the separate single-display fallback.
+These settings are not client stream-count requests.
+
+Read-only inspection on 2026-11-13 of the same 150-105c runtime/hash above
+corroborates that separation:
+
+- The host settings UI writes `host_virtual_monitors` at RVA `0x15728`.
+  The local configuration loader reads it at `0x52f0a` into configuration
+  offset `0x5c8`.
+- The host connection initializer at `0xa88f0` copies that host configuration;
+  its guarded VDD path at `0xa8b77` supplies the configured count to
+  `0xc0090`. That host-side routine initializes the installed Parsec display
+  driver and adds the requested devices. The guard's full account/permission
+  meaning has not been established; this is not evidence that entitlement
+  checks are absent.
+- The Add Screens helper at `0xa1920` sends the already documented opcode 27
+  stream toggle. It is not the VDD provisioning routine.
+- The examined remote configuration serializer (`0xa7c00`) and parser
+  (`0xa7dc0..0xa8568`) expose `virtualTablet`, `virtualMicrophone` and per-stream
+  video settings. They do not expose a virtual-monitor count. Supplying an
+  invented `virtualMonitors` JSON field is not an implemented remote VDD API.
+
+No compatible guest-side command for changing the stock host's VDD count has
+been established. This bounded inspection does not prove that no other private
+interface exists. EvoParseq therefore does not send guessed control messages,
+modify the host's local configuration or install a driver on the client.
+The lowlat client/protocol review likewise supplies no Parsec-VDD provisioning
+contract; lowlat's own host/display driver is a different implementation.
+
+For a live test, configure the desired virtual displays in the stock host's
+Settings > Host > Virtual Displays first, reconnect, refresh the host display
+list and use Add screen for the reported outputs. Fallback alone supplies only
+one virtual output when no other displays exist. A successful settings change,
+output-list response or local window is not proof that the host accepted an
+additional encoder: validate an actual secondary keyframe/picture. The installed
+VDD, owner/account policy, driver state and extended desktop remain host-side
+requirements. There is no new VDD-creation feature in the client from this review.

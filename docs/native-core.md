@@ -459,3 +459,16 @@ costs and the project's strict Zero copy definition remain unchanged.
 Android/Linux frontends do not enable this feature. The small vendored Rust
 formatting changes accompanying the Windows backend validation are mechanical;
 their media behavior is unchanged.
+
+
+### Parsec virtual display prerequisite
+
+The current Windows Add screen implementation opens host-reported outputs; it
+does not provision Parsec VDD devices. Set the desired count in the stock host's
+**Settings > Host > Virtual Displays**, then reconnect and refresh the display
+list before opening another stream. **Fallback To Virtual Display** is a
+separate single-output feature and is insufficient for multiple virtual screens.
+The host's own driver and account/owner policy still apply. No guest-side VDD
+count-setting contract has been established; see `NATIVE_REFERENCES.md` for the
+specific stock-runtime evidence and its limits. Do not add a speculative VDD
+count field to the existing remote video configuration.
