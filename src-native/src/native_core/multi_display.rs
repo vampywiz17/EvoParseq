@@ -544,6 +544,7 @@ mod tests {
         let resolution = Resolution::Fixed(1280, 720);
         let mut primary_events = std::collections::VecDeque::new();
         primary.events.take_batch(&mut primary_events);
+        primary_events.clear();
         second
             .window
             .events
