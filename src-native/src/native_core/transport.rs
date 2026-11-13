@@ -55,6 +55,21 @@ pub(super) struct WebRtc {
 use crate::native_wire::{envelope, offer};
 
 impl Attempt {
+    #[cfg(test)]
+    pub(super) fn recorded_commands() -> (Self, impl Fn() -> Vec<bytes::Bytes>) {
+        let (transport, packets) = crate::attempt::Attempt::recorded_commands();
+        (
+            Self::Web(WebRtc {
+                transport,
+                id: "isolated-display-fixture".into(),
+                peer: "isolated-host-fixture".into(),
+                writer: Arc::new(|_| true),
+                failed: AtomicBool::new(false),
+            }),
+            packets,
+        )
+    }
+
     pub fn spawn_native(
         id: &str,
         peer: &str,

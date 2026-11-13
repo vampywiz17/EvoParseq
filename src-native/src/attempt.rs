@@ -550,6 +550,26 @@ pub struct Attempt {
 }
 
 impl Attempt {
+    /// Exercise the real bounded command handoff without sockets or credentials.
+    #[cfg(all(test, windows))]
+    pub(crate) fn recorded_commands() -> (Self, impl Fn() -> Vec<Bytes>) {
+        let (tx, rx) = mpsc::sync_channel(64);
+        let attempt = Self {
+            commands: Some(tx),
+            id: "isolated-display-fixture".into(),
+            completion: Arc::new(Mutex::new(tests::empty_completion())),
+            finished: Arc::new((Mutex::new(true), Condvar::new())),
+        };
+        (attempt, move || {
+            rx.try_iter()
+                .filter_map(|command| match command {
+                    Command::Send(0, bytes) => Some(bytes),
+                    _ => None,
+                })
+                .collect()
+        })
+    }
+
     pub fn spawn_configured(
         id: &str,
         output: Output,
@@ -1973,7 +1993,7 @@ mod tests {
         );
     }
 
-    fn empty_completion() -> Completion {
+    pub(super) fn empty_completion() -> Completion {
         Completion {
             #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
             telemetry: None,

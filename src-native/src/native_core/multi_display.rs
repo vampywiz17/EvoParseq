@@ -457,3 +457,157 @@ impl Drop for Displays {
         self.clear();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    #[ignore = "native window fixture; run alone after the other foreground tests"]
+    fn additional_display_native_lifecycle() {
+        use crate::{input::Shortcut, session_controls::Command, session_preferences::Resolution};
+        let primary = Window::create_native().unwrap();
+        struct Close(Arc<Window>);
+        impl Drop for Close {
+            fn drop(&mut self) {
+                self.0.displays.clear();
+                self.0.close();
+            }
+        }
+        let _close = Close(primary.clone());
+        // A unique, nonexistent profile: this fixture never reads user settings.
+        let manager = Manager::open(std::env::temp_dir().join(format!(
+            "evoparseq-display-{}-{}.json", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        )));
+        let displays = &primary.displays;
+        let (attempt, packets) = Attempt::recorded_commands();
+        displays.flags.store(9, Ordering::Release);
+        for stream in [0, STREAMS, usize::MAX] {
+            assert!(displays.open(stream, &attempt, manager.clone()).is_err());
+            assert!(displays.get(stream).is_none());
+            displays.close(stream);
+        }
+        for stream in 1..STREAMS {
+            displays.open(stream, &attempt, manager.clone()).unwrap();
+            assert_eq!(
+                packets(),
+                vec![
+                    crate::control::header(13, stream as i32, 9, 0),
+                    enable(stream, true).unwrap()
+                ]
+            );
+            assert!(displays.open(stream, &attempt, manager.clone()).is_err());
+        }
+        let second = displays.get(1).unwrap();
+        let third = displays.get(2).unwrap();
+        assert!(!Arc::ptr_eq(&second.video, &third.video));
+        assert_eq!(second.window.display_stream.load(Ordering::Acquire), 1);
+        assert_eq!(third.window.display_stream.load(Ordering::Acquire), 2);
+        assert_eq!(second.video.snapshot().frames_decoded, 0);
+        assert_eq!(third.video.snapshot().frames_decoded, 0);
+
+        let mut input = Input::default();
+        displays.synchronize_input(&attempt, &mut input).unwrap();
+        assert!(packets().is_empty());
+        displays.focus.store(3, Ordering::Release);
+        displays.synchronize_input(&attempt, &mut input).unwrap();
+        assert_eq!(packets(), vec![crate::control::header(24, 0, 0, 0)]);
+        displays.synchronize_input(&attempt, &mut input).unwrap();
+        assert!(packets().is_empty());
+
+        // Visible endpoints reconcile only live display transitions. Hidden,
+        // suppressed and relative reports must not make an endpoint visible.
+        for stream in [0, 1, 2] {
+            displays.cursor_mode(stream, false, false, false, (20, 30));
+            assert_eq!(
+                displays.visible_cursor_stream.load(Ordering::Acquire),
+                stream + 1
+            );
+            displays.cursor_mode(stream, false, false, false, (40, 50));
+        }
+        for mode in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            displays.cursor_mode(1, mode.0, mode.1, mode.2, (0, 0));
+            assert_eq!(displays.visible_cursor_stream.load(Ordering::Acquire), 0);
+        }
+        displays.cursor_mode(STREAMS, false, false, false, (0, 0));
+        assert!(displays.pointer(1, &[]).is_err());
+        assert!(displays.pointer(0, &[]).is_ok());
+
+        // Resolution requests return to the one primary host-settings owner;
+        // secondary windows cannot expose statistics or change other settings.
+        let resolution = Resolution::Fixed(1280, 720);
+        let mut primary_events = std::collections::VecDeque::new();
+        primary.events.take_batch(&mut primary_events);
+        second
+            .window
+            .events
+            .push(Event::NativeSession(Command::Apply(
+                crate::session_preferences::Video {
+                    resolution,
+                    ..Default::default()
+                },
+            )));
+        for event in [
+            Event::Clipboard,
+            Event::Shortcut(Shortcut::Statistics),
+            Event::NativeSession(Command::SecureAttention),
+            Event::CursorReady,
+        ] {
+            second.window.events.push(event);
+        }
+        displays.poll(&attempt).unwrap();
+        primary.events.take_batch(&mut primary_events);
+        assert!(primary_events.iter().any(|event| matches!(event,
+            Event::NativeSession(Command::DisplayResolution { stream: 1, resolution: r, size })
+                if *r == resolution && *size == second.window.native_display_size())));
+        assert!(packets().is_empty());
+        second
+            .window
+            .events
+            .push(Event::Shortcut(Shortcut::ReleaseInput));
+        displays.poll(&attempt).unwrap();
+        assert_eq!(packets(), vec![crate::control::header(24, 0, 0, 0)]);
+
+        // An overflow closes only its additional display, using stream-specific
+        // control. The other worker and primary window remain alive.
+        second.window.events.push(Event::InputOverflow);
+        displays.poll(&attempt).unwrap();
+        assert_eq!(packets(), vec![enable(1, false).unwrap()]);
+        assert!(displays.get(1).is_none());
+        assert!(displays.get(2).is_some());
+        assert!(!primary.stop.stopped());
+        third
+            .window
+            .events
+            .push(Event::NativeSession(Command::Disconnect));
+        displays.poll(&attempt).unwrap();
+        assert_eq!(packets(), vec![enable(2, false).unwrap()]);
+        assert!(displays.get(2).is_none());
+        displays.synchronize_input(&attempt, &mut input).unwrap();
+        assert_eq!(displays.focus.load(Ordering::Acquire), 0);
+        displays.clear();
+        assert_eq!(displays.visible_cursor_stream.load(Ordering::Acquire), 0);
+        assert!(!primary.stop.stopped());
+
+        // A closed command receiver must roll back a partially opened window.
+        // Wait only for these empty decoder workers to retire before reusing slots.
+        for screen in [&second, &third] {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while !screen.video.snapshot().worker_finished {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        let (closed, receiver) = Attempt::recorded_commands();
+        drop(receiver);
+        assert!(displays.open(1, &closed, manager).is_err());
+        assert!(displays.get(1).is_none());
+        assert!(!primary.stop.stopped());
+    }
+}

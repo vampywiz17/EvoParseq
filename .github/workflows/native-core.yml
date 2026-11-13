@@ -64,6 +64,8 @@ jobs:
           # after the other UI tests, which otherwise steal its foreground focus.
           cargo test --locked --manifest-path src-native/Cargo.toml immersive_native_capture_lifecycle -- --ignored --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'Isolated immersive/camera capture regression failed' }
+          cargo test --locked --manifest-path src-native/Cargo.toml additional_display_native_lifecycle -- --ignored --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated additional display lifecycle regression failed' }
           cargo build --locked --release --manifest-path src-native/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw 'Native core build failed' }
           New-Item -ItemType Directory -Path dist/native-core -Force | Out-Null
