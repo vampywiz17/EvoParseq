@@ -1008,7 +1008,11 @@ mod input_tests {
                 |_| Ok(()),
             )
             .unwrap();
-        assert!(frames.iter().any(|b| b[12] == 1));
+        assert!(
+            frames
+                .iter()
+                .any(|b| b.as_slice() == control::header(0, 4, 0, 1).as_ref())
+        );
         assert!(!frames.iter().any(|b| b[12] == 24));
     }
     #[test]
