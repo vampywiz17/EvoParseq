@@ -1188,7 +1188,7 @@ mod tests {
         }
         let _close = Close(window.clone());
         window.display_stream.store(1, Ordering::Release);
-        *window.session.display_resolution.lock().unwrap() = Resolution::Fixed(1366, 768);
+        *window.session.display_resolution.lock().unwrap() = Resolution::Fixed(1536, 864);
         let path = std::env::temp_dir().join(format!(
             "evoparseq-secondary-panel-{}.json",
             crate::bud_attempt::native_attempt_id().unwrap()
@@ -1207,7 +1207,7 @@ mod tests {
             SendMessageW(window.handle(), WM_COMMAND, OPEN, 0);
             let panel = panel(&window);
             assert!(!panel.is_null());
-            assert_eq!(text(GetDlgItem(panel, 20)), current_choice("1366 x 768"));
+            assert_eq!(text(GetDlgItem(panel, 20)), current_choice("1536 x 864"));
             assert!(GetDlgItem(panel, METRICS).is_null());
             assert!(GetDlgItem(panel, DISPLAY as i32).is_null());
             assert!(GetDlgItem(panel, 21).is_null());
