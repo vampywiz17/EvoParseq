@@ -58,7 +58,9 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
                 s.pointer = Some(seat.get_pointer(q, ()));
             } else if !caps.contains(wl_seat::Capability::Pointer) {
                 if let Some(p) = s.pointer.take() {
-                    p.release();
+                    if p.version() >= 3 {
+                        p.release();
+                    }
                 }
                 s.serial = None;
             }
@@ -126,6 +128,13 @@ impl Warp {
         ctx.data_mut(|d| d.insert_temp(eframe::egui::Id::new("cursor-position-handler"), handler));
         Ok(result)
     }
+    pub fn dispatch(&mut self) {
+        // Drain pointer enter/motion notifications in the existing UI loop;
+        // never retain mouse events until the next rare cursor transition.
+        if self.queue.dispatch_pending(&mut self.state).is_err() {
+            self.state.serial = None;
+        }
+    }
     fn request(
         &mut self,
         window: &winit::window::Window,
@@ -173,7 +182,7 @@ impl Warp {
 impl Drop for Warp {
     fn drop(&mut self) {
         if let Some(p) = self.state.pointer.take() {
-            if p.is_alive() {
+            if p.is_alive() && p.version() >= 3 {
                 p.release();
             }
         }

@@ -290,6 +290,9 @@ impl eframe::App for Desktop {
         self.pointer_warp.take();
     }
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if let Some(warp) = &self.pointer_warp {
+            warp.lock().unwrap_or_else(|e| e.into_inner()).dispatch();
+        }
         if raw.viewport_id != egui::ViewportId::ROOT {
             return;
         }
