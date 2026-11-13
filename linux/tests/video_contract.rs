@@ -481,6 +481,7 @@ fn hevc_main_metadata_and_reference_slots_match_shared_parser() {
     for fixture in [
         include_bytes!("data/hevc-40-frames.bin").as_slice(),
         include_bytes!("data/hevc-nvenc-ll-8-frames.bin").as_slice(),
+        include_bytes!("data/hevc-main10-lowlat-8-frames.bin").as_slice(),
     ] {
         let mut stream = lowlat_decode::hevc::Stream::new();
         let mut headers = hevc_parameters::Headers::default();
@@ -522,7 +523,7 @@ fn hevc_main_metadata_and_reference_slots_match_shared_parser() {
                 headers.pps[job.pps.id as usize].unwrap(),
                 &lists,
             );
-            assert_eq!(sps.bit_depth_luma_minus8, 0);
+            assert_eq!(sps.bit_depth_luma_minus8, job.sps.bit_depth_luma_minus8);
             assert_eq!(pps.pps_seq_parameter_set_id, sps.sps_seq_parameter_set_id);
             let slots: Vec<_> = (0..18).map(|i| Some((17 - i) as u32)).collect();
             let picture = hevc_parameters::decode_picture(job, &slots).unwrap();
@@ -559,7 +560,10 @@ fn hevc_main_metadata_and_reference_slots_match_shared_parser() {
 }
 #[test]
 fn hevc_rejects_reordering_and_truncated_parameter_sets() {
-    for fixture in [include_bytes!("data/hevc-reordered-first.bin").as_slice()] {
+    for fixture in [
+        include_bytes!("data/hevc-main10-first.bin").as_slice(),
+        include_bytes!("data/hevc-reordered-first.bin").as_slice(),
+    ] {
         let size = u32::from_le_bytes(fixture[..4].try_into().unwrap()) as usize;
         let bytes = &fixture[4..4 + size];
         assert!(hevc_parameters::Headers::default().observe(bytes).is_err());
@@ -886,7 +890,7 @@ fn linux_selected_hevc_surface_stays_leased_without_exhausting_the_dpb() {
 
 #[test]
 fn linux_main10_metadata_preserves_depth_and_profile_without_allowing_444() {
-    let fixture = include_bytes!("data/hevc-main10-first.bin");
+    let fixture = include_bytes!("data/hevc-main10-lowlat-8-frames.bin");
     let size = u32::from_le_bytes(fixture[..4].try_into().unwrap()) as usize;
     let bytes = &fixture[4..4 + size];
     let mut headers = hevc_parameters::Headers::default();
