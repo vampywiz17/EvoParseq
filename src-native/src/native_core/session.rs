@@ -393,17 +393,16 @@ pub(super) fn run(
                         resolution,
                         size,
                     } => {
-                        if platform.additional_displays().get(*stream).is_some() {
-                            if host_settings
+                        if platform.additional_displays().get(*stream).is_some()
+                            && host_settings
                                 .display_resolution(&attempt, view, *stream, *resolution, *size)
                                 .is_err()
-                            {
-                                view.notify(Notification::DisplayResolution {
-                                    stream: *stream,
-                                    status: Status::Failed,
-                                    resolution: None,
-                                });
-                            }
+                        {
+                            view.notify(Notification::DisplayResolution {
+                                stream: *stream,
+                                status: Status::Failed,
+                                resolution: None,
+                            });
                         }
                     }
                     session_model::Command::AddDisplay(stream) => {

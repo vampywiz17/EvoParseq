@@ -633,13 +633,15 @@ mod tests {
     #[test]
     fn secondary_resolution_owns_the_transaction_and_only_confirms_its_target() {
         let view = TestView::default();
-        let mut settings = HostSettings::default();
-        settings.secondary = Some(DisplayResolution {
-            stream: 2,
-            resolution: crate::session_preferences::Resolution::Fixed(1280, 720),
-            size: (1920, 1080),
-            sent: false,
-        });
+        let mut settings = HostSettings {
+            secondary: Some(DisplayResolution {
+                stream: 2,
+                resolution: crate::session_preferences::Resolution::Fixed(1280, 720),
+                size: (1920, 1080),
+                sent: false,
+            }),
+            ..Default::default()
+        };
         view.waiting();
         assert!(settings.busy());
         assert_eq!(settings.secondary_stream(), Some(2));

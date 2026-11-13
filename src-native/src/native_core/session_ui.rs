@@ -1491,6 +1491,7 @@ mod tests {
             assert_eq!(IsWindowEnabled(GetDlgItem(panel, DISPLAY as i32)), 0);
             let mut prior = std::collections::VecDeque::new();
             window.events.take_batch(&mut prior);
+            prior.clear();
             // A forged command must not bypass a disabled HID selector.
             SendMessageW(GetDlgItem(panel, DISPLAY as i32), CB_SETCURSEL, 1, 0);
             SendMessageW(
