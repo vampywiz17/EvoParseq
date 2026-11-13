@@ -705,6 +705,17 @@ impl Window {
         if ClientToScreen(target.handle(), &mut point) == 0 {
             return false;
         }
+        // Explicit immersive confinement must not clamp the requested peer
+        // endpoint into the source and echo that different position to the host.
+        let mut clip = RECT::default();
+        if GetClipCursor(&mut clip) == 0
+            || point.x < clip.left
+            || point.x >= clip.right
+            || point.y < clip.top
+            || point.y >= clip.bottom
+        {
+            return false;
+        }
         let mut source = point;
         if ScreenToClient(self.handle(), &mut source) == 0 {
             return false;
