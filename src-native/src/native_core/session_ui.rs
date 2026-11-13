@@ -1291,9 +1291,7 @@ mod tests {
                 (48, 48)
             );
             let point = |x: u16, y: u16| (u32::from(x) | (u32::from(y) << 16)) as LPARAM;
-            SendMessageW(child, WM_LBUTTONDOWN, 1, point(8, 8));
-            SendMessageW(child, WM_MOUSEMOVE, 1, point(108, 68));
-            SendMessageW(child, WM_LBUTTONUP, 0, point(8, 8));
+            SendMessageW(child, WM_APP + 90, point(8, 8) as WPARAM, point(108, 68));
             let mut after = RECT::default();
             GetWindowRect(button, &mut after);
             assert_eq!(

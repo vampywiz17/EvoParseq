@@ -52,6 +52,15 @@ unsafe extern "system" fn button_proc(
     let pointer = GetWindowLongPtrW(badge, GWLP_USERDATA) as *mut Badge;
     if !pointer.is_null() {
         match msg {
+            #[cfg(test)]
+            m if m == WM_APP + 90 => {
+                // Execute a synthetic gesture on the owning UI thread so OS
+                // capture-generated mouse moves cannot split the fixture.
+                SendMessageW(hwnd, WM_LBUTTONDOWN, 1, wp as LPARAM);
+                SendMessageW(hwnd, WM_MOUSEMOVE, 1, lp);
+                SendMessageW(hwnd, WM_LBUTTONUP, 0, wp as LPARAM);
+                return 0;
+            }
             WM_LBUTTONDOWN => {
                 (*pointer).drag = Some(Drag {
                     start: screen_point(hwnd, lp),
