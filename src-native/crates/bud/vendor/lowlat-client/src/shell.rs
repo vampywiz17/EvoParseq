@@ -186,6 +186,18 @@ pub(crate) fn run(args: Attached, mut wake: Wake, running: &Running) {
         });
         return;
     };
+    // Separate sequence spaces for the two optional Windows display streams.
+    // These are bounded transport receive rings, not decoder/frame resources.
+    #[cfg(windows)]
+    let mut secondary_bodies = [
+        vec![0u8; BODY * VIDEO_RECV_SLOTS],
+        vec![0u8; BODY * VIDEO_RECV_SLOTS],
+    ];
+    #[cfg(windows)]
+    let mut secondary_meta = [
+        vec![SlotMeta::default(); VIDEO_RECV_SLOTS],
+        vec![SlotMeta::default(); VIDEO_RECV_SLOTS],
+    ];
     let mut session = Session::new(envelope, 1, 0.0);
     if !attach_recv(
         &mut session,
@@ -212,6 +224,19 @@ pub(crate) fn run(args: Attached, mut wake: Wake, running: &Running) {
             outcome: Outcome::TransportFailed,
         });
         return;
+    }
+    #[cfg(windows)]
+    for (index, (bodies, meta)) in secondary_bodies
+        .iter_mut()
+        .zip(secondary_meta.iter_mut())
+        .enumerate()
+    {
+        if !attach_recv(&mut session, (index + 3) as u8, bodies, meta) {
+            emit.send(Event::Ended {
+                outcome: Outcome::TransportFailed,
+            });
+            return;
+        }
     }
     let endpoint = match &relay {
         Some(relay) => Endpoint::relayed(

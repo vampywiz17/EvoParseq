@@ -31,6 +31,7 @@ impl Drop for Windows {
     fn drop(&mut self) {
         // Same teardown order after the controller and its attempt have ended,
         // including failures during signaling/media setup.
+        self.window.displays.clear();
         self.window.end_session();
         self.window.request_stop();
         self.window.close();
@@ -91,16 +92,28 @@ impl Runtime for Windows {
         crate::gamepad_windows::Devices::default()
     }
     fn controller_input_allowed(&self) -> bool {
-        self.window.native_input_allowed()
+        self.window.native_input_allowed() || self.window.displays.owns_input()
     }
     fn register_consumer(&self) {
         self.window.events.set_consumer(std::thread::current());
+    }
+    fn additional_displays(&self) -> &super::multi_display::Displays {
+        &self.window.displays
     }
     fn take_events(&self, batch: &mut VecDeque<Event>) {
         self.window.events.take_batch(batch);
     }
     fn receive_pointer(&self, pointer: &mut Pointer, frame: &[u8]) -> Result<()> {
-        pointer.receive(frame, &self.window)
+        let parsed = evoparseq_bud::bud::cursor_message(frame)?;
+        let stream = usize::from(parsed.update.stream);
+        if stream == 0 {
+            pointer.receive(frame, &self.window)
+        } else {
+            self.window.displays.pointer(stream, frame)
+        }
+    }
+    fn prepare_input(&self, attempt: &transport::Attempt, input: &mut Input) -> Result<()> {
+        self.window.displays.synchronize_input(attempt, input)
     }
     fn send_input(
         &self,
@@ -108,6 +121,10 @@ impl Runtime for Windows {
         attempt: &transport::Attempt,
         event: &Event,
     ) -> Result<()> {
+        if matches!(event, Event::Focus(false)) && self.window.displays.owns_input() {
+            *input = Default::default();
+            return Ok(());
+        }
         input.send(attempt, &self.window, event)
     }
     fn create_audio(

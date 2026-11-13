@@ -23,6 +23,7 @@ use windows_sys::Win32::{
 };
 pub const OPEN: usize = 4600;
 pub const OPEN_SHORTCUT: usize = 4610;
+const ADD_SCREEN: usize = 4618;
 const APPLY: usize = 4602;
 const CLOSE: usize = 4603;
 const DISCONNECT: usize = 4604;
@@ -191,6 +192,15 @@ unsafe fn update_displays(hwnd: HWND, panel: &mut Panel) {
         let index = SendMessageW(combo, CB_ADDSTRING, 0, wide(label).as_ptr() as isize);
         SendMessageW(combo, CB_SETCURSEL, index as usize, 0);
     }
+    EnableWindow(
+        GetDlgItem(hwnd, ADD_SCREEN as i32),
+        i32::from(
+            window.multidisplay_ready.load(Ordering::Acquire)
+                && !displays.hid_mouse
+                && !displays.loading
+                && displays.outputs.len() > 1,
+        ),
+    );
     let busy = window.session.video_pending.load(Ordering::Acquire);
     EnableWindow(
         combo,
@@ -439,6 +449,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             }
             WM_COMMAND => {
                 match wp & 0xffff {
+                    ADD_SCREEN => super::multi_display::add_menu(&*p.window),
                     MUTE => {
                         (&*p.window).audio_output.set_muted(
                             SendMessageW(GetDlgItem(hwnd, MUTE as i32), BM_GETCHECK, 0, 0)
@@ -789,7 +800,16 @@ pub unsafe fn toggle(
         "",
         DISPLAY_HINT as usize,
         0,
-        [24, 199, 370, 44],
+        [24, 199, 240, 44],
+    );
+    control(
+        hwnd,
+        p,
+        "BUTTON",
+        "Add screen",
+        ADD_SCREEN,
+        BS_OWNERDRAW as u32 | WS_TABSTOP,
+        [274, 208, 120, 28],
     );
     update_displays(hwnd, p);
     for (i, label) in crate::app_style::forms::SESSION_LABELS.iter().enumerate() {

@@ -155,6 +155,8 @@ struct Completion {
     discard_unavailable_media: bool,
     media_ingress: crate::media_ingress::Ingress,
     video_stream: Arc<Mutex<crate::video_stream::Inspector>>,
+    #[cfg(windows)]
+    displays: std::sync::Weak<crate::native_core::multi_display::Displays>,
     audio_stream: Option<crate::audio_stream::Pipeline>,
     #[cfg(target_os = "linux")]
     linux_video: Option<Arc<dyn crate::video_output::NativeSink>>,
@@ -280,6 +282,19 @@ impl Completion {
         if self.cancelled || self.closing {
             return;
         }
+        #[cfg(windows)]
+        if (3..=4).contains(&channel) {
+            if let Some(displays) = self.displays.upgrade() {
+                self.progress.open_mask &= !(1 << channel);
+                displays.close(usize::from(channel) - 2);
+                crate::event_log::record(
+                    "WARN",
+                    "additional_display_channel_failed",
+                    serde_json::json!({"channel":channel}),
+                );
+                return;
+            }
+        }
         self.progress.failed = true;
         if self.progress.failure_stage.is_none() {
             #[cfg(any(target_os = "android", test))]
@@ -298,6 +313,18 @@ impl Completion {
     fn prepare_receive(&mut self, channel: u16, text: bool, bytes: &[u8]) -> Option<Delivery> {
         if self.cancelled || self.closing || self.progress.failed {
             return None;
+        }
+        #[cfg(windows)]
+        if (3..=4).contains(&channel) && !text && bytes.len() <= MAX_CHANNEL_MESSAGE {
+            if let Some(displays) = self.displays.upgrade() {
+                return Some(displays.get(usize::from(channel) - 2).map_or(
+                    Delivery::EmptyMessage,
+                    |screen| Delivery::Video {
+                        inspector: screen.inspector.clone(),
+                        pipeline: Some(screen.video.clone()),
+                    },
+                ));
+            }
         }
         if channel > 2 || text || bytes.len() > MAX_CHANNEL_MESSAGE {
             self.fail_channel(FailureStage::InboundChannel, channel);
@@ -442,7 +469,7 @@ async fn read_channel(
             // before bookkeeping, so cancellation never joins a blocked reader.
             if let Some(discarded) = delivery.submit(&buffer[..len]) {
                 let mut state = shared.lock().unwrap_or_else(|e| e.into_inner());
-                if !state.cancelled && !state.closing {
+                if !state.cancelled && !state.closing && id < 3 {
                     state.media_ingress.record(id, len, discarded);
                 }
             }
@@ -573,6 +600,8 @@ impl Attempt {
             discard_unavailable_media: config.is_some(),
             media_ingress: Default::default(),
             video_stream: Arc::new(Mutex::new(video_stream)),
+            #[cfg(windows)]
+            displays: Default::default(),
             #[cfg(any(windows, target_os = "android"))]
             video_output: None,
             audio_stream: None,
@@ -763,6 +792,8 @@ impl Attempt {
             window.stats.finish(generation);
             return;
         }
+        state.displays = Arc::downgrade(&window.displays);
+        window.multidisplay_ready.store(true, Ordering::Release);
         state.telemetry = Some((window.stats.clone(), generation));
         state.audio_stream = Some(audio);
         state.video_output = Some(video);
@@ -1227,7 +1258,13 @@ fn worker(
         tokio::time::timeout(Duration::from_secs(5), async {
             let mut channels = Vec::new();
             let control_attempt_id=id.to_owned();
-            for (id, label) in CHANNELS {
+            #[cfg(windows)]
+            let negotiated: &[(u16, &str)] = if config.is_some() {
+                &[(0, "control"), (1, "video"), (2, "audio"), (3, "video1"), (4, "video2")]
+            } else { &CHANNELS };
+            #[cfg(not(windows))]
+            let negotiated = &CHANNELS;
+            for &(id, label) in negotiated {
                 let channel = peer
                     .create_data_channel(
                         label,
@@ -1321,7 +1358,7 @@ fn worker(
                 let mut state = shared.lock().unwrap_or_else(|e| e.into_inner());
                 state.progress.transport_states = transport_states(&peer);
                 state.progress.connection_established |=
-                    state.progress.transport_connected && state.progress.open_mask == 7;
+                    state.progress.transport_connected && state.progress.open_mask & 7 == 7;
                 deadline.poll_wait(
                     std::time::Instant::now(),
                     state.progress.connection_established,
@@ -1937,6 +1974,8 @@ mod tests {
             discard_unavailable_media: false,
             media_ingress: Default::default(),
             video_stream: Default::default(),
+            #[cfg(windows)]
+            displays: Default::default(),
             #[cfg(any(windows, target_os = "android"))]
             video_output: None,
             audio_stream: None,

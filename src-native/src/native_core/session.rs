@@ -37,8 +37,10 @@ pub(super) trait Runtime: Desktop {
     fn controllers(&self) -> impl crate::gamepad::polling::Devices;
     fn controller_input_allowed(&self) -> bool;
     fn register_consumer(&self);
+    fn additional_displays(&self) -> &super::multi_display::Displays;
     fn take_events(&self, batch: &mut VecDeque<Event>);
     fn receive_pointer(&self, pointer: &mut pointer::Pointer, frame: &[u8]) -> Result<()>;
+    fn prepare_input(&self, attempt: &transport::Attempt, input: &mut input::Input) -> Result<()>;
     fn send_input(
         &self,
         input: &mut input::Input,
@@ -259,6 +261,13 @@ pub(super) fn run(
             let Some(frame) = attempt.pop_control() else {
                 break;
             };
+            if frame.get(12) == Some(&27) && frame.len() >= 13 {
+                let stream = u32::from_be_bytes(frame[..4].try_into().unwrap()) as usize;
+                if stream != 0 {
+                    platform.additional_displays().close(stream);
+                }
+                continue;
+            }
             if frame.get(12) == Some(&9) {
                 platform.receive_pointer(&mut pointer, &frame)?;
                 continue;
@@ -341,6 +350,9 @@ pub(super) fn run(
                 audio.recycle_handoff(block);
             }
         }
+        if established {
+            platform.prepare_input(&attempt, &mut input)?;
+        }
         platform.take_events(&mut batch);
         for event in batch.drain(..) {
             if matches!(event, Event::InputOverflow) {
@@ -361,6 +373,20 @@ pub(super) fn run(
             local.clipboard_event(&event, established, platform, |frame| attempt.send(frame))?;
             if let Event::NativeSession(action) = &event {
                 match action {
+                    session_model::Command::AddDisplay(stream) => {
+                        let result =
+                            platform
+                                .additional_displays()
+                                .open(*stream, &attempt, manager.clone());
+                        crate::event_log::record(
+                            if result.is_ok() { "INFO" } else { "WARN" },
+                            "additional_display_requested",
+                            serde_json::json!({"stream":stream,"accepted_locally":result.is_ok()}),
+                        );
+                        if result.is_err() {
+                            view.notify(Notification::Status(Status::Failed));
+                        }
+                    }
                     session_model::Command::Disconnect => platform.stop(),
                     session_model::Command::HideButton => {
                         if manager
@@ -469,6 +495,7 @@ pub(super) fn run(
                 platform.send_input(&mut input, &attempt, &event)?;
             }
         }
+        platform.additional_displays().poll(&attempt)?;
         let controller_wait = pad_poller.tick(
             &mut pads,
             &mut controllers,

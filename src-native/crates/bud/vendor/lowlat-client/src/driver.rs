@@ -90,6 +90,8 @@ const LOSS_WEIGHT: f64 = 1.0 / 30.0;
 /// receive ring, and never again.
 #[derive(Debug, Clone)]
 pub struct Units {
+    #[cfg(windows)]
+    secondary: Arc<std::sync::Mutex<[Option<Units>; 2]>>,
     pool: Arc<Pool>,
     ring: Arc<Ring<u32, UNIT_SLOTS>>,
     /// The consumer's wait word: bumped on every unit handed over.
@@ -105,10 +107,22 @@ impl Default for Units {
 impl Units {
     pub fn new() -> Self {
         Self {
+            #[cfg(windows)]
+            secondary: Default::default(),
             pool: Arc::new(Pool::new(UNIT_SLOTS, UNIT_BYTES)),
             ring: Arc::new(Ring::new()),
             word: Arc::new(AtomicU32::new(0)),
         }
+    }
+
+    #[cfg(windows)]
+    pub fn secondary(&self, stream: usize, create: bool) -> Option<Self> {
+        let mut streams = self.secondary.lock().unwrap_or_else(|e| e.into_inner());
+        let slot = streams.get_mut(stream.checked_sub(1)?)?;
+        if create && slot.is_none() {
+            *slot = Some(Self::new());
+        }
+        slot.clone()
     }
 
     /// Wait up to `timeout` for a unit to be handed over, or for a wake.
@@ -552,6 +566,10 @@ impl Driver {
         if let Some(outcome) = self.drain_video(endpoint.session(), now_ms) {
             return Some(outcome);
         }
+        #[cfg(windows)]
+        if let Some(outcome) = self.drain_secondary(endpoint.session(), now_ms) {
+            return Some(outcome);
+        }
         if let Some(outcome) = self.drain_audio(endpoint.session(), now_ms) {
             return Some(outcome);
         }
@@ -734,7 +752,15 @@ impl Driver {
             if self.route_hid_input(&message) {
                 return;
             }
-            if message.opcode == op::ENCODER_CONFIG && message.a0 == 0 {
+            #[cfg(windows)]
+            if message.opcode == 27 && message.a1 != 0 && (1..3).contains(&message.a0) {
+                // Allocate an additional compressed pool only on an explicit
+                // application request. Other platforms retain one stream.
+                let _ = self.units.secondary(message.a0 as usize, true);
+            }
+            if message.opcode == op::ENCODER_CONFIG
+                && (message.a0 == 0 || (cfg!(windows) && message.a0 < 3))
+            {
                 message.a1 = negotiated_encoder_flags(message.a1, self.init.flags);
             }
             self.send_control(session, &message);
@@ -950,6 +976,50 @@ impl Driver {
         None
     }
 
+    #[cfg(windows)]
+    fn drain_secondary(&mut self, session: &mut Session<'_>, now_ms: f64) -> Option<Outcome> {
+        for stream in 1..3 {
+            let Some(units) = self.units.secondary(stream, false) else {
+                continue;
+            };
+            let channel = (stream + 2) as u8;
+            // Bounded per-pass work; never starve the primary, sound or input.
+            for _ in 0..UNIT_SLOTS {
+                let pending = session.pending_messages(channel);
+                if pending == 0 {
+                    break;
+                }
+                if pending > 1 {
+                    self.catch_up(session, pending, channel);
+                }
+                let Some(mut writer) = units.pool.acquire() else {
+                    break;
+                };
+                let mut refused = false;
+                let filled = writer.fill_with(|slot| match session.take_message(channel, slot) {
+                    Some(Ok(len)) => Some(len),
+                    Some(Err(_)) => {
+                        refused = true;
+                        None
+                    }
+                    None => None,
+                });
+                if refused {
+                    return Some(Outcome::Unreadable);
+                }
+                if !filled {
+                    break;
+                }
+                let metadata = video::parse(writer.written()).is_ok_and(|h| h.metadata);
+                let tag = (stamp_us(now_ms) << 1) | if metadata { TAG_METADATA } else { 0 };
+                let _ = writer.publish(tag, &[&units.ring]);
+                units.word.fetch_add(1, Ordering::Release);
+                lowlat_common::wait::notify_one(&units.word);
+            }
+        }
+        None
+    }
+
     fn drain_video(&mut self, session: &mut Session<'_>, now_ms: f64) -> Option<Outcome> {
         loop {
             let pending = session.pending_messages(VIDEO_CHANNEL);
@@ -957,7 +1027,7 @@ impl Driver {
                 return None;
             }
             if pending > 1 {
-                self.catch_up(session, pending);
+                self.catch_up(session, pending, VIDEO_CHANNEL);
             }
             let mut writer = self.units.pool.acquire()?;
             let mut refused: Option<Error> = None;
@@ -1005,13 +1075,13 @@ impl Driver {
     /// such, and discards everything before it. Nothing else is ever
     /// skipped: a reader behind by a backlog of predicted pictures decodes
     /// them in order, because none of them can be skipped to.
-    fn catch_up(&mut self, session: &mut Session<'_>, pending: u32) {
+    fn catch_up(&mut self, session: &mut Session<'_>, pending: u32, channel: u8) {
         let mut head = [0u8; METADATA_LEN];
         let mut target: Option<u32> = None;
         let mut pictures_before = 0u32;
         let mut pictures_scanned = 0u32;
         for n in 0..pending {
-            let Some(len) = session.peek_message(VIDEO_CHANNEL, n, &mut head) else {
+            let Some(len) = session.peek_message(channel, n, &mut head) else {
                 break;
             };
             let Ok(header) = video::parse(head.get(..len).unwrap_or(&[])) else {
@@ -1030,7 +1100,7 @@ impl Driver {
             let mut next = [0u8; VIDEO_HEADER_LEN];
             let next_is_picture = n + 1 < pending
                 && session
-                    .peek_message(VIDEO_CHANNEL, n + 1, &mut next)
+                    .peek_message(channel, n + 1, &mut next)
                     .is_some_and(|len| {
                         video::parse(next.get(..len).unwrap_or(&[]))
                             .is_ok_and(|header| !header.metadata)
@@ -1041,7 +1111,7 @@ impl Driver {
             }
         }
         if let Some(n) = target {
-            let skipped = session.skip_messages(VIDEO_CHANNEL, n);
+            let skipped = session.skip_messages(channel, n);
             lowlat_common::log_info!(
                 "client: keyframe {n} messages ahead, skipping to it, discarded={skipped}"
             );

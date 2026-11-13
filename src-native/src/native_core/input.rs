@@ -68,9 +68,18 @@ impl Input {
             return Ok(());
         }
         let viewport = window.presented_viewport();
-        let Some(packet) = self.frame(event, viewport) else {
+        let Some(mut packet) = self.frame(event, viewport) else {
             return Ok(());
         };
+        let stream = window
+            .display_stream
+            .load(std::sync::atomic::Ordering::Acquire);
+        if stream != 0 && packet[12] == 3 {
+            let Ok(motion) = crate::display_stream::motion(stream, &packet) else {
+                return Ok(());
+            };
+            packet = motion;
+        }
         if window.native_input_allowed()
             || matches!(event, Event::Focus(false) | Event::HidInputRelease)
         {

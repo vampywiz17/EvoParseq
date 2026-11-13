@@ -15,6 +15,9 @@ use windows_sys::Win32::{
 pub use crate::native_core::session_model::Event;
 
 pub struct Window {
+    pub(crate) display_stream: AtomicUsize,
+    pub(crate) multidisplay_ready: AtomicBool,
+    pub(crate) displays: Arc<crate::native_core::multi_display::Displays>,
     pub(crate) audio_output: crate::audio_output::Output,
     pub(crate) native_panel: AtomicUsize,
 
@@ -141,6 +144,9 @@ impl Window {
 
     fn create_mode(online: bool) -> Result<Arc<Self>> {
         let state = Arc::new(Self {
+            display_stream: AtomicUsize::new(0),
+            multidisplay_ready: AtomicBool::new(false),
+            displays: Default::default(),
             audio_output: Default::default(),
             stats: Default::default(),
 
@@ -204,6 +210,7 @@ impl Window {
             wake_pending: AtomicUsize::new(0),
             wake_lock: Default::default(),
         });
+        state.displays.set_primary(Arc::downgrade(&state));
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let ui = state.clone();
         std::thread::spawn(move || {
@@ -1100,6 +1107,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                     && lp as usize == s.native_session_button.load(Ordering::Acquire)
                     && wp >> 16 == BN_CLICKED as usize) =>
             {
+                if s.display_stream.load(Ordering::Acquire) != 0 {
+                    crate::native_core::multi_display::controls(s);
+                    return 0;
+                }
                 let manager = s
                     .connection_settings
                     .lock()

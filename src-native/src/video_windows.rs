@@ -363,7 +363,8 @@ impl Drop for WorkerWake {
 }
 type WorkerState = (Mutex<Queue>, Condvar, Option<WorkerWake>);
 type Shared = Arc<WorkerState>;
-static PREVIOUS_WORKER: Mutex<Option<std::sync::Weak<WorkerState>>> = Mutex::new(None);
+static PREVIOUS_WORKER: Mutex<[Option<std::sync::Weak<WorkerState>>; 3]> =
+    Mutex::new([None, None, None]);
 // A timed-out driver may still own GPU objects. Do not create an unbounded
 // succession of replacement workers in this process; restarting clears this.
 static NATIVE_STALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -417,7 +418,10 @@ impl Pipeline {
         let state = shared.clone();
         let error_state = shared.clone();
         let preferred_gpu = window.video_gpu();
-        let mut previous = PREVIOUS_WORKER.lock().unwrap_or_else(|e| e.into_inner());
+        let mut workers = PREVIOUS_WORKER.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = &mut workers[window
+            .display_stream
+            .load(std::sync::atomic::Ordering::Acquire)];
         let busy = previous
             .as_ref()
             .and_then(std::sync::Weak::upgrade)

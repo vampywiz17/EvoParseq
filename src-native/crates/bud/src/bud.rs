@@ -380,6 +380,20 @@ impl MediaSource {
         };
         sink(unit.bytes()).map(Some)
     }
+    #[cfg(windows)]
+    pub fn with_secondary_video<T>(
+        &mut self,
+        stream: usize,
+        sink: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<Option<T>> {
+        let Some(units) = self.units.secondary(stream, false) else {
+            return Ok(None);
+        };
+        let Some(unit) = units.take() else {
+            return Ok(None);
+        };
+        sink(unit.bytes()).map(Some)
+    }
     pub fn with_audio<T>(&mut self, sink: impl FnOnce(&[u8]) -> Result<T>) -> Result<Option<T>> {
         let Some(packet) = self.audio.take() else {
             return Ok(None);

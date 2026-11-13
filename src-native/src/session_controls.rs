@@ -5,6 +5,8 @@ pub enum Command {
     Apply(Video),
     SelectDisplay(String),
     RefreshDisplays,
+    #[cfg(windows)]
+    AddDisplay(usize),
     Disconnect,
     HideButton,
     SecureAttention,

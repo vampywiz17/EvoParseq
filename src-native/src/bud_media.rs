@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 pub(crate) use crate::bud_ingress::session;
 pub struct Media {
+    displays: std::sync::Weak<crate::native_core::multi_display::Displays>,
     video: crate::video_windows::Pipeline,
     audio: Arc<crate::audio_stream::Pipeline>,
     audio_sender: crate::audio_stream::Sender,
@@ -36,12 +37,17 @@ impl Media {
         let audio_sender = audio
             .sender()
             .ok_or_else(|| anyhow::anyhow!("native audio sender unavailable"))?;
+        let displays = Arc::downgrade(&window.displays);
+        window
+            .multidisplay_ready
+            .store(true, std::sync::atomic::Ordering::Release);
         let video = crate::video_windows::Pipeline::start(
             window,
             crate::video_output::DisplayCatchUpPolicy::Fixed,
         );
         Ok((
             Self {
+                displays,
                 video,
                 audio,
                 audio_sender,
@@ -52,7 +58,12 @@ impl Media {
     }
 
     pub fn pump(&mut self, source: &mut MediaSource) -> Result<crate::bud_ingress::Pumped> {
-        crate::bud_ingress::pump(source, &mut self.ingress, &self.video, &self.audio_sender)
+        let counts =
+            crate::bud_ingress::pump(source, &mut self.ingress, &self.video, &self.audio_sender)?;
+        if let Some(displays) = self.displays.upgrade() {
+            displays.pump_bud(source)?;
+        }
+        Ok(counts)
     }
 
     pub fn recover(&mut self, session: &mut Session) {

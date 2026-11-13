@@ -38,6 +38,8 @@ mod crypto_policy_tests;
 mod cursor;
 #[cfg(test)]
 mod data_only_policy_tests;
+#[cfg(any(windows, test))]
+mod display_stream;
 mod event_log;
 mod event_queue;
 #[cfg(windows)]
