@@ -67,6 +67,7 @@ pub struct Displays {
     screens: Mutex<[Option<Arc<Screen>>; STREAMS - 1]>,
     primary: Mutex<std::sync::Weak<Window>>,
     focus: std::sync::atomic::AtomicUsize,
+    visible_cursor_stream: std::sync::atomic::AtomicUsize,
     pub flags: std::sync::atomic::AtomicI32,
 }
 
@@ -256,11 +257,49 @@ impl Displays {
     }
 
     pub fn clear(&self) {
+        self.visible_cursor_stream
+            .store(0, std::sync::atomic::Ordering::Release);
         for stream in 1..STREAMS {
             self.close(stream);
         }
     }
 
+    pub fn cursor_mode(&self, stream: usize, relative: bool, hidden: bool, suppressed: bool) {
+        use std::sync::atomic::Ordering;
+        if stream >= STREAMS {
+            return;
+        }
+        if relative || hidden || suppressed {
+            self.visible_cursor_stream.store(0, Ordering::Release);
+            return;
+        }
+        // Reconcile only a mode/stream transition, not every pointer movement.
+        if self.visible_cursor_stream.load(Ordering::Acquire) == stream + 1 {
+            return;
+        }
+        let screens = self
+            .screens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        // Ignore closed/unknown outputs and keep the single-display contract.
+        if screens.iter().all(Option::is_none) || (stream != 0 && screens[stream - 1].is_none()) {
+            return;
+        }
+        self.visible_cursor_stream
+            .store(stream + 1, Ordering::Release);
+        if let Some(primary) = self
+            .primary
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .upgrade()
+        {
+            primary.release_peer_cursor(stream);
+        }
+        for screen in screens.iter().flatten() {
+            screen.window.release_peer_cursor(stream);
+        }
+    }
     pub fn pointer(&self, stream: usize, bytes: &[u8]) -> Result<()> {
         if let Some(screen) = self.get(stream) {
             screen

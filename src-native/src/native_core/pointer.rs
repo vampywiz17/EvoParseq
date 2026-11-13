@@ -33,7 +33,7 @@ impl Pointer {
                     "INFO",
                     "cursor_mode_changed",
                     serde_json::json!({
-                        "relative":mode.0,"hidden":mode.1,"suppressed":mode.2
+                        "stream":pointer.update.stream,"relative":mode.0,"hidden":mode.1,"suppressed":mode.2
                     }),
                 );
             }

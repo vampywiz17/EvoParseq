@@ -373,7 +373,7 @@ cursor hidden by that mode. Existing native cursor-retirement ownership remains.
 
 With event logging enabled, `cursor_image_applied` contains source, client
 reference, output dimensions and hotspot; `cursor_mode_changed` records only
-relative/hidden/suppressed transitions. No continuous positions, PNG pixels,
+stream ID and relative/hidden/suppressed transitions. No continuous positions, PNG pixels,
 keys or video are recorded. These distinguish a local image size issue from a
 host mode transition. A cursor already composited into host video cannot be
 resized independently by this client-side cursor path; that case still needs
@@ -481,3 +481,16 @@ The host's own driver and account/owner policy still apply. No guest-side VDD
 count-setting contract has been established; see `NATIVE_REFERENCES.md` for the
 specific stock-runtime evidence and its limits. Do not add a speculative VDD
 count field to the existing remote video configuration.
+
+### Multi-display cursor capture recovery
+
+A visible, unsuppressed absolute cursor on another live stream invalidates an
+old stream's hidden/relative cursor request. Clear that stale request without
+changing focus, releasing held buttons/keys or warping to the old display's
+coordinates. This lets cross-display window drags return from relative capture
+when the host reports the visible cursor on the destination stream. Hidden or
+relative updates retain the existing SDK/lowlat capture rule; suppressed cursors
+never prove a visible endpoint. Closed/unknown streams do not trigger recovery.
+The reconciliation is transition-only, uses the existing UI messages and logs
+`cursor_capture_released_for_peer` with source/destination stream IDs. No media
+path, timer, thread or dependency is added.

@@ -598,6 +598,28 @@ impl Window {
             self.request_relative_mouse(relative, true);
         }
     }
+    /// A visible absolute cursor on another live stream ends this stream's
+    /// stale capture request. Do not warp using coordinates from the old
+    /// display, change focus, or synthesize button/key releases during a drag.
+    pub(crate) fn release_peer_cursor(&self, visible_stream: usize) {
+        let stream = self.display_stream.load(Ordering::Acquire);
+        if stream == visible_stream {
+            return;
+        }
+        let mut cursor = self.host_cursor.lock().unwrap_or_else(|e| e.into_inner());
+        if !cursor.is_some_and(|(_, _, relative)| relative) {
+            return;
+        }
+        *cursor = None;
+        drop(cursor);
+        self.request_relative_mouse(false, true);
+        self.set_cursor(crate::cursor::Request::Visible(true));
+        crate::event_log::record(
+            "INFO",
+            "cursor_capture_released_for_peer",
+            serde_json::json!({"stream":stream,"visible_stream":visible_stream}),
+        );
+    }
     unsafe fn restore_host_cursor(&self) {
         // HID desktop input also needs the host's endpoint when leaving raw
         // relative capture. Otherwise the next absolute move sends the old
@@ -2064,6 +2086,55 @@ mod tests {
                 frames_presented: 1,
                 ..Default::default()
             });
+            // Cross-stream drag: the visible endpoint is reported by another
+            // stream, so this window receives no matching absolute-mode report.
+            // Reconcile the stale request without losing the held mouse button
+            // or warping to this display's obsolete endpoint.
+            window.set_host_cursor(960, 540, false, true);
+            wait(|| relative() && clipped());
+            unsafe {
+                SendMessageW(window.handle(), WM_LBUTTONDOWN, 1, (100 << 16) | 100);
+            }
+            window.events.drain();
+            window.release_peer_cursor(0); // Its own stream must keep the request.
+            assert!(window.relative_requested.load(Ordering::Acquire));
+            window.displays.cursor_mode(1, false, false, false); // Closed output.
+            assert!(window.relative_requested.load(Ordering::Acquire));
+            let mut endpoint = POINT::default();
+            unsafe {
+                GetCursorPos(&mut endpoint);
+            }
+            window.release_peer_cursor(1);
+            wait(|| !relative() && !clipped());
+            unsafe {
+                SendMessageW(window.handle(), WM_APP + 7, 0, 0);
+                let mut actual = POINT::default();
+                GetCursorPos(&mut actual);
+                assert_eq!((actual.x, actual.y), (endpoint.x, endpoint.y));
+                let mut gui = GUITHREADINFO {
+                    cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+                    ..Default::default()
+                };
+                let thread = GetWindowThreadProcessId(window.handle(), std::ptr::null_mut());
+                assert_ne!(GetGUIThreadInfo(thread, &mut gui), 0);
+                assert_eq!(gui.hwndCapture, window.handle());
+            }
+            assert!(!window.client_cursor_hidden());
+            assert_eq!(window.pressed_buttons.load(Ordering::Acquire), 1);
+            assert!(!window
+                .events
+                .drain()
+                .iter()
+                .any(|event| matches!(event, Event::Button(false, ..))));
+            unsafe {
+                SendMessageW(window.handle(), WM_LBUTTONUP, 0, (100 << 16) | 100);
+            }
+            assert_eq!(window.pressed_buttons.load(Ordering::Acquire), 0);
+            assert!(window
+                .events
+                .drain()
+                .iter()
+                .any(|event| matches!(event, Event::Button(false, 0, ..))));
             // SDK/lowlat truth table: either flag locks, both clear unlock.
             for (rel, hidden) in [(true, false), (false, true), (true, true)] {
                 let mut wire = vec![0; 34];

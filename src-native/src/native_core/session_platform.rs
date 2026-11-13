@@ -106,6 +106,12 @@ impl Runtime for Windows {
     fn receive_pointer(&self, pointer: &mut Pointer, frame: &[u8]) -> Result<()> {
         let parsed = evoparseq_bud::bud::cursor_message(frame)?;
         let stream = usize::from(parsed.update.stream);
+        self.window.displays.cursor_mode(
+            stream,
+            parsed.update.relative,
+            parsed.update.hidden,
+            parsed.update.suppressed,
+        );
         if stream == 0 {
             pointer.receive(frame, &self.window)
         } else {
