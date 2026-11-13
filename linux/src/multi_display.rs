@@ -138,6 +138,7 @@ impl crate::Desktop {
                         .show(child, |ui| {
                             let area = surface.decoder.show(ui);
                             surface.input.video = area.map(|a| a.0);
+                            channel.playback.set_video_rect(surface.input.video);
                             if let Some((_, source)) = area {
                                 channel.playback.set_input_geometry(source);
                                 fit(child, source, &mut surface.fitted);

@@ -12,6 +12,7 @@ pub struct Session {
     pub textures: Vec<wgpu::Texture>,
     pub sync: Option<Arc<super::sync::Sync>>,
     pub size: (u32, u32),
+    pub ten_bit: bool,
     alignment: u64,
     initialized: bool,
     slot_ids: [Option<u32>; MAX_FRAMES],
@@ -229,6 +230,7 @@ impl Session {
             resources: Some(resources),
             textures: Vec::new(),
             size: (sps.coded_width(), sps.coded_height()),
+            ten_bit: false,
             alignment: 1,
             initialized: false,
             slot_ids: [None; MAX_FRAMES],
@@ -254,6 +256,7 @@ impl Session {
             resources: Some(resources),
             textures: Vec::new(),
             size: (sps.width, sps.height),
+            ten_bit: sps.bit_depth_luma_minus8 == 2,
             alignment: 1,
             initialized: false,
             slot_ids: [None; MAX_FRAMES],
@@ -269,17 +272,33 @@ impl Session {
         Ok(result)
     }
     unsafe fn initialize(&mut self, sequence: Sequence<'_>) -> Result<()> {
+        let pixel = if self.ten_bit {
+            vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16
+        } else {
+            vk::Format::G8_B8R8_2PLANE_420_UNORM
+        };
+        let texture_format = if self.ten_bit {
+            wgpu::TextureFormat::P010
+        } else {
+            wgpu::TextureFormat::NV12
+        };
+        let depth = if self.ten_bit {
+            vk::VideoComponentBitDepthFlagsKHR::TYPE_10
+        } else {
+            vk::VideoComponentBitDepthFlagsKHR::TYPE_8
+        };
         let resources = self.resources.as_mut().context("Video session closed")?;
         let context = &resources.context;
         let raw = &context.raw;
         let mut h264 = vk::VideoDecodeH264ProfileInfoKHR::default()
             .picture_layout(vk::VideoDecodeH264PictureLayoutFlagsKHR::PROGRESSIVE);
-        let mut h265 = vk::VideoDecodeH265ProfileInfoKHR::default().std_profile_idc(1);
+        let mut h265 = vk::VideoDecodeH265ProfileInfoKHR::default()
+            .std_profile_idc(if self.ten_bit { 2 } else { 1 });
         let mut usage = crate::video_profile::usage();
         let mut profile = vk::VideoProfileInfoKHR::default()
             .chroma_subsampling(vk::VideoChromaSubsamplingFlagsKHR::TYPE_420)
-            .luma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
-            .chroma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
+            .luma_bit_depth(depth)
+            .chroma_bit_depth(depth)
             .push_next(&mut usage);
         let (references, level, hevc) = match sequence {
             Sequence::H264(sps) => {
@@ -294,7 +313,7 @@ impl Session {
             }
             Sequence::Hevc(sps, header) => {
                 ensure!(
-                    context.hevc,
+                    context.hevc && (!self.ten_bit || context.hevc10),
                     "HEVC Vulkan Video is unavailable on the selected device/queue"
                 );
                 profile.video_codec_operation = vk::VideoCodecOperationFlagsKHR::DECODE_H265;
@@ -376,8 +395,8 @@ impl Session {
                 &vk::VideoSessionCreateInfoKHR::default()
                     .queue_family_index(context.decode_family)
                     .video_profile(&profile)
-                    .picture_format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-                    .reference_picture_format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+                    .picture_format(pixel)
+                    .reference_picture_format(pixel)
                     .max_coded_extent(extent)
                     .max_dpb_slots(self.slot_count)
                     .max_active_reference_pictures(references.max(1))
@@ -457,7 +476,7 @@ impl Session {
                         vk::ImageCreateFlags::empty()
                     })
                     .image_type(vk::ImageType::TYPE_2D)
-                    .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+                    .format(pixel)
                     .extent(vk::Extent3D {
                         width: extent.width,
                         height: extent.height,
@@ -506,7 +525,7 @@ impl Session {
                             } else {
                                 vk::ImageViewType::TYPE_2D
                             })
-                            .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+                            .format(pixel)
                             .subresource_range(
                                 vk::ImageSubresourceRange::default()
                                     .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -543,7 +562,7 @@ impl Session {
                             mip_level_count: 1,
                             sample_count: 1,
                             dimension: wgpu::TextureDimension::D2,
-                            format: wgpu::TextureFormat::NV12,
+                            format: texture_format,
                             usage: wgpu::TextureUses::RESOURCE,
                             memory_flags: wgpu::hal::MemoryFlags::empty(),
                             view_formats: Vec::new(),
@@ -563,7 +582,7 @@ impl Session {
                                 mip_level_count: 1,
                                 sample_count: 1,
                                 dimension: wgpu::TextureDimension::D2,
-                                format: wgpu::TextureFormat::NV12,
+                                format: texture_format,
                                 usage: wgpu::TextureUsages::TEXTURE_BINDING,
                                 view_formats: &[],
                             },

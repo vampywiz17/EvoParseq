@@ -85,22 +85,45 @@ impl DesktopInput {
             && ctx.input(|i| i.focused)
             && !self.unlock_after_present
         {
-            if let (Some((x, y)), Some(rect)) = (playback.take_cursor_restore(), self.video) {
-                let viewport = crate::viewport::Viewport {
-                    source: playback.input_geometry(),
-                    client: (rect.width().round() as u32, rect.height().round() as u32),
-                };
-                if let Some((x, y)) = viewport.unmap(x, y) {
-                    let position = rect.min + egui::vec2(x as f32, y as f32);
-                    // Wayland permits position hints only while the pointer is locked.
-                    // Keep it locked through this presentation's surface commit, then
-                    // unlock on the next frame. No recurring warp in absolute mode.
-                    ctx.send_viewport_cmd(egui::ViewportCommand::CursorPosition(position));
-                    ctx.set_cursor_icon(egui::CursorIcon::None);
-                    self.restored_position = Some(position);
-                    self.unlock_after_present = true;
-                    ctx.request_repaint();
-                    return;
+            if let Some((stream, x, y)) = playback.take_cursor_restore() {
+                if stream != playback.stream() {
+                    if let Some(position) = playback.cursor_endpoint(stream, x, y) {
+                        // Unlock the old surface before requesting a same-client peer warp.
+                        ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(
+                            egui::CursorGrab::None,
+                        ));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
+                        ctx.send_viewport_cmd_to(
+                            if stream == 0 {
+                                egui::ViewportId::ROOT
+                            } else {
+                                crate::display_routes::viewport(stream)
+                            },
+                            egui::ViewportCommand::CursorPosition(position),
+                        );
+                        self.grabbed = false;
+                        self.confined = false;
+                        ctx.set_cursor_icon(egui::CursorIcon::Default);
+                        return;
+                    }
+                    // A disappeared peer must not warp inside the wrong window.
+                } else if let Some(rect) = self.video {
+                    let viewport = crate::viewport::Viewport {
+                        source: playback.input_geometry(),
+                        client: (rect.width().round() as u32, rect.height().round() as u32),
+                    };
+                    if let Some((x, y)) = viewport.unmap(x, y) {
+                        let position = rect.min + egui::vec2(x as f32, y as f32);
+                        // Wayland permits position hints only while the pointer is locked.
+                        // Keep it locked through this presentation's surface commit, then
+                        // unlock on the next frame. No recurring warp in absolute mode.
+                        ctx.send_viewport_cmd(egui::ViewportCommand::CursorPosition(position));
+                        ctx.set_cursor_icon(egui::CursorIcon::None);
+                        self.restored_position = Some(position);
+                        self.unlock_after_present = true;
+                        ctx.request_repaint();
+                        return;
+                    }
                 }
             }
         }
@@ -522,5 +545,63 @@ mod immersive_tests {
                     egui::ViewportCommand::CursorGrab(egui::CursorGrab::Confined)
                 ))
         );
+    }
+}
+
+#[cfg(test)]
+mod peer_cursor_tests {
+    use super::*;
+    #[test]
+    fn linux_drag_endpoint_uses_destination_geometry_without_releasing_host_buttons() {
+        let ctx = egui::Context::default();
+        let displays = std::sync::Arc::new(crate::display_routes::Displays::default());
+        let primary = Playback::new(ctx.clone());
+        primary.attach_displays(&displays, 0);
+        *displays.primary.lock().unwrap() = std::sync::Arc::downgrade(&primary);
+        displays.open(1, &ctx).unwrap();
+        let peer = displays.get(1).unwrap().playback.clone();
+        for target in [&primary, &peer] {
+            target.set_input_ready(true);
+            target.set_input_geometry((1920, 1080));
+        }
+        primary.set_video_rect(Some(Rect::from_min_size(
+            egui::pos2(0., 24.),
+            egui::vec2(1920., 1080.),
+        )));
+        peer.set_video_rect(Some(Rect::from_min_size(
+            egui::pos2(10., 24.),
+            egui::vec2(960., 540.),
+        )));
+        let mut adapter = DesktopInput {
+            enabled: true,
+            buttons: 1,
+            video: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1920., 1080.))),
+            ..Default::default()
+        };
+        primary.host_cursor(true, 20, 30);
+        ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &primary));
+        primary.release_peer_cursor(1, 1440, 810);
+        let out = ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &primary));
+        assert!(out.viewport_output[&crate::display_routes::viewport(1)].commands.iter().any(|cmd| matches!(cmd,egui::ViewportCommand::CursorPosition(p) if *p==egui::pos2(730.,429.))));
+        assert!(
+            !out.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|cmd| matches!(cmd, egui::ViewportCommand::CursorPosition(_)))
+        );
+        assert_eq!(adapter.buttons, 1);
+        let mut input = std::collections::VecDeque::new();
+        primary.input.take(&mut input).unwrap();
+        assert!(input.is_empty());
+        primary.release_peer_cursor(1, 100, 100);
+        assert!(primary.take_cursor_restore().is_none());
+        peer.host_cursor(true, 20, 30);
+        peer.release_peer_cursor(0, 1440, 810);
+        assert_eq!(
+            peer.cursor_endpoint(0, 1440, 810),
+            Some(egui::pos2(1440., 834.))
+        );
+        displays.close(1);
+        assert!(primary.cursor_endpoint(1, 20, 30).is_none());
     }
 }

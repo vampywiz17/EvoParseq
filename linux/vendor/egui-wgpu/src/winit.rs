@@ -420,9 +420,11 @@ impl Painter {
         profiling::function_scope!();
 
         if let Some(preference) = &self.configuration.runtime_frame_latency {
-            let value = preference.load(std::sync::atomic::Ordering::Acquire).min(2);
-            let requested = (value != 0).then_some(value);
-            if requested != self.configuration.desired_maximum_frame_latency {
+            let value = preference.load(std::sync::atomic::Ordering::Acquire).min(3);
+            let requested = (value != 0).then_some(value.min(2));
+            let present_mode = if value == 3 { wgpu::PresentMode::AutoNoVsync } else { wgpu::PresentMode::AutoVsync };
+            if requested != self.configuration.desired_maximum_frame_latency || present_mode != self.configuration.present_mode {
+                self.configuration.present_mode = present_mode;
                 self.configuration.desired_maximum_frame_latency = requested;
                 if let Some(render_state) = &self.render_state {
                     for surface in self.surfaces.values() {

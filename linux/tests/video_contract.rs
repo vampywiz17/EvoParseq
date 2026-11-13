@@ -558,11 +558,8 @@ fn hevc_main_metadata_and_reference_slots_match_shared_parser() {
     }
 }
 #[test]
-fn hevc_rejects_main10_reordering_and_truncated_parameter_sets() {
-    for fixture in [
-        include_bytes!("data/hevc-main10-first.bin").as_slice(),
-        include_bytes!("data/hevc-reordered-first.bin").as_slice(),
-    ] {
+fn hevc_rejects_reordering_and_truncated_parameter_sets() {
+    for fixture in [include_bytes!("data/hevc-reordered-first.bin").as_slice()] {
         let size = u32::from_le_bytes(fixture[..4].try_into().unwrap()) as usize;
         let bytes = &fixture[4..4 + size];
         assert!(hevc_parameters::Headers::default().observe(bytes).is_err());
@@ -885,4 +882,35 @@ fn linux_selected_hevc_surface_stays_leased_without_exhausting_the_dpb() {
         }
         selection.clear(&mut stream.dpb);
     }
+}
+
+#[test]
+fn linux_main10_metadata_preserves_depth_and_profile_without_allowing_444() {
+    let fixture = include_bytes!("data/hevc-main10-first.bin");
+    let size = u32::from_le_bytes(fixture[..4].try_into().unwrap()) as usize;
+    let bytes = &fixture[4..4 + size];
+    let mut headers = hevc_parameters::Headers::default();
+    headers.observe(bytes).unwrap();
+    let mut parser = lowlat_decode::hevc::Stream::new();
+    assert_eq!(
+        parser.read(bytes).unwrap(),
+        lowlat_decode::hevc::Read::Picture
+    );
+    let job = parser.job().unwrap();
+    hevc_parameters::validate(&job.sps).unwrap();
+    assert_eq!(job.sps.bit_depth_luma_minus8, 2);
+    assert_eq!(job.sps.profile_idc, 2);
+    let (_, header) = headers.active(&job.sps).unwrap();
+    assert_eq!(
+        hevc_parameters::profile(&header.ptl)
+            .unwrap()
+            .general_profile_idc,
+        2
+    );
+    let mut invalid = job.sps.clone();
+    invalid.chroma_format_idc = 3;
+    assert!(hevc_parameters::validate(&invalid).is_err());
+    invalid = job.sps.clone();
+    invalid.bit_depth_chroma_minus8 = 0;
+    assert!(hevc_parameters::validate(&invalid).is_err());
 }

@@ -14,7 +14,6 @@ pub struct State {
     pub provider: usize,
     pub stats: bool,
     pub stats_tab: usize,
-    pub prefer_hevc: bool,
     pub network: Option<crate::network_settings::Draft>,
     pub saving:
         Option<std::sync::mpsc::Receiver<(crate::network_settings::Draft, Result<(), String>)>>,
@@ -100,7 +99,6 @@ impl Desktop {
             } else {
                 connection::Mode::WebRtc
             };
-            self.ui_state.prefer_hevc = saved.prefer_hevc;
             return;
         }
         let save = ui
@@ -167,26 +165,30 @@ impl Desktop {
                 });
             } else if row.label == f::VIDEO_FORMAT.label {
                 use crate::connection_settings::VideoFormat;
-                let supported = self.video_context.as_ref().is_some_and(|c| c.hevc);
+                let mut value = VideoFormat::current(&draft.values);
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     egui::ComboBox::from_id_salt("video-format")
                         .width(400.)
-                        .selected_text(VideoFormat::LABELS[usize::from(self.ui_state.prefer_hevc)])
+                        .selected_text(VideoFormat::LABELS[value as usize])
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.ui_state.prefer_hevc,
-                                false,
-                                VideoFormat::LABELS[0],
-                            );
-                            ui.add_enabled_ui(supported, |ui| {
-                                ui.selectable_value(
-                                    &mut self.ui_state.prefer_hevc,
-                                    true,
-                                    VideoFormat::LABELS[1],
-                                );
-                            });
+                            for (format, text) in
+                                VideoFormat::ALL.into_iter().zip(VideoFormat::LABELS)
+                            {
+                                let supported = format == VideoFormat::H264
+                                    || self.video_context.as_ref().is_some_and(|c| {
+                                        if format == VideoFormat::Hevc10 {
+                                            c.hevc10
+                                        } else {
+                                            c.hevc
+                                        }
+                                    });
+                                ui.add_enabled_ui(supported, |ui| {
+                                    ui.selectable_value(&mut value, format, text);
+                                });
+                            }
                         });
                 });
+                value.apply(&mut draft.values);
             } else if row.label == f::DISPLAY_TIMING.label {
                 use crate::connection_settings::PresentationMode;
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
@@ -195,7 +197,7 @@ impl Desktop {
                         .selected_text(draft.values.presentation_mode.label())
                         .show_ui(ui, |ui| {
                             for mode in PresentationMode::ALL {
-                                ui.add_enabled_ui(mode != PresentationMode::Vrr, |ui| {
+                                ui.scope(|ui| {
                                     ui.selectable_value(
                                         &mut draft.values.presentation_mode,
                                         mode,
@@ -491,14 +493,6 @@ impl Desktop {
                 .expect("network form initialized");
             draft.values.bud = self.transport == connection::Mode::Bud;
             self.ui_state.gpu_changed = draft.values.video_gpu != self.settings.view().0.video_gpu;
-            if self.ui_state.prefer_hevc != draft.values.prefer_hevc {
-                if self.ui_state.prefer_hevc {
-                    crate::connection_settings::VideoFormat::Hevc8
-                } else {
-                    crate::connection_settings::VideoFormat::H264
-                }
-                .apply(&mut draft.values);
-            }
             // Retain public/encrypted form values for disabled painting only.
             // Plaintext replacement secrets move exclusively to the save worker.
             let mut pending = crate::network_settings::Draft::new(draft.values.clone());

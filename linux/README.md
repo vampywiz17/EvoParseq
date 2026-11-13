@@ -11,15 +11,15 @@ Windows and Android TV feature availability differs; see the [root README](../RE
 | Desktop | Wayland, egui with a Vulkan renderer; shared Windows application layout and native window decorations |
 | Account | Sign-in, 2FA, computer discovery, manual peer ID and encrypted remembered sessions |
 | Transport | WebRTC and explicitly selected BUD; direct/STUN, custom TURN UDP/TLS/TCP, Cloudflare TURN, direct-only and Force TURN; no silent transport fallback |
-| Video | Vulkan Video; progressive H.264 or HEVC Main, 8-bit 4:2:0, without frame reordering |
+| Video | Vulkan Video; progressive H.264/HEVC Main 8-bit or HEVC Main10, 4:2:0, without frame reordering |
 | Audio | Stereo WebRTC Opus; BUD Opus/raw PCM, stereo or verified default-output 5.1/7.1; PipeWire mute/volume and automatic output reopening |
 | Input | Normal Parsec or opt-in BUD USB HID mouse/keyboard; shared controller lifecycle and rumble; focused text clipboard |
 | Session controls | Host display selection, up to three simultaneous displays, per-display resolution, bandwidth, FPS, frame pacing, orientation, immersive mouse/keyboard, fullscreen and Disconnect |
 | Diagnostics | Live overlay, native Connection stats window, shared Rust statistics and host-timing models |
 | Distribution | Flatpak, Freedesktop Platform/SDK 25.08 and matching graphics driver extensions |
 
-10-bit/4:4:4 playback, application Zero copy mode, AI upscaling, runtime GPU
-switching and verified VRR control are
+4:4:4 playback, application Zero copy mode, AI upscaling, runtime GPU
+switching and verified physical VRR control are
 **not integrated on Linux**. Unsupported controls remain disabled. Selecting a
 single host display is supported; HID mouse pins the verified primary output.
 Simultaneous displays require normal mouse and keyboard input, as on Windows.
@@ -27,7 +27,7 @@ Use **Add screen** in the primary overlay to open another host-listed output.
 Each additional window has its own resolution, fullscreen and Close screen
 controls; Connection stats is disabled there. Video streams share the selected
 Vulkan device and connection, with one decoder per active screen, one PipeWire
-output and no cross-GPU transfer. Linux multi-display live testing is pending.
+output and no cross-GPU transfer. Linux multi-display playback has been live-confirmed by the maintainer.
 See the root README's recommended Parsec VDD manager; the client does not create
 additional host displays or activate paid host-side virtual displays.
 
@@ -239,7 +239,7 @@ reconnect. H.264 remains the default. The HEVC choice is enabled only when the
 selected Vulkan device/queue reports Main 8-bit decode, sufficient reference
 capacity and sampleable NV12 output with a supported DPB layout.
 The host may still choose H.264; Connection stats reports the received codec.
-Existing dormant 10-bit/4:4:4 preferences never enable those Linux formats.
+HEVC 10-bit is available after Main10/P010 checks; dormant 4:4:4 preferences stay inactive.
 
 WebRTC/BUD negotiation reuses the common control flags and inspector. Encoded
 queue entries carry the already identified codec into the decoder without a
@@ -252,7 +252,7 @@ There is no new decoded-image copy, intermediate image, render pass, worker or
 software-decoding fallback.
 
 This step supports progressive Main, 8-bit 4:2:0 with zero declared reordering.
-Main10, 4:4:4, range extensions, multilayer coding and VPS HRD parameters are
+4:4:4, range extensions, multilayer coding and VPS HRD parameters are
 explicitly rejected. Optional non-decoding SPS VUI metadata is not supplied to
 the Vulkan session; the shared parser's range/crop data still drives presentation.
 Offline fixtures include synthetic streaming and NVIDIA low-latency sequences;
@@ -340,7 +340,7 @@ is reachable.
   Automatic/Low latency/VSync preferences. Low latency requests one queued surface
   presentation; this is a driver/compositor hint, not a measured scanout guarantee.
   It applies on the next connection through a narrow Linux-only egui-wgpu patch
-  using public `wgpu::Surface::configure`. Unsupported VRR/10-bit/4:4:4/AI/Zero copy
+  using public `wgpu::Surface::configure`. Unsupported 4:4:4/AI/Zero copy
   choices remain disabled; the current adapter is displayed read-only.
 - Event logging is initialized and guarded at Linux startup. The Network checkbox
   controls the shared bounded JSONL log beside settings.json, with rotation and
@@ -478,3 +478,27 @@ one selected output; timeline policy tests cover unrelated images, reference-ima
 transitions, duplicate/multiple readers and repeated redraw. The headless Vulkan
 handoff fixture consumes the same per-surface dependency plans as production.
 Hardware playback and performance still need live validation.
+
+
+### Nobara live validation and video extensions (2026-11-13)
+
+The maintainer reports working Linux multi-display playback and HEVC playback
+on the Intel notebook and the test notebook under Nobara Live. This confirms
+the tested Linux HEVC path, not Windows HEVC, Main10, 4:4:4 or HDR. The additional
+notebook's exact HEVC GPU/profile was not recorded.
+
+HEVC Main10 is available when the selected GPU/queue and original P010 surface
+sampling pass capability checks. Presentation remains SDR RGB; HDR output is
+not implied. Main10 live validation is pending. Display timing VRR requests
+Vulkan AutoNoVsync with the documented supported-mode fallback. Physical VRR
+remains compositor-, monitor- and driver-controlled and unverified.
+
+Cross-display cursor restoration targets the destination viewport using the
+public Wayland pointer-warp protocol when advertised. A request is not an
+acknowledgement; older compositors may lack it or decline a cross-window warp.
+Same-window locked-pointer hints remain the fallback.
+
+AI upscaling stays disabled on Linux, as requested. Application Zero copy stays
+disabled because the presentation pass performs YUV-to-RGB conversion. The
+current wgpu format API exposes NV12/P010 but no 4:4:4 multiplanar format;
+4:4:4 needs further renderer integration, not just a host-request switch.

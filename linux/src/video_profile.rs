@@ -79,16 +79,28 @@ pub unsafe fn validate_formats(
     profile: &vk::VideoProfileInfoKHR<'_>,
     surfaces: Surfaces,
 ) -> anyhow::Result<()> {
+    let pixel = if profile.luma_bit_depth == vk::VideoComponentBitDepthFlagsKHR::TYPE_10 {
+        vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16
+    } else {
+        vk::Format::G8_B8R8_2PLANE_420_UNORM
+    };
+    let valid = |f: &vk::VideoFormatPropertiesKHR<'_>| {
+        f.format == pixel
+            && f.image_type == vk::ImageType::TYPE_2D
+            && f.image_tiling == vk::ImageTiling::OPTIMAL
+    };
     let output = unsafe { formats(video, gpu, profile, surfaces.output_usage())? };
     anyhow::ensure!(
-        output.iter().any(original_nv12),
-        "NV12 output requires sampleable mutable 2D optimal-tiling surfaces"
+        output.iter().any(|f| valid(f)
+            && f.image_create_flags
+                .contains(vk::ImageCreateFlags::MUTABLE_FORMAT)),
+        "Decode output requires sampleable mutable 2D optimal-tiling surfaces"
     );
     if surfaces.distinct {
         let references = unsafe { formats(video, gpu, profile, surfaces.reference_usage())? };
         anyhow::ensure!(
-            references.iter().any(nv12),
-            "NV12 reference surfaces are unavailable"
+            references.iter().any(valid),
+            "Decode reference surfaces are unavailable"
         );
     }
     Ok(())

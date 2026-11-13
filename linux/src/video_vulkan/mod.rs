@@ -309,7 +309,11 @@ impl Decoder {
             for (surface, texture) in session.textures.iter().enumerate() {
                 let y = texture.create_view(&wgpu::TextureViewDescriptor {
                     label: Some("Decode Y plane"),
-                    format: Some(wgpu::TextureFormat::R8Unorm),
+                    format: Some(if session.ten_bit {
+                        wgpu::TextureFormat::R16Unorm
+                    } else {
+                        wgpu::TextureFormat::R8Unorm
+                    }),
                     aspect: wgpu::TextureAspect::Plane0,
                     dimension: Some(wgpu::TextureViewDimension::D2),
                     base_array_layer: session.output_layer(surface),
@@ -318,7 +322,11 @@ impl Decoder {
                 });
                 let uv = texture.create_view(&wgpu::TextureViewDescriptor {
                     label: Some("Decode UV plane"),
-                    format: Some(wgpu::TextureFormat::Rg8Unorm),
+                    format: Some(if session.ten_bit {
+                        wgpu::TextureFormat::Rg16Unorm
+                    } else {
+                        wgpu::TextureFormat::Rg8Unorm
+                    }),
                     aspect: wgpu::TextureAspect::Plane1,
                     dimension: Some(wgpu::TextureViewDimension::D2),
                     base_array_layer: session.output_layer(surface),
@@ -333,7 +341,7 @@ impl Decoder {
                     if full_range { 1.0 } else { 0.0 },
                     if self.srgb { 1.0 } else { 0.0 },
                     f32::from(rotation),
-                    0.0,
+                    if session.ten_bit { 1.0 } else { 0.0 },
                 ];
                 use wgpu::util::DeviceExt;
                 let constants: Vec<u8> = values
@@ -421,11 +429,22 @@ impl Decoder {
             crate::video_stream::Codec::H264 => "Vulkan Video H.264",
             crate::video_stream::Codec::Hevc => "Vulkan Video HEVC",
         });
-        report.renderer = Some("Vulkan / NV12 conversion");
-        report.native_decoder_surface = Some("Original Vulkan NV12 decoder image");
+        report.renderer = Some(if self.session.as_ref().is_some_and(|s| s.ten_bit) {
+            "Vulkan / P010 conversion"
+        } else {
+            "Vulkan / NV12 conversion"
+        });
+        report.native_decoder_surface = Some(if self.session.as_ref().is_some_and(|s| s.ten_bit) {
+            "Original Vulkan P010 decoder image"
+        } else {
+            "Original Vulkan NV12 decoder image"
+        });
         report.hardware_decode = None;
         report.gpu_surface_output = self.session.is_some();
-        report.decoded_bit_depth = self.session.as_ref().map(|_| 8);
+        report.decoded_bit_depth = self
+            .session
+            .as_ref()
+            .map(|s| if s.ten_bit { 10 } else { 8 });
         report.decoded_chroma = self.session.as_ref().map(|_| "4:2:0");
         report.display_rgb_bit_depth = self.output_depth;
         report.codec = Some(self.codec);
@@ -438,6 +457,9 @@ impl Decoder {
             {
                 1 => {
                     "Vulkan / vsync; requested maximum frame latency 1 (driver/compositor controlled)"
+                }
+                3 => {
+                    "Vulkan / adaptive presentation requested (AutoNoVsync); monitor VRR/scanout unverified"
                 }
                 2 => {
                     "Vulkan / vsync; requested maximum frame latency 2 (driver/compositor controlled)"

@@ -424,3 +424,27 @@ Unity names and marks belong to their owners; no affiliation is implied.
     <img alt="EvoParseq GitHub star history" src="https://api.star-history.com/svg?repos=vampywiz17/EvoParseq&amp;type=Date" width="800">
   </picture>
 </a>
+
+
+### Nobara live validation and video extensions (2026-11-13)
+
+The maintainer reports working Linux multi-display playback and HEVC playback
+on the Intel notebook and the test notebook under Nobara Live. This confirms
+the tested Linux HEVC path, not Windows HEVC, Main10, 4:4:4 or HDR. The additional
+notebook's exact HEVC GPU/profile was not recorded.
+
+HEVC Main10 is available when the selected GPU/queue and original P010 surface
+sampling pass capability checks. Presentation remains SDR RGB; HDR output is
+not implied. Main10 live validation is pending. Display timing VRR requests
+Vulkan AutoNoVsync with the documented supported-mode fallback. Physical VRR
+remains compositor-, monitor- and driver-controlled and unverified.
+
+Cross-display cursor restoration targets the destination viewport using the
+public Wayland pointer-warp protocol when advertised. A request is not an
+acknowledgement; older compositors may lack it or decline a cross-window warp.
+Same-window locked-pointer hints remain the fallback.
+
+AI upscaling stays disabled on Linux, as requested. Application Zero copy stays
+disabled because the presentation pass performs YUV-to-RGB conversion. The
+current wgpu format API exposes NV12/P010 but no 4:4:4 multiplanar format;
+4:4:4 needs further renderer integration, not just a host-request switch.

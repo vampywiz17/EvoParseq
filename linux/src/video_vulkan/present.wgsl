@@ -19,10 +19,15 @@ struct Settings { crop: vec4<f32>, range: vec4<f32> }
     if rotation == 3u { uv_position = vec2<f32>(1.0 - input.uv.y, input.uv.x); }
     let coordinates = uv_position * settings.crop.xy + settings.crop.zw;
     var y = textureSample(y_plane, filtering, coordinates).r;
-    var uv = textureSample(uv_plane, filtering, coordinates).rg - vec2<f32>(128.0 / 255.0);
+    var uv = textureSample(uv_plane, filtering, coordinates).rg;
+    let p010 = settings.range.w > 0.5;
+    let maximum = select(255.0, 1023.0, p010);
+    let sample_scale = select(1.0, 65535.0 / 65472.0, p010);
+    y *= sample_scale;
+    uv = uv * sample_scale - vec2<f32>(select(128.0, 512.0, p010) / maximum);
     if settings.range.x < 0.5 {
-        y = (y - 16.0 / 255.0) * (255.0 / 219.0);
-        uv *= 255.0 / 224.0;
+        y = (y - select(16.0, 64.0, p010) / maximum) * (maximum / select(219.0, 876.0, p010));
+        uv *= maximum / select(224.0, 896.0, p010);
     }
     var rgb = clamp(vec3<f32>(
         y + 1.5748 * uv.y,

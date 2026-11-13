@@ -12,6 +12,7 @@ pub struct Context {
     pub physical: vk::PhysicalDevice,
     pub decode_family: u32,
     pub hevc: bool,
+    pub hevc10: bool,
     pub decode_status: bool,
     pub timeline_sync: bool,
     pub decode_queue: vk::Queue,
@@ -269,7 +270,9 @@ unsafe fn create_on(instance: &wgpu::Instance, adapter: &wgpu::Adapter) -> Resul
         .context("Vulkan adapter unavailable")?;
     let raw_instance = hal_instance.shared_instance().raw_instance();
     let physical = hal_adapter.raw_physical_device();
-    let features = wgpu::Features::TEXTURE_FORMAT_NV12;
+    let features = wgpu::Features::TEXTURE_FORMAT_NV12
+        | (adapter.features()
+            & (wgpu::Features::TEXTURE_FORMAT_P010 | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM));
     ensure!(
         adapter.features().contains(features),
         "NV12 sampling unavailable"
@@ -335,13 +338,17 @@ unsafe fn create_on(instance: &wgpu::Instance, adapter: &wgpu::Adapter) -> Resul
         })
         .or_else(|| (0..families.len()).find(|&i| h264_queue(i)))
         .context("H.264 decode queue unavailable")? as u32;
-    codec_available(raw_instance, physical, false)
+    codec_available(raw_instance, physical, false, false)
         .context("H.264 original-surface path unavailable")?;
     let hevc = available(ash::khr::video_decode_h265::NAME)
-        && codec_available(raw_instance, physical, true).is_ok()
+        && codec_available(raw_instance, physical, true, false).is_ok()
         && operations[decode_family as usize]
             .video_codec_operations
             .contains(vk::VideoCodecOperationFlagsKHR::DECODE_H265);
+    let hevc10 =
+        hevc && features.contains(
+            wgpu::Features::TEXTURE_FORMAT_P010 | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM,
+        ) && codec_available(raw_instance, physical, true, true).is_ok();
     if hevc && !required.contains(&ash::khr::video_decode_h265::NAME) {
         required.push(ash::khr::video_decode_h265::NAME);
     }
@@ -414,6 +421,7 @@ unsafe fn create_on(instance: &wgpu::Instance, adapter: &wgpu::Adapter) -> Resul
         physical,
         decode_family,
         hevc,
+        hevc10,
         timeline_sync,
         decode_status: statuses[decode_family as usize].query_result_status_support != 0,
         decode_queue: unsafe { raw.get_device_queue(decode_family, 0) },
@@ -453,13 +461,15 @@ fn codec_available(
     instance: &ash::Instance,
     physical: vk::PhysicalDevice,
     hevc: bool,
+    ten_bit: bool,
 ) -> Result<()> {
     let entry = unsafe { ash::Entry::load()? };
     let video = ash::khr::video_queue::Instance::new(&entry, instance);
     let mut h264 = vk::VideoDecodeH264ProfileInfoKHR::default()
         .std_profile_idc(vk::native::StdVideoH264ProfileIdc_STD_VIDEO_H264_PROFILE_IDC_HIGH)
         .picture_layout(vk::VideoDecodeH264PictureLayoutFlagsKHR::PROGRESSIVE);
-    let mut h265 = vk::VideoDecodeH265ProfileInfoKHR::default().std_profile_idc(1);
+    let mut h265 =
+        vk::VideoDecodeH265ProfileInfoKHR::default().std_profile_idc(if ten_bit { 2 } else { 1 });
     let mut usage = crate::video_profile::usage();
     let profile = vk::VideoProfileInfoKHR::default()
         .video_codec_operation(if hevc {
@@ -468,8 +478,16 @@ fn codec_available(
             vk::VideoCodecOperationFlagsKHR::DECODE_H264
         })
         .chroma_subsampling(vk::VideoChromaSubsamplingFlagsKHR::TYPE_420)
-        .luma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
-        .chroma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
+        .luma_bit_depth(if ten_bit {
+            vk::VideoComponentBitDepthFlagsKHR::TYPE_10
+        } else {
+            vk::VideoComponentBitDepthFlagsKHR::TYPE_8
+        })
+        .chroma_bit_depth(if ten_bit {
+            vk::VideoComponentBitDepthFlagsKHR::TYPE_10
+        } else {
+            vk::VideoComponentBitDepthFlagsKHR::TYPE_8
+        })
         .push_next(&mut usage);
     let profile = if hevc {
         profile.push_next(&mut h265)

@@ -42,6 +42,7 @@ pub struct Playback {
     gpu_wakeup: Mutex<Option<GpuWake>>,
     stopped: AtomicBool,
     hevc: AtomicBool,
+    ten_bit: AtomicBool,
     packets: Mutex<Pending>,
     ui: eframe::egui::Context,
     pub(crate) input: crate::input_handoff::Inbox,
@@ -54,7 +55,8 @@ pub struct Playback {
     clipboard_output: Mutex<Option<String>>,
     clipboard_pending: AtomicBool,
     pub(crate) immersive: std::sync::atomic::AtomicU8,
-    cursor_restore: Mutex<Option<(i32, i32)>>,
+    cursor_restore: Mutex<Option<(usize, i32, i32)>>,
+    video_rect: Mutex<Option<eframe::egui::Rect>>,
     cursor_state: AtomicU64,
 }
 
@@ -90,6 +92,7 @@ impl Playback {
             gpu_wakeup: Mutex::new(None),
             stopped: AtomicBool::new(false),
             hevc: AtomicBool::new(false),
+            ten_bit: AtomicBool::new(false),
             packets: Mutex::new(Pending::default()),
             ui,
             input: Default::default(),
@@ -103,11 +106,18 @@ impl Playback {
             clipboard_pending: AtomicBool::new(false),
             immersive: std::sync::atomic::AtomicU8::new(0),
             cursor_restore: Mutex::new(None),
+            video_rect: Mutex::new(None),
             cursor_state: AtomicU64::new(0),
         })
     }
     pub fn set_hevc(&self, enabled: bool) {
         self.hevc.store(enabled, Ordering::Relaxed);
+    }
+    pub fn set_ten_bit(&self, enabled: bool) {
+        self.ten_bit.store(enabled, Ordering::Relaxed);
+    }
+    pub fn ten_bit(&self) -> bool {
+        self.ten_bit.load(Ordering::Relaxed)
     }
     pub fn hevc(&self) -> bool {
         self.hevc.load(Ordering::Relaxed)
@@ -245,13 +255,13 @@ impl Playback {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if self.capture() && !capture {
-            *restore = Some((x, y));
+            *restore = Some((self.stream(), x, y));
         } else if capture {
             *restore = None;
         }
         self.set_capture(capture);
     }
-    pub fn take_cursor_restore(&self) -> Option<(i32, i32)> {
+    pub fn take_cursor_restore(&self) -> Option<(usize, i32, i32)> {
         self.cursor_restore
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -264,6 +274,46 @@ impl Playback {
             ((state >> 16) & 65535) as i32,
             (state & 65535) as i32,
         ))
+    }
+    pub fn set_video_rect(&self, rect: Option<eframe::egui::Rect>) {
+        *self.video_rect.lock().unwrap_or_else(|e| e.into_inner()) = rect;
+    }
+    pub fn cursor_endpoint(&self, stream: usize, x: i32, y: i32) -> Option<eframe::egui::Pos2> {
+        if stream != self.stream() {
+            let displays = self.displays()?;
+            let target = if stream == 0 {
+                displays
+                    .primary
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .upgrade()?
+            } else {
+                displays.get(stream)?.playback.clone()
+            };
+            return target.cursor_endpoint(stream, x, y);
+        }
+        let rect = (*self.video_rect.lock().unwrap_or_else(|e| e.into_inner()))?;
+        let (x, y) = crate::viewport::Viewport {
+            source: self.input_geometry(),
+            client: (rect.width().round() as u32, rect.height().round() as u32),
+        }
+        .unmap(x, y)?;
+        Some(rect.min + eframe::egui::vec2(x as f32, y as f32))
+    }
+    pub fn release_peer_cursor(&self, stream: usize, x: i32, y: i32) {
+        if stream == self.stream() || !self.capture() {
+            return;
+        }
+        self.cursor_state.store(
+            (1 << 33) | (u64::from(x as u16) << 16) | u64::from(y as u16),
+            Ordering::Release,
+        );
+        *self
+            .cursor_restore
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some((stream, x, y));
+        self.set_capture(false);
+        self.repaint();
     }
     pub fn capture(&self) -> bool {
         self.capture.load(Ordering::Acquire)

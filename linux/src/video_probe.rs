@@ -162,10 +162,6 @@ unsafe fn query(
     );
     let decode_flags = decode.flags;
     lines.push(format!("{label}: up to {width} × {height} · DPB {dpb} / references {references} · {flags:?} · {decode_flags:?}"));
-    if profile.luma_bit_depth != vk::VideoComponentBitDepthFlagsKHR::TYPE_8 {
-        lines.push("10-bit playback is not integrated on Linux".into());
-        return;
-    }
     let result = (|| -> anyhow::Result<()> {
         let surfaces =
             crate::video_profile::original_surfaces(flags, dpb, references, decode_flags)?;

@@ -59,6 +59,7 @@ impl Desktop {
                 match saved.presentation_mode {
                     crate::connection_settings::PresentationMode::LowLatency => 1,
                     crate::connection_settings::PresentationMode::Vsync => 2,
+                    crate::connection_settings::PresentationMode::Vrr => 3,
                     _ => 0,
                 },
                 std::sync::atomic::Ordering::Release,
@@ -70,6 +71,10 @@ impl Desktop {
             ));
             let playback = crate::playback::Playback::new(ctx.clone());
             playback.set_hevc(hevc);
+            playback.set_ten_bit(
+                hevc && saved.experimental_ten_bit
+                    && self.video_context.as_ref().is_some_and(|c| c.hevc10),
+            );
             self.desktop_input.session(&playback);
             playback.immersive.store(
                 self.settings.native_video().immersive,
@@ -86,6 +91,15 @@ impl Desktop {
                 .displays
                 .hevc
                 .store(hevc, std::sync::atomic::Ordering::Release);
+            telemetry
+                .displays
+                .ten_bit
+                .store(playback.ten_bit(), std::sync::atomic::Ordering::Release);
+            *telemetry
+                .displays
+                .primary
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = std::sync::Arc::downgrade(&playback);
             playback.attach_displays(&telemetry.displays, 0);
             *telemetry.settings.lock().unwrap_or_else(|e| e.into_inner()) =
                 Some(self.settings.clone());
@@ -314,6 +328,7 @@ mod tests {
             logo,
             desktop_input: Default::default(),
             shortcuts: None,
+            pointer_warp: None,
             signed_in: false,
             busy: false,
             status_text: app_style::LOGIN_NOTICE,

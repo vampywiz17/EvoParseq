@@ -298,7 +298,8 @@ pub struct WgpuConfiguration {
     pub desired_maximum_frame_latency: Option<u32>,
 
     /// Optional live preference, sampled before surface acquisition. Zero
-    /// restores the backend default. Values above two are clamped to two.
+    /// restores the backend default. One/two select frame latency; three requests
+    /// AutoNoVsync presentation with maximum frame latency two for adaptive displays.
     /// A request is a driver hint, never measured presentation/scanout timing.
     pub runtime_frame_latency: Option<Arc<std::sync::atomic::AtomicU32>>,
 

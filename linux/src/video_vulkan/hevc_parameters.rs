@@ -83,8 +83,8 @@ fn ptl(r: &mut BitReader<'_>, layers: u8) -> Result<Ptl> {
     read!(r.skip(44));
     let level = read!(r.u8(8));
     ensure!(
-        space == 0 && profile == 1 && !interlaced,
-        "Linux HEVC requires progressive Main profile"
+        space == 0 && matches!(profile, 1 | 2) && !interlaced,
+        "Linux HEVC requires progressive Main or Main10 profile"
     );
     let mut present = [(false, false); 7];
     for flags in present.iter_mut().take(layers as usize) {
@@ -196,9 +196,11 @@ fn sps_header(bytes: &[u8]) -> Result<Header> {
             read!(r.ue());
         }
     }
+    let luma = read!(r.ue_max(8));
+    let chroma = read!(r.ue_max(8));
     ensure!(
-        read!(r.ue_max(8)) == 0 && read!(r.ue_max(8)) == 0,
-        "Linux HEVC requires 8-bit samples"
+        matches!(luma, 0 | 2) && luma == chroma && (ptl.profile == 2 || luma == 0),
+        "Linux HEVC requires matching 8/10-bit 4:2:0 samples"
     );
     read!(r.ue_max(12));
     let (ordering_present, ordering) = ordering(&mut r, layers)?;
@@ -280,8 +282,9 @@ pub fn level_id(id: u8) -> Result<n::StdVideoH265LevelIdc> {
         .context("Unsupported HEVC level")
 }
 pub fn profile(source: &Ptl) -> Result<n::StdVideoH265ProfileTierLevel> {
+    ensure!(matches!(source.profile, 1 | 2), "Unsupported HEVC profile");
     let mut v = n::StdVideoH265ProfileTierLevel {
-        general_profile_idc: 1,
+        general_profile_idc: source.profile.into(),
         general_level_idc: level_id(source.level)?,
         ..unsafe { std::mem::zeroed() }
     };
@@ -330,12 +333,13 @@ pub fn video(
 }
 pub fn validate(s: &Sps) -> Result<()> {
     ensure!(
-        s.profile_idc == 1
+        matches!(s.profile_idc, 1 | 2)
             && s.chroma_format_idc == 1
             && !s.separate_colour_plane
-            && s.bit_depth_luma_minus8 == 0
-            && s.bit_depth_chroma_minus8 == 0,
-        "Linux HEVC supports Main 8-bit 4:2:0 only"
+            && matches!(s.bit_depth_luma_minus8, 0 | 2)
+            && s.bit_depth_chroma_minus8 == s.bit_depth_luma_minus8
+            && (s.profile_idc == 2 || s.bit_depth_luma_minus8 == 0),
+        "Linux HEVC supports Main/Main10 4:2:0 at 8 or 10 bits"
     );
     ensure!(
         s.range == Default::default(),

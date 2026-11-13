@@ -115,7 +115,7 @@ fn run_webrtc(
             flag_offset: 4,
         },
         allow_hevc: playback.hevc(),
-        ten_bit: false,
+        ten_bit: playback.ten_bit(),
         chroma_444: false,
     };
     let audio_config =
@@ -339,7 +339,7 @@ fn run_bud(
         .hid_mouse = hid.mouse;
     let mut session = crate::bud_ingress::session(
         playback.hevc(),
-        false,
+        playback.ten_bit(),
         false,
         preferences.allow_raw_audio,
         layout,
@@ -356,7 +356,8 @@ fn run_bud(
     );
     let audio = audio_stream::Pipeline::start_with_layout(Some(audio_config.maximum_ms), layout);
     let sender = audio.sender().context("Audio pipeline unavailable")?;
-    let mut ingress = crate::bud_ingress::VideoState::new(playback.hevc(), false, false);
+    let mut ingress =
+        crate::bud_ingress::VideoState::new(playback.hevc(), playback.ten_bit(), false);
     let mut established = false;
     let mut input = Input::default();
     let mut hid_previous = [(false, 0); 2];
@@ -469,7 +470,7 @@ fn run_bud(
                 wire_id = crate::bud_routes::native_attempt_id()?;
                 session = crate::bud_ingress::session(
                     playback.hevc(),
-                    false,
+                    playback.ten_bit(),
                     false,
                     preferences.allow_raw_audio,
                     layout,
@@ -747,16 +748,20 @@ impl Input {
         }
         let capture = crate::desktop_input::relative_capture(update.relative, update.hidden);
         target.host_cursor(capture, i32::from(update.x), i32::from(update.y));
-        if !capture {
+        if !capture && !update.suppressed {
             if update.stream != 0 {
-                primary.host_cursor(false, i32::from(update.x), i32::from(update.y));
+                primary.release_peer_cursor(
+                    usize::from(update.stream),
+                    i32::from(update.x),
+                    i32::from(update.y),
+                );
             }
             if let Some(displays) = displays {
                 for stream in 1..crate::display_stream::STREAMS {
                     if stream != usize::from(update.stream) {
                         if let Some(channel) = displays.get(stream) {
-                            channel.playback.host_cursor(
-                                false,
+                            channel.playback.release_peer_cursor(
+                                usize::from(update.stream),
                                 i32::from(update.x),
                                 i32::from(update.y),
                             );

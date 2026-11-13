@@ -8,9 +8,11 @@ use std::sync::{
 };
 #[derive(Default)]
 pub struct Displays {
+    pub primary: Mutex<std::sync::Weak<Playback>>,
     slots: Mutex<[Option<Arc<Channel>>; crate::display_stream::STREAMS - 1]>,
     pub owner: AtomicUsize,
     pub hevc: std::sync::atomic::AtomicBool,
+    pub ten_bit: std::sync::atomic::AtomicBool,
     release: std::sync::atomic::AtomicBool,
 }
 pub struct Channel {
@@ -25,6 +27,11 @@ pub fn viewport(stream: usize) -> egui::ViewportId {
 impl Displays {
     pub fn flags(&self) -> i32 {
         8 | i32::from(self.hevc.load(Ordering::Acquire))
+            | if self.ten_bit.load(Ordering::Acquire) {
+                16
+            } else {
+                0
+            }
     }
     pub fn get(&self, stream: usize) -> Option<Arc<Channel>> {
         self.slots
@@ -43,6 +50,7 @@ impl Displays {
         let playback = Playback::new(ctx.clone());
         playback.attach_displays(self, stream);
         playback.set_hevc(self.hevc.load(Ordering::Acquire));
+        playback.set_ten_bit(self.ten_bit.load(Ordering::Acquire));
         let mut inspector = crate::video_stream::Inspector::default();
         inspector.configure(crate::video_stream::VideoProtocol {
             version: 1,
@@ -57,7 +65,7 @@ impl Displays {
             inspector: Arc::new(Mutex::new(inspector)),
             ingress: Mutex::new(crate::bud_ingress::VideoState::new(
                 playback.hevc(),
-                false,
+                playback.ten_bit(),
                 false,
             )),
         }));
