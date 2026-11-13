@@ -162,6 +162,8 @@ struct Completion {
     audio_stream: Option<crate::audio_stream::Pipeline>,
     #[cfg(target_os = "linux")]
     linux_video: Option<Arc<dyn crate::video_output::NativeSink>>,
+    #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
+    linux_displays: std::sync::Weak<crate::multi_display::Displays>,
     #[cfg(target_os = "linux")]
     linux_consumer: Option<std::thread::Thread>,
     #[cfg(any(windows, target_os = "android"))]
@@ -297,6 +299,13 @@ impl Completion {
                 return;
             }
         }
+        #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
+        if (3..=4).contains(&channel) {
+            if let Some(displays) = self.linux_displays.upgrade() {
+                displays.close(usize::from(channel) - 2);
+                return;
+            }
+        }
         self.progress.failed = true;
         if self.progress.failure_stage.is_none() {
             #[cfg(any(target_os = "android", test))]
@@ -324,6 +333,18 @@ impl Completion {
                     |screen| Delivery::Video {
                         inspector: screen.inspector.clone(),
                         pipeline: Some(screen.video.clone()),
+                    },
+                ));
+            }
+        }
+        #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
+        if (3..=4).contains(&channel) && !text && bytes.len() <= MAX_CHANNEL_MESSAGE {
+            if let Some(displays) = self.linux_displays.upgrade() {
+                return Some(displays.get(usize::from(channel) - 2).map_or(
+                    Delivery::EmptyMessage,
+                    |screen| Delivery::Video {
+                        inspector: screen.inspector.clone(),
+                        linux_pipeline: Some(screen.playback.clone()),
                     },
                 ));
             }
@@ -631,6 +652,8 @@ impl Attempt {
             audio_stream: None,
             #[cfg(target_os = "linux")]
             linux_video: None,
+            #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
+            linux_displays: Default::default(),
             #[cfg(target_os = "linux")]
             linux_consumer: None,
         }));
@@ -852,6 +875,13 @@ impl Attempt {
         }
     }
 
+    #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
+    pub fn set_linux_displays(&self, displays: &Arc<crate::multi_display::Displays>) {
+        self.completion
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .linux_displays = Arc::downgrade(displays);
+    }
     #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
     pub fn set_linux_telemetry(&self, bus: Arc<crate::stats::Shared>, generation: u64) {
         self.completion
@@ -1294,11 +1324,11 @@ fn worker(
         tokio::time::timeout(Duration::from_secs(5), async {
             let mut channels = Vec::new();
             let control_attempt_id=id.to_owned();
-            #[cfg(windows)]
+            #[cfg(any(windows, all(target_os = "linux", feature = "desktop-telemetry")))]
             let negotiated: &[(u16, &str)] = if config.is_some() {
                 &[(0, "control"), (1, "video"), (2, "audio"), (3, "video1"), (4, "video2")]
             } else { &CHANNELS };
-            #[cfg(not(windows))]
+            #[cfg(not(any(windows, all(target_os = "linux", feature = "desktop-telemetry"))))]
             let negotiated = &CHANNELS;
             for &(id, label) in negotiated {
                 let channel = peer
@@ -2019,6 +2049,8 @@ mod tests {
             audio_stream: None,
             #[cfg(target_os = "linux")]
             linux_video: None,
+            #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
+            linux_displays: Default::default(),
             #[cfg(target_os = "linux")]
             linux_consumer: None,
         }
@@ -2108,6 +2140,31 @@ mod tests {
             .submit(&bytes),
             Some(true)
         );
+    }
+
+    #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
+    #[test]
+    fn linux_additional_channels_are_isolated_and_bypass_control_receipts() {
+        let displays = Arc::new(crate::multi_display::Displays::default());
+        displays.open(1, &eframe::egui::Context::default()).unwrap();
+        let mut state = empty_completion();
+        state.discard_unavailable_media = true;
+        state.linux_displays = Arc::downgrade(&displays);
+        let bytes = [
+            0, 0, 1, 0x67, 100, 0, 41, 0, 0, 1, 0x68, 0xee, 0, 0, 1, 0x65, 0x88,
+        ];
+        let delivery = state.prepare_receive(3, false, &bytes).unwrap();
+        assert_eq!(delivery.submit(&bytes), Some(false));
+        assert!(state.messages.is_empty());
+        assert!(displays.get(1).unwrap().playback.has_queued_video());
+        assert!(matches!(
+            state.prepare_receive(4, false, &bytes),
+            Some(Delivery::EmptyMessage)
+        ));
+        state.fail_channel(FailureStage::DataChannelClosed, 3);
+        assert!(displays.get(1).is_none());
+        assert!(!state.progress.failed);
+        assert!(state.prepare_receive(0, false, &[0; 13]).is_some());
     }
 
     #[cfg(windows)]

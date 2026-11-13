@@ -218,6 +218,11 @@ impl Desktop {
                         )
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut draft.values.video_gpu, None, "Automatic");
+                            if let Some(saved) = draft.values.video_gpu.as_ref() {
+                                if saved.match_index(&self.video_gpus).is_none() {
+                                    ui.label(format!("Unavailable: {}", saved.name));
+                                }
+                            }
                             for gpu in &self.video_gpus {
                                 ui.selectable_value(
                                     &mut draft.values.video_gpu,

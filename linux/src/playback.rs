@@ -38,6 +38,7 @@ impl Pending {
 type GpuWake = Box<dyn Fn() -> bool + Send + Sync>;
 
 pub struct Playback {
+    displays: OnceLock<(std::sync::Weak<crate::multi_display::Displays>, usize)>,
     gpu_wakeup: Mutex<Option<GpuWake>>,
     stopped: AtomicBool,
     hevc: AtomicBool,
@@ -84,6 +85,7 @@ impl Playback {
 
     pub fn new(ui: eframe::egui::Context) -> Arc<Self> {
         Arc::new(Self {
+            displays: OnceLock::new(),
             gpu_wakeup: Mutex::new(None),
             stopped: AtomicBool::new(false),
             hevc: AtomicBool::new(false),
@@ -118,6 +120,28 @@ impl Playback {
     }
     pub fn repaint(&self) {
         self.ui.request_repaint();
+        if self.stream() != 0 {
+            self.ui
+                .request_repaint_of(crate::multi_display::viewport(self.stream()));
+        }
+    }
+    pub fn attach_displays(&self, displays: &Arc<crate::multi_display::Displays>, stream: usize) {
+        let _ = self.displays.set((Arc::downgrade(displays), stream));
+    }
+    pub fn displays(&self) -> Option<Arc<crate::multi_display::Displays>> {
+        self.displays.get()?.0.upgrade()
+    }
+    pub fn stream(&self) -> usize {
+        self.displays.get().map_or(0, |d| d.1)
+    }
+    pub fn activate_input(&self) {
+        if let Some(displays) = self.displays() {
+            displays.owner.store(self.stream() + 1, Ordering::Release);
+        }
+    }
+    pub fn owns_input(&self) -> bool {
+        self.displays()
+            .is_none_or(|d| d.owner.load(Ordering::Acquire) == self.stream() + 1)
     }
     pub fn clipboard_write(&self, text: &str) -> bool {
         if !self.clipboard_allowed.load(Ordering::Acquire) || self.stopped() {

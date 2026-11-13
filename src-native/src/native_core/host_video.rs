@@ -49,7 +49,7 @@ impl Confirmation {
             stream: 0,
         }
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub fn resolution(frame: &[u8], stream: usize, now: Instant) -> Result<Self> {
         ensure!(
             (1..3).contains(&stream),
@@ -135,7 +135,7 @@ impl Config {
         }
         crate::control::text(17, 11, &value.to_string())
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub fn resolution(
         &self,
         stream: usize,
@@ -205,7 +205,7 @@ pub fn diagnostic(bytes: &[u8]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     #[test]
     fn independent_resolution_patches_keep_all_other_fields_and_verify_the_right_slot() {
         let base = serde_json::json!({"virtualMicrophone":1,"unknown":"keep","video":[

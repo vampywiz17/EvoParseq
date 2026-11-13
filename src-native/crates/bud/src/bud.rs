@@ -380,7 +380,7 @@ impl MediaSource {
         };
         sink(unit.bytes()).map(Some)
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub fn with_secondary_video<T>(
         &mut self,
         stream: usize,

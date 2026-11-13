@@ -20,6 +20,7 @@ pub struct Host {
     pub primary_ready: bool,
 }
 pub struct Session {
+    pub displays: Arc<crate::multi_display::Displays>,
     pub bus: Arc<stats::Shared>,
     pub generation: u64,
     pub mode: Mode,
@@ -35,6 +36,7 @@ impl Session {
         let bus = Arc::new(stats::Shared::default());
         let generation = bus.begin();
         Arc::new(Self {
+            displays: Arc::new(crate::multi_display::Displays::default()),
             bus,
             generation,
             mode,
@@ -87,6 +89,13 @@ pub struct Control {
 }
 impl Control {
     pub fn receive(&mut self, bytes: &[u8], session: &Session) {
+        if bytes.len() == 13 && bytes[12] == 27 {
+            if let Ok(stream) = usize::try_from(i32::from_be_bytes(bytes[..4].try_into().unwrap()))
+            {
+                session.displays.close(stream);
+            }
+            return;
+        }
         if session.bus.host_timing.receive(session.generation, bytes) {
             return;
         }
@@ -145,6 +154,46 @@ impl Control {
         }
         let result = (|| -> Result<()> {
             match command {
+                Command::AddDisplay(stream) => {
+                    let host = session.host.lock().unwrap_or_else(|e| e.into_inner());
+                    anyhow::ensure!(
+                        !host.hid_mouse,
+                        "Additional displays require normal mouse input"
+                    );
+                    anyhow::ensure!(
+                        session.displays.get(stream).is_some(),
+                        "Display window is unavailable"
+                    );
+                    drop(host);
+                    let result = (|| {
+                        send(crate::control::header(
+                            13,
+                            stream as i32,
+                            session.displays.flags(),
+                            0,
+                        ))?;
+                        send(crate::display_stream::enable(stream, true)?)
+                    })();
+                    if result.is_err() {
+                        session.displays.close(stream);
+                    }
+                    result?;
+                }
+                Command::DisplayResolution {
+                    stream,
+                    resolution,
+                    size,
+                } => {
+                    anyhow::ensure!(session.displays.get(stream).is_some(), "Display is closed");
+                    let frame = session
+                        .host
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .config
+                        .resolution(stream, resolution, size)?;
+                    send(frame)?;
+                    send(crate::host_video::query()?)?;
+                }
                 Command::RefreshDisplays => {
                     self.primary_attempted = None;
                     send(crate::host_displays::query()?)?;

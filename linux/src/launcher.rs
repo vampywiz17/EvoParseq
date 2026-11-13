@@ -82,6 +82,11 @@ impl Desktop {
             self.fitted_stream = None;
             self.playback = Some(playback.clone());
             let telemetry = crate::telemetry::Session::new(self.transport);
+            telemetry
+                .displays
+                .hevc
+                .store(hevc, std::sync::atomic::Ordering::Release);
+            playback.attach_displays(&telemetry.displays, 0);
             *telemetry.settings.lock().unwrap_or_else(|e| e.into_inner()) =
                 Some(self.settings.clone());
             self.telemetry = Some(telemetry.clone());

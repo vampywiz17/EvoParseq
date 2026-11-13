@@ -81,18 +81,7 @@ fn is_display_only_indirect(kind: Option<u32>) -> bool {
 // LUIDs can change after reboot. Only accept a unique hardware match in that
 // case; two identical GPUs must never silently select an arbitrary adapter.
 pub fn match_index(preferred: &GpuPreference, adapters: &[GpuPreference]) -> Option<usize> {
-    if let Some(index) = adapters
-        .iter()
-        .position(|p| p.luid == preferred.luid && p.same_hardware(preferred))
-    {
-        return Some(index);
-    }
-    let mut matches = adapters
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| p.same_hardware(preferred));
-    let (index, _) = matches.next()?;
-    matches.next().is_none().then_some(index)
+    preferred.match_index(adapters)
 }
 
 #[cfg(test)]

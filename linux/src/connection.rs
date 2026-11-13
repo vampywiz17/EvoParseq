@@ -129,6 +129,7 @@ fn run_webrtc(
         Some(audio_config.maximum_ms),
     )?;
     attempt.set_linux_telemetry(telemetry.bus.clone(), telemetry.generation);
+    attempt.set_linux_displays(&telemetry.displays);
     let receiver = attempt
         .audio_receiver()
         .context("Audio pipeline unavailable")?;
@@ -181,6 +182,7 @@ fn run_webrtc(
                     break;
                 };
                 if channel == 0 && !text {
+                    input.cursor_frame(&payload, playback);
                     diagnostics.receive(&payload, telemetry);
                     if let Ok(message) = control::decode(&payload) {
                         if let control::Message::Status(code) = &message {
@@ -196,6 +198,9 @@ fn run_webrtc(
             }
             diagnostics.update(attempt.control_ready(), telemetry, |bytes| {
                 attempt.send_binary(0, bytes)
+            })?;
+            telemetry.displays.poll(playback, |bytes| {
+                attempt.send_binary(0, bytes::Bytes::copy_from_slice(bytes))
             })?;
             input.pump(
                 playback,
@@ -394,6 +399,7 @@ fn run_bud(
                 match event {
                     Event::Established { .. } => established = true,
                     Event::ExternalControl { bytes } => {
+                        input.cursor_frame(&bytes, playback);
                         diagnostics.receive(&bytes, telemetry);
                         if let Ok(message) = control::decode(&bytes) {
                             if let control::Message::Status(code) = &message {
@@ -508,6 +514,10 @@ fn run_bud(
                 sample.bud = Some(bud);
                 telemetry.bus.publish(telemetry.generation, sample);
             }
+            telemetry
+                .displays
+                .poll(playback, |bytes| session.send_frame(bytes))?;
+            let more_displays = telemetry.displays.bud(&mut source)?;
             let session_ref = std::cell::RefCell::new(&mut session);
             let hid_active = if hid.mouse || hid.keyboard {
                 session_ref.borrow().hid_input_state()
@@ -565,7 +575,7 @@ fn run_bud(
             Ok((
                 established,
                 ingress.snapshot(),
-                pumped.more_pending(),
+                pumped.more_pending() || more_displays,
                 input.wait,
             ))
         },
@@ -643,6 +653,7 @@ impl crate::bud_ingress::VideoTarget for crate::playback::Playback {
 /// Transport binding only: state, framing, release policy and geometry are shared.
 struct Input {
     engine: crate::desktop_input::Engine,
+    owner: usize,
     pads: crate::gamepad::Manager,
     clipboard: crate::clipboard_sync::State,
     poller: crate::gamepad::polling::Poller,
@@ -665,6 +676,7 @@ impl Default for Input {
         }
         Self {
             engine: Default::default(),
+            owner: 1,
             pads: Default::default(),
             clipboard: Default::default(),
             poller: Default::default(),
@@ -704,26 +716,82 @@ impl Input {
                 self.pads.feedback(*pad, *low, *high, devices);
             }
         }
-        if let control::Message::Buffer { event, .. } = message {
-            let cursor = &event["cursor"];
-            if cursor.is_object() {
-                let relative = cursor["relative"].as_bool().unwrap_or(false);
-                let hidden = cursor["hidden"].as_bool().unwrap_or(false);
-                self.engine.host_cursor(
-                    relative,
-                    hidden,
-                    cursor["positionX"].as_i64().unwrap_or(0) as i32,
-                    cursor["positionY"].as_i64().unwrap_or(0) as i32,
-                );
-                playback.host_cursor(
-                    crate::desktop_input::relative_capture(relative, hidden),
-                    cursor["positionX"].as_i64().unwrap_or(0) as i32,
-                    cursor["positionY"].as_i64().unwrap_or(0) as i32,
-                );
+        let _ = playback;
+    }
+    fn cursor_frame(&mut self, bytes: &[u8], primary: &crate::playback::Playback) {
+        let Ok(cursor) = evoparseq_bud::bud::cursor_message(bytes) else {
+            return;
+        };
+        let update = cursor.update;
+        let displays = primary.displays();
+        let secondary = displays
+            .as_ref()
+            .and_then(|d| d.get(usize::from(update.stream)));
+        let target = if update.stream == 0 {
+            primary
+        } else if let Some(channel) = &secondary {
+            channel.playback.as_ref()
+        } else {
+            return;
+        };
+        if target.owns_input() {
+            self.engine.host_cursor(
+                update.relative,
+                update.hidden,
+                i32::from(update.x),
+                i32::from(update.y),
+            );
+        }
+        let capture = crate::desktop_input::relative_capture(update.relative, update.hidden);
+        target.host_cursor(capture, i32::from(update.x), i32::from(update.y));
+        if !capture {
+            if update.stream != 0 {
+                primary.host_cursor(false, i32::from(update.x), i32::from(update.y));
+            }
+            if let Some(displays) = displays {
+                for stream in 1..crate::display_stream::STREAMS {
+                    if stream != usize::from(update.stream) {
+                        if let Some(channel) = displays.get(stream) {
+                            channel.playback.host_cursor(
+                                false,
+                                i32::from(update.x),
+                                i32::from(update.y),
+                            );
+                        }
+                    }
+                }
             }
         }
     }
     fn pump(
+        &mut self,
+        playback: &crate::playback::Playback,
+        ready: bool,
+        mut send: impl FnMut(&[u8]) -> Result<()>,
+        mut command: impl FnMut(crate::session_controls::Command) -> Result<()>,
+    ) -> Result<()> {
+        self.pump_one(playback, ready, &mut send, &mut command)?;
+        if let Some(displays) = playback.displays() {
+            for stream in 1..crate::display_stream::STREAMS {
+                if let Some(channel) = displays.get(stream) {
+                    self.pump_one(
+                        &channel.playback,
+                        ready,
+                        |bytes| {
+                            if bytes.len() == 13 && bytes[12] == 3 {
+                                send(&crate::display_stream::motion(stream, bytes)?)
+                            } else {
+                                send(bytes)
+                            }
+                        },
+                        &mut command,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+    fn pump_one(
         &mut self,
         playback: &crate::playback::Playback,
         ready: bool,
@@ -734,7 +802,6 @@ impl Input {
         if !ready {
             return Ok(());
         }
-        self.engine.geometry(playback.input_geometry());
         if let Err(error) = playback.input.take(&mut self.events) {
             let _ = self.engine.event(
                 crate::desktop_input::Event::Release,
@@ -746,6 +813,18 @@ impl Input {
         while let Some(event) = self.events.pop_front() {
             match event {
                 crate::input_handoff::Event::Desktop(event) => {
+                    if !playback.owns_input() {
+                        continue;
+                    }
+                    self.engine.geometry(playback.input_geometry());
+                    if self.owner != playback.stream() + 1 {
+                        self.engine.event(
+                            crate::desktop_input::Event::Release,
+                            Instant::now(),
+                            &mut send,
+                        )?;
+                        self.owner = playback.stream() + 1;
+                    }
                     if matches!(
                         event,
                         crate::desktop_input::Event::Focus(false)
@@ -758,6 +837,10 @@ impl Input {
                 crate::input_handoff::Event::Session(
                     crate::session_controls::Command::Clipboard { text, paste },
                 ) => {
+                    if !playback.owns_input() {
+                        continue;
+                    }
+                    self.engine.geometry(playback.input_geometry());
                     let allowed = ready
                         && playback
                             .clipboard_allowed
@@ -781,17 +864,28 @@ impl Input {
                 _ => {}
             }
         }
-        if let Some(devices) = &mut self.devices {
-            self.wait = self.poller.tick(
-                &mut self.pads,
-                devices,
-                ready
-                    && playback
-                        .pad_focus
-                        .load(std::sync::atomic::Ordering::Acquire),
-                Instant::now(),
-                &mut send,
-            )?;
+        if playback.stream() == 0 {
+            if let Some(devices) = &mut self.devices {
+                self.wait = self.poller.tick(
+                    &mut self.pads,
+                    devices,
+                    ready
+                        && (playback
+                            .pad_focus
+                            .load(std::sync::atomic::Ordering::Acquire)
+                            || playback.displays().is_some_and(|d| {
+                                (1..crate::display_stream::STREAMS)
+                                    .filter_map(|s| d.get(s))
+                                    .any(|c| {
+                                        c.playback
+                                            .pad_focus
+                                            .load(std::sync::atomic::Ordering::Acquire)
+                                    })
+                            })),
+                    Instant::now(),
+                    &mut send,
+                )?;
+            }
         }
         Ok(())
     }
@@ -817,6 +911,75 @@ mod input_tests {
     use super::*;
     use crate::desktop_input::{Event, Pointer};
     #[test]
+    fn linux_screen_handoff_routes_first_click_and_ignores_late_old_focus_loss() {
+        let ctx = eframe::egui::Context::default();
+        let displays = Arc::new(crate::multi_display::Displays::default());
+        let primary = crate::playback::Playback::new(ctx.clone());
+        primary.attach_displays(&displays, 0);
+        primary.set_input_geometry((1920, 1080));
+        primary.activate_input();
+        displays.open(1, &ctx).unwrap();
+        let secondary = displays.get(1).unwrap().playback.clone();
+        secondary.set_input_geometry((1280, 720));
+        let mut input = Input::default();
+        primary.push_input(Event::Focus(true));
+        input.pump(&primary, true, |_| Ok(()), |_| Ok(())).unwrap();
+        secondary.activate_input();
+        secondary.push_input(Event::Focus(true));
+        secondary.push_input(Event::Pointer(Pointer {
+            x: 100.,
+            y: 80.,
+            relative: false,
+            moved: true,
+            viewport: (1280, 720),
+            buttons: 1,
+            wheel: (0, 0),
+        }));
+        primary.push_input(Event::Focus(false));
+        let mut frames = Vec::new();
+        input
+            .pump(
+                &primary,
+                true,
+                |b| {
+                    frames.push(b.to_vec());
+                    Ok(())
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        let motion = frames
+            .iter()
+            .position(|b| b[12] == 26)
+            .expect("first click has target motion");
+        let click = frames
+            .iter()
+            .position(|b| b[12] == 1)
+            .expect("first click is sent");
+        assert!(motion < click);
+        assert_eq!(&frames[motion][..4], &2i32.to_be_bytes());
+        primary.push_input(Event::Focus(false));
+        secondary.push_input(Event::Key {
+            usage: 4,
+            mods: 0,
+            down: true,
+        });
+        frames.clear();
+        input
+            .pump(
+                &primary,
+                true,
+                |b| {
+                    frames.push(b.to_vec());
+                    Ok(())
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert!(frames.iter().any(|b| b[12] == 1));
+        assert!(!frames.iter().any(|b| b[12] == 24));
+    }
+    #[test]
     fn linux_normal_input_uses_shared_key_pointer_and_release_frames() {
         let playback = crate::playback::Playback::new(eframe::egui::Context::default());
         playback.set_input_geometry((1920, 1080));
@@ -824,7 +987,7 @@ mod input_tests {
         let mut cursor = vec![0; 34];
         cursor[12] = 9;
         cursor[32..34].copy_from_slice(&256i16.to_be_bytes());
-        input.host_control(&control::decode(&cursor).unwrap(), &playback);
+        input.cursor_frame(&cursor, &playback);
         assert!(playback.capture());
         playback.push_input(Event::Focus(true));
         playback.push_input(Event::Key {

@@ -90,7 +90,7 @@ const LOSS_WEIGHT: f64 = 1.0 / 30.0;
 /// receive ring, and never again.
 #[derive(Debug, Clone)]
 pub struct Units {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     secondary: Arc<std::sync::Mutex<[Option<Units>; 2]>>,
     pool: Arc<Pool>,
     ring: Arc<Ring<u32, UNIT_SLOTS>>,
@@ -107,7 +107,7 @@ impl Default for Units {
 impl Units {
     pub fn new() -> Self {
         Self {
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             secondary: Default::default(),
             pool: Arc::new(Pool::new(UNIT_SLOTS, UNIT_BYTES)),
             ring: Arc::new(Ring::new()),
@@ -115,7 +115,7 @@ impl Units {
         }
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub fn secondary(&self, stream: usize, create: bool) -> Option<Self> {
         let mut streams = self.secondary.lock().unwrap_or_else(|e| e.into_inner());
         let slot = streams.get_mut(stream.checked_sub(1)?)?;
@@ -566,7 +566,7 @@ impl Driver {
         if let Some(outcome) = self.drain_video(endpoint.session(), now_ms) {
             return Some(outcome);
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if let Some(outcome) = self.drain_secondary(endpoint.session(), now_ms) {
             return Some(outcome);
         }
@@ -752,7 +752,7 @@ impl Driver {
             if self.route_hid_input(&message) {
                 return;
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             if message.opcode == 27 && message.a1 != 0 && (1..3).contains(&message.a0) {
                 // Allocate an additional compressed pool only on an explicit
                 // application request. Other platforms retain one stream.
@@ -974,7 +974,7 @@ impl Driver {
         None
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     fn drain_secondary(&mut self, session: &mut Session<'_>, now_ms: f64) -> Option<Outcome> {
         for stream in 1..3 {
             let Some(units) = self.units.secondary(stream, false) else {
@@ -1291,7 +1291,7 @@ fn negotiated_encoder_flags(external: u32, initial: u32) -> u32 {
 mod tests {
     use super::*;
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     #[test]
     fn additional_stream_pools_are_lazy_and_never_share_sequences_or_leases() {
         let units = Units::new();

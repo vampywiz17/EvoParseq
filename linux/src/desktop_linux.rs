@@ -22,6 +22,9 @@ pub struct DesktopInput {
     restored_position: Option<Pos2>,
 }
 impl DesktopInput {
+    pub fn keyboard(&self) -> std::sync::Arc<crate::native_loop::KeyboardBridge> {
+        self.keyboard.clone()
+    }
     pub fn new(keyboard: std::sync::Arc<crate::native_loop::KeyboardBridge>) -> Self {
         Self {
             keyboard,
@@ -46,7 +49,7 @@ impl DesktopInput {
         playback.push_input(Input::Focus(false));
         self.enabled = false;
         self.buttons = 0;
-        self.keyboard.bind(None);
+        self.keyboard.unbind(playback);
         self.wheel = Vec2::ZERO;
         self.grabbed = false;
         self.confined = false;
@@ -61,6 +64,7 @@ impl DesktopInput {
     pub fn enable(&mut self, playback: &std::sync::Arc<Playback>) {
         if !self.enabled && playback.input_ready() && self.video.is_some() {
             self.enabled = true;
+            playback.activate_input();
             playback
                 .clipboard_allowed
                 .store(true, std::sync::atomic::Ordering::Release);

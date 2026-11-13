@@ -62,6 +62,15 @@ impl KeyboardBridge {
     pub fn bind(&self, playback: Option<Arc<Playback>>) {
         *self.target.lock().unwrap_or_else(|e| e.into_inner()) = playback;
     }
+    pub fn unbind(&self, playback: &Playback) {
+        let mut target = self.target.lock().unwrap_or_else(|e| e.into_inner());
+        if target
+            .as_ref()
+            .is_some_and(|p| std::ptr::eq(p.as_ref(), playback))
+        {
+            *target = None;
+        }
+    }
     pub fn take_release(&self) -> bool {
         self.released.swap(false, Ordering::AcqRel)
     }
@@ -70,6 +79,7 @@ impl KeyboardBridge {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+            .filter(|p| !p.stopped())
     }
     pub fn take_paste(&self) -> bool {
         self.paste
@@ -199,18 +209,16 @@ impl ApplicationHandler<eframe::UserEvent> for Application<'_> {
             ) {
                 self.display(event_loop);
             }
-            match &event {
-                WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
-                WindowEvent::Focused(false) | WindowEvent::CloseRequested => {
-                    self.keyboard.release()
-                }
-                WindowEvent::KeyboardInput { event, .. }
-                    if self.key(event.physical_key, event.state == ElementState::Pressed) =>
-                {
-                    return;
-                }
-                _ => {}
+        }
+        match &event {
+            WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
+            WindowEvent::Focused(false) | WindowEvent::CloseRequested => self.keyboard.release(),
+            WindowEvent::KeyboardInput { event, .. }
+                if self.key(event.physical_key, event.state == ElementState::Pressed) =>
+            {
+                return;
             }
+            _ => {}
         }
         self.inner.window_event(event_loop, window, event);
     }

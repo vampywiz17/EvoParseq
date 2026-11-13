@@ -86,6 +86,22 @@ pub struct GpuPreference {
     pub luid: u64,
 }
 impl GpuPreference {
+    /// Native identity first, then a unique hardware match after driver/reboot
+    /// changes. Enumeration order and driver display names are never identity.
+    pub fn match_index(&self, adapters: &[Self]) -> Option<usize> {
+        if let Some(index) = adapters
+            .iter()
+            .position(|p| p.luid == self.luid && p.same_hardware(self))
+        {
+            return Some(index);
+        }
+        let mut matches = adapters
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.same_hardware(self));
+        let (index, _) = matches.next()?;
+        matches.next().is_none().then_some(index)
+    }
     pub fn same_hardware(&self, other: &Self) -> bool {
         (
             self.vendor_id,

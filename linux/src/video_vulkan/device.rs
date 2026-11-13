@@ -34,19 +34,43 @@ pub fn adapters(instance: &wgpu::Instance) -> Vec<crate::connection_settings::Gp
         ) {
             continue;
         }
-        let preference = crate::connection_settings::GpuPreference {
-            name: info.name,
-            vendor_id: info.vendor,
-            device_id: info.device,
-            subsystem_id: 0,
-            revision: 0,
-            luid: 0,
-        };
+        let preference = identity(instance, &adapter);
         if !result.contains(&preference) {
             result.push(preference);
         }
     }
     result
+}
+
+fn identity(
+    instance: &wgpu::Instance,
+    adapter: &wgpu::Adapter,
+) -> crate::connection_settings::GpuPreference {
+    let info = adapter.get_info();
+    // The persisted schema stays the same as Windows. Its native identity slot
+    // contains a stable UUID prefix on Linux, never an enumeration index.
+    let luid = unsafe {
+        instance
+            .as_hal::<wgpu::hal::api::Vulkan>()
+            .zip(adapter.as_hal::<wgpu::hal::api::Vulkan>())
+            .map(|(i, a)| {
+                let mut ids = vk::PhysicalDeviceIDProperties::default();
+                let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut ids);
+                i.shared_instance()
+                    .raw_instance()
+                    .get_physical_device_properties2(a.raw_physical_device(), &mut props);
+                u64::from_le_bytes(ids.device_uuid[..8].try_into().unwrap())
+            })
+            .unwrap_or(0)
+    };
+    crate::connection_settings::GpuPreference {
+        name: info.name,
+        vendor_id: info.vendor,
+        device_id: info.device,
+        subsystem_id: 0,
+        revision: 0,
+        luid,
+    }
 }
 
 pub fn create(
@@ -63,11 +87,22 @@ pub fn create(
         }),
     );
     let mut reasons = Vec::new();
-    for adapter in instance.enumerate_adapters(wgpu::Backends::VULKAN) {
+    let adapters = instance.enumerate_adapters(wgpu::Backends::VULKAN);
+    let identities: Vec<_> = adapters.iter().map(|a| identity(instance, a)).collect();
+    let preferred_index = if requested.is_none() {
+        preference
+            .map(|p| {
+                p.match_index(&identities)
+                    .context("The selected Vulkan adapter is unavailable or ambiguous")
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    for (index, adapter) in adapters.into_iter().enumerate() {
         let info = adapter.get_info();
         if !matches_adapter(&info.name, requested.as_deref())
-            || (requested.is_none()
-                && !matches_preference(&info.name, info.vendor, info.device, preference))
+            || preferred_index.is_some_and(|selected| index != selected)
         {
             continue;
         }
@@ -116,17 +151,70 @@ fn requested_adapter(mut args: impl Iterator<Item = String>) -> Result<Option<St
 fn matches_adapter(name: &str, requested: Option<&str>) -> bool {
     requested.is_none_or(|needle| name.to_ascii_lowercase().contains(needle))
 }
+#[cfg(test)]
 fn matches_preference(
     name: &str,
     vendor: u32,
     device: u32,
     preference: Option<&crate::connection_settings::GpuPreference>,
 ) -> bool {
-    preference.is_none_or(|p| p.name == name && p.vendor_id == vendor && p.device_id == device)
+    preference.is_none_or(|p| {
+        p.match_index(&[crate::connection_settings::GpuPreference {
+            name: name.into(),
+            vendor_id: vendor,
+            device_id: device,
+            subsystem_id: 0,
+            revision: 0,
+            luid: 0,
+        }])
+        .is_some()
+    })
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn linux_gpu_identity_tracks_hardware_across_names_order_and_reboot() {
+        use crate::connection_settings::GpuPreference as G;
+        let gpu = |name: &str, vendor_id, device_id, luid| G {
+            name: name.into(),
+            vendor_id,
+            device_id,
+            luid,
+            subsystem_id: 0,
+            revision: 0,
+        };
+        let saved = gpu("old NVIDIA name", 0x10de, 0x2504, 8);
+        let nvidia = gpu("new NVIDIA name", 0x10de, 0x2504, 8);
+        let amd = gpu("AMD Radeon", 0x1002, 0x1900, 3);
+        let intel = gpu("Intel", 0x8086, 0x1916, 4);
+        for available in [
+            vec![amd.clone(), nvidia.clone(), intel.clone()],
+            vec![intel, amd, nvidia.clone()],
+        ] {
+            assert_eq!(
+                available[saved.match_index(&available).unwrap()].vendor_id,
+                0x10de
+            );
+        }
+        let legacy = G {
+            luid: 0,
+            ..saved.clone()
+        };
+        assert_eq!(legacy.match_index(std::slice::from_ref(&nvidia)), Some(0));
+        let second = G {
+            luid: 9,
+            ..nvidia.clone()
+        };
+        assert_eq!(legacy.match_index(&[nvidia.clone(), second]), None);
+        assert_eq!(
+            saved.match_index(&[G {
+                device_id: 0x1234,
+                ..nvidia
+            }]),
+            None
+        );
+    }
     #[test]
     fn linux_adapter_selection_never_falls_back_to_a_different_vendor() {
         let selected =

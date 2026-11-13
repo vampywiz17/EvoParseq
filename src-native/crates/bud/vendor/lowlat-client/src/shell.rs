@@ -188,12 +188,12 @@ pub(crate) fn run(args: Attached, mut wake: Wake, running: &Running) {
     };
     // Separate sequence spaces for the two optional Windows display streams.
     // These are bounded transport receive rings, not decoder/frame resources.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     let mut secondary_bodies = [
         vec![0u8; BODY * VIDEO_RECV_SLOTS],
         vec![0u8; BODY * VIDEO_RECV_SLOTS],
     ];
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     let mut secondary_meta = [
         vec![SlotMeta::default(); VIDEO_RECV_SLOTS],
         vec![SlotMeta::default(); VIDEO_RECV_SLOTS],
@@ -225,7 +225,7 @@ pub(crate) fn run(args: Attached, mut wake: Wake, running: &Running) {
         });
         return;
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     for (index, (bodies, meta)) in secondary_bodies
         .iter_mut()
         .zip(secondary_meta.iter_mut())

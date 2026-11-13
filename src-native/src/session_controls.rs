@@ -5,9 +5,9 @@ pub enum Command {
     Apply(Video),
     SelectDisplay(String),
     RefreshDisplays,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     AddDisplay(usize),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     DisplayResolution {
         stream: usize,
         resolution: crate::session_preferences::Resolution,

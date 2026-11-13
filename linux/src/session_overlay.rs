@@ -29,6 +29,80 @@ impl Default for Badge {
     }
 }
 impl Badge {
+    pub fn button(
+        &mut self,
+        ctx: &egui::Context,
+        logo: &egui::TextureHandle,
+        input: &mut crate::desktop_linux::DesktopInput,
+        playback: &Arc<Playback>,
+    ) {
+        if self.hidden {
+            input.badge = None;
+            input.controls = None;
+            return;
+        }
+        // Windows' native menu is outside its client area. The Linux menu is
+        // drawn in the client, so keep the badge/panel below that strip too.
+        let origin = ctx.content_rect().min + egui::vec2(0., 24.);
+        let size = ctx.content_rect().size() - egui::vec2(0., 24.);
+        let bounded = s::bounded(
+            [
+                self.position.x.round() as i32,
+                self.position.y.round() as i32,
+            ],
+            [size.x as i32, size.y as i32],
+        );
+        self.position = egui::pos2(bounded[0] as f32, bounded[1] as f32);
+        let area = egui::Area::new(egui::Id::new(("session-badge", ctx.viewport_id())))
+            .order(egui::Order::Foreground)
+            .fixed_pos(origin + self.position.to_vec2())
+            .movable(false)
+            .show(ctx, |ui| {
+                let (rect, response) = ui.allocate_exact_size(
+                    Vec2::splat(s::BADGE_SIZE as f32),
+                    Sense::click_and_drag(),
+                );
+                let alpha = s::BADGE_ALPHA;
+                let field = crate::app_style::FIELD;
+                ui.painter().rect_filled(
+                    rect,
+                    0.,
+                    Color32::from_rgba_unmultiplied(field[0], field[1], field[2], alpha),
+                );
+                ui.painter().rect_stroke(
+                    rect,
+                    0.,
+                    egui::Stroke::new(1_f32, Color32::from_rgba_unmultiplied(99, 189, 231, alpha)),
+                    egui::StrokeKind::Inside,
+                );
+                ui.painter().image(
+                    logo.id(),
+                    Rect::from_center_size(rect.center(), Vec2::splat(s::BADGE_ICON as f32)),
+                    Rect::from_min_max(Pos2::ZERO, egui::pos2(1., 1.)),
+                    Color32::from_white_alpha(alpha),
+                );
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Session")
+                });
+                response
+            });
+        let response = area.inner;
+        if response.drag_started() {
+            input.release(ctx, playback);
+        }
+        if response.dragged() {
+            self.position += response.drag_delta();
+        }
+        if response.clicked() {
+            input.release(ctx, playback);
+            self.open = !self.open;
+            self.draft = None;
+            self.draft_dirty = false;
+        }
+        input.badge = Some(response.rect);
+        input.controls = None;
+    }
+
     fn synchronize_draft(&mut self, video: crate::session_preferences::Video, revision: u64) {
         if self.draft.is_none() || (!self.draft_dirty && self.draft_revision != revision) {
             self.draft = Some(video);
@@ -52,66 +126,10 @@ impl Desktop {
             self.desktop_input.controls = None;
             return;
         }
-        // Windows' native menu is outside its client area. The Linux menu is
-        // drawn in the client, so keep the badge/panel below that strip too.
+        self.badge
+            .button(ctx, &self.logo, &mut self.desktop_input, playback);
         let origin = ctx.content_rect().min + egui::vec2(0., 24.);
         let size = ctx.content_rect().size() - egui::vec2(0., 24.);
-        let bounded = s::bounded(
-            [
-                self.badge.position.x.round() as i32,
-                self.badge.position.y.round() as i32,
-            ],
-            [size.x as i32, size.y as i32],
-        );
-        self.badge.position = egui::pos2(bounded[0] as f32, bounded[1] as f32);
-        let area = egui::Area::new(egui::Id::new("session-badge"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(origin + self.badge.position.to_vec2())
-            .movable(false)
-            .show(ctx, |ui| {
-                let (rect, response) = ui.allocate_exact_size(
-                    Vec2::splat(s::BADGE_SIZE as f32),
-                    Sense::click_and_drag(),
-                );
-                let alpha = s::BADGE_ALPHA;
-                let field = crate::app_style::FIELD;
-                ui.painter().rect_filled(
-                    rect,
-                    0.,
-                    Color32::from_rgba_unmultiplied(field[0], field[1], field[2], alpha),
-                );
-                ui.painter().rect_stroke(
-                    rect,
-                    0.,
-                    egui::Stroke::new(1_f32, Color32::from_rgba_unmultiplied(99, 189, 231, alpha)),
-                    egui::StrokeKind::Inside,
-                );
-                ui.painter().image(
-                    self.logo.id(),
-                    Rect::from_center_size(rect.center(), Vec2::splat(s::BADGE_ICON as f32)),
-                    Rect::from_min_max(Pos2::ZERO, egui::pos2(1., 1.)),
-                    Color32::from_white_alpha(alpha),
-                );
-                response.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Session")
-                });
-                response
-            });
-        let response = area.inner;
-        if response.drag_started() {
-            self.desktop_input.release(ctx, playback);
-        }
-        if response.dragged() {
-            self.badge.position += response.drag_delta();
-        }
-        if response.clicked() {
-            self.desktop_input.release(ctx, playback);
-            self.badge.open = !self.badge.open;
-            self.badge.draft = None;
-            self.badge.draft_dirty = false;
-        }
-        self.desktop_input.badge = Some(response.rect);
-        self.desktop_input.controls = None;
         if self.badge.open {
             let initial = self.metrics.draft.clone();
             self.badge
@@ -168,11 +186,30 @@ impl Desktop {
                                     if ui.put(r([314,164,80,28]),egui::Button::new("Refresh")).clicked(){playback.push_session(crate::session_controls::Command::RefreshDisplays);}
                                     label(
                                         ui,
-                                        r([24, 199, 370, 44]),
+                                        r([24, 199, 240, 44]),
                                         &self.metrics.display_hint,
                                         16.,
                                         fg,
                                     );
+                                    ui.scope_builder(egui::UiBuilder::new().max_rect(r([274,208,120,28])),|ui| {
+                                        ui.add_enabled_ui(!self.metrics.hid_mouse && self.metrics.displays.len()>1,|ui| {
+                                            ui.menu_button("Add screen",|ui| {
+                                                if let Some(telemetry)=&self.telemetry {
+                                                    let hid_keyboard=self.transport==crate::connection::Mode::Bud&&self.settings.view().0.hid_keyboard_enabled();
+                                                    for (stream,output) in self.metrics.displays.iter().enumerate().take(crate::display_stream::STREAMS).skip(1) {
+                                                        let available=!hid_keyboard&&telemetry.displays.get(stream).is_none()&&self.metrics.current_output.as_deref()!=Some(output.id.as_str());
+                                                        if ui.add_enabled(available,egui::Button::new(&output.name)).clicked() {
+                                                            match telemetry.displays.open(stream,ctx) {
+                                                                Ok(())=>playback.push_session(crate::session_controls::Command::AddDisplay(stream)),
+                                                                Err(error)=>self.error=Some(error.to_string()),
+                                                            }
+                                                            ui.close();
+                                                        }
+                                                    }
+                                                }
+                                            });
+                                        });
+                                    });
                                     self.badge.draft.get_or_insert_with(||self.metrics.draft.clone());
                                     for (i,text) in f::SESSION_LABELS.iter().enumerate(){
                                         label(ui,r([24,254+i as i32*44,150,24]),text,16.,fg);

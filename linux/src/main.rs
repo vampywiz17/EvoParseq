@@ -70,6 +70,8 @@ mod cursor_theme;
 pub mod desktop_input;
 mod desktop_linux;
 mod desktop_ui;
+#[path = "../../src-native/src/display_stream.rs"]
+mod display_stream;
 #[path = "../../src-native/src/event_log.rs"]
 mod event_log;
 #[path = "../../src-native/src/frame_timing.rs"]
@@ -86,6 +88,7 @@ mod input_state;
 mod launcher;
 #[path = "../../src-native/src/media_ingress.rs"]
 pub mod media_ingress;
+mod multi_display;
 mod native_loop;
 #[path = "../../src-native/src/native_wire.rs"]
 pub mod native_wire;
@@ -173,6 +176,7 @@ struct Desktop {
     playback: Option<Arc<playback::Playback>>,
     telemetry: Option<Arc<telemetry::Session>>,
     metrics: telemetry::View,
+    screens: [Option<multi_display::Surface>; display_stream::STREAMS - 1],
 }
 
 fn account_worker(
@@ -324,6 +328,10 @@ impl eframe::App for Desktop {
 
                 playback.stop();
             }
+            if let Some(telemetry) = &self.telemetry {
+                telemetry.displays.clear();
+            }
+            self.screens = Default::default();
             self.decoder = None;
             self.telemetry = None;
             self.metrics = Default::default();
@@ -388,20 +396,7 @@ impl eframe::App for Desktop {
             self.show_video,
         );
         if let (Some(playback), Some(decoder)) = (&self.playback, &mut self.decoder) {
-            match playback
-                .resume_if_ready(ctx.input(|input| input.focused))
-                .and_then(|_| {
-                    let available = std::cell::Cell::new(decoder.available()?);
-                    let consumed = playback.decode_pending_ready(
-                        || available.get() > 0,
-                        |bytes, codec, rotation| {
-                            available.set(decoder.submit_oriented(bytes, codec, rotation)?);
-                            Ok(())
-                        },
-                    )?;
-                    decoder.defer_backlog(playback);
-                    Ok(consumed)
-                }) {
+            match multi_display::decode(playback, decoder, ctx.input(|i| i.focused)) {
                 Err(error) => {
                     playback.stop();
                     let message = format!(
@@ -452,6 +447,7 @@ impl eframe::App for Desktop {
             );
         }
         self.menu_bar(ctx);
+        self.additional_displays(ctx);
         self.statistics(ctx);
         self.information(ctx);
         egui::CentralPanel::default()
@@ -470,28 +466,7 @@ impl eframe::App for Desktop {
                     self.desktop_input.video = area.map(|(rect, _)| rect);
                     if let Some((_, source)) = area {
                         playback.set_input_geometry(source);
-                        if self.fitted_stream != Some(source) {
-                            let viewport = ctx.input(|input| input.viewport().clone());
-                            if !viewport.fullscreen.unwrap_or(false)
-                                && !viewport.maximized.unwrap_or(false)
-                            {
-                                if let Some(monitor) = viewport.monitor_size {
-                                    if let Some((w, h)) = crate::viewport::stream_window_size(
-                                        source,
-                                        ctx.pixels_per_point(),
-                                        (monitor.x, monitor.y),
-                                    ) {
-                                        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(
-                                            egui::vec2(160., 90.),
-                                        ));
-                                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
-                                            egui::vec2(w, h),
-                                        ));
-                                        self.fitted_stream = Some(source);
-                                    }
-                                }
-                            }
-                        }
+                        multi_display::fit(ctx, source, &mut self.fitted_stream);
                     }
                     self.desktop_input.cursor(ctx, &playback);
                     self.session_overlay(ctx, &playback);
@@ -638,6 +613,7 @@ fn main() -> anyhow::Result<()> {
                         playback: None,
                         telemetry: None,
                         metrics: Default::default(),
+                        screens: Default::default(),
                         commands,
                         replies,
                         settings: settings.clone(),
