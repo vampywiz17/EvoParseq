@@ -14,14 +14,22 @@ Windows and Android TV feature availability differs; see the [root README](../RE
 | Video | Vulkan Video; progressive H.264 or HEVC Main, 8-bit 4:2:0, without frame reordering |
 | Audio | Stereo WebRTC Opus; BUD Opus/raw PCM, stereo or verified default-output 5.1/7.1; PipeWire mute/volume and automatic output reopening |
 | Input | Normal Parsec or opt-in BUD USB HID mouse/keyboard; shared controller lifecycle and rumble; focused text clipboard |
-| Session controls | Host display selection, resolution, bandwidth, FPS, frame pacing, orientation, immersive mouse/keyboard, fullscreen and Disconnect |
+| Session controls | Host display selection, up to three simultaneous displays, per-display resolution, bandwidth, FPS, frame pacing, orientation, immersive mouse/keyboard, fullscreen and Disconnect |
 | Diagnostics | Live overlay, native Connection stats window, shared Rust statistics and host-timing models |
 | Distribution | Flatpak, Freedesktop Platform/SDK 25.08 and matching graphics driver extensions |
 
 10-bit/4:4:4 playback, application Zero copy mode, AI upscaling, runtime GPU
-switching, verified VRR control and simultaneous multi-display windows are
+switching and verified VRR control are
 **not integrated on Linux**. Unsupported controls remain disabled. Selecting a
 single host display is supported; HID mouse pins the verified primary output.
+Simultaneous displays require normal mouse and keyboard input, as on Windows.
+Use **Add screen** in the primary overlay to open another host-listed output.
+Each additional window has its own resolution, fullscreen and Close screen
+controls; Connection stats is disabled there. Video streams share the selected
+Vulkan device and connection, with one decoder per active screen, one PipeWire
+output and no cross-GPU transfer. Linux multi-display live testing is pending.
+See the root README's recommended Parsec VDD manager; the client does not create
+additional host displays or activate paid host-side virtual displays.
 
 ## Install and run
 
@@ -51,14 +59,16 @@ H.264 and HEVC 8-bit) and AMD Radeon 780M (H.264). Compatibility still depends
 on actual driver/profile checks; this is not universal Intel/AMD compatibility.
 A software-only VM can test sign-in and discovery but is not a playback target.
 
-NVIDIA playback is **not yet hardware-validated**. On the tested hybrid
+NVIDIA RTX 3060 **H.264 playback is live-confirmed on Nobara Linux**, using the
+same hybrid AMD/NVIDIA configuration (1920 × 1200, 8-bit 4:2:0). NVIDIA HEVC and
+longer stability testing remain pending. On the tested hybrid
 AMD/NVIDIA Pop!_OS system, RTX 3060 / driver 595.84 fails Vulkan present-mode
 queries before decoding. Native `vkcube` outside the app/Flatpak fails too,
 even with only the NVIDIA ICD selected. The failure is independently reproducible;
 the exact driver/compositor cause and hybrid-GPU contribution remain unconfirmed.
 This resembles known [NVIDIA Wayland/PRIME presentation failures](https://github.com/gfx-rs/wgpu/issues/5382).
-Testing on a dedicated NVIDIA system remains pending. The implemented layered
-DPB support is not a claim of successful NVIDIA playback.
+The successful Nobara result shows that hybrid hardware alone does not prevent
+playback; it does not establish the precise cause of the Pop!_OS failure.
 
 The Flatpak **already defaults to `ANV_DEBUG=video-decode`** for the experimental
 Mesa Intel video path. No extra launch option is needed. This is vendor-specific,
@@ -378,7 +388,10 @@ necessarily needs separate output allocations and decoder memory bandwidth.
 The existing bounded parser slots, output lease and GPU synchronization remain.
 
 Settings > Video > Video GPU lists Vulkan hardware adapters and saves the chosen
-device in the existing settings schema. Restart EvoParseq after changing it:
+device in the existing settings schema. Hardware matching uses the common
+Windows policy, with a stable hash of the Vulkan device UUID in the native
+identity field. Driver name changes and enumeration order do not change the
+selection; an ambiguous hardware-only match is rejected. Restart EvoParseq after changing it:
 decode and UI rendering intentionally share one Vulkan device. A missing or
 ineligible explicit adapter produces an error instead of selecting another GPU.
 Automatic retains capability-based startup selection. The probe reports the

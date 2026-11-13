@@ -1,7 +1,36 @@
 # Linux H.264 / HEVC 8-bit video path audit
 
-Source review, updated 2026-11-11. Applies to the Linux Flatpak playback preview only.
+Source review, updated 2026-11-13. Applies to the Linux Flatpak playback preview only.
 This establishes application behavior, not driver/compositor/scanout behavior.
+
+## Multi-display and saved GPU selection
+
+Additional Wayland viewports share the original Vulkan context/device/queue.
+Each explicitly opened Parsec stream gets one Inspector, the existing bounded
+compressed queue and one Decoder/session; it does not decode the primary frame
+again. Each viewport samples its own original decoder images in the existing
+egui render pass. No composition texture, decoded-frame transfer, readback,
+cross-GPU copy, second connection, second audio output or per-display worker is
+added. Present/decode semaphore and image-lease rules are unchanged.
+
+Windows and Linux reuse display-stream enable/input framing, host configuration
+patches and confirmation, GPU hardware matching, input/clipboard engines and
+canonical secondary-panel action descriptors. Linux-specific code creates
+viewports, translates their events, routes their compressed sinks and owns their
+Vulkan decoders. The BUD receive-ring adapter previously enabled only on Windows
+is now enabled on Linux too; Android's target-specific path remains unchanged.
+
+The saved GPU schema is unchanged. Linux supplies a stable hash of its Vulkan
+device UUID as the native identity; matching first uses native identity and then
+an unambiguous hardware match, as on Windows. Decode and UI intentionally stay
+on the same selected GPU, so changing that GPU requires restart; unavailable
+explicit choices do not silently decode on another adapter.
+
+NVIDIA RTX 3060 H.264 playback was reported successful on Nobara on the same
+hybrid AMD/NVIDIA hardware (1920x1200, 8-bit 4:2:0). That confirms application
+playback for that case, not independently measured hardware execution, universal
+NVIDIA compatibility or HEVC. Linux multi-display hardware testing is pending.
+The older Pop!_OS surface failure notes below describe that earlier environment.
 
 ## Decoded images
 

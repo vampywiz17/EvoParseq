@@ -829,22 +829,17 @@ pub unsafe fn toggle(
             0,
             [24, 276, 370, 44],
         );
-        for (id, label, x, y) in [
-            (APPLY, "Apply", 24, 120),
-            (SECONDARY_FULLSCREEN, "Fullscreen", 220, 120),
-            (
-                SECONDARY_INPUT,
-                if window.input_detached() {
-                    "Capture input"
-                } else {
-                    "Release input"
-                },
-                24,
-                172,
-            ),
-            (DISCONNECT, "Close screen", 220, 172),
-            (CLOSE, "Close", 220, 224),
-        ] {
+        for ((label, rect), id) in
+            crate::app_style::forms::secondary_actions(!window.input_detached())
+                .into_iter()
+                .zip([
+                    APPLY,
+                    SECONDARY_FULLSCREEN,
+                    SECONDARY_INPUT,
+                    DISCONNECT,
+                    CLOSE,
+                ])
+        {
             control(
                 hwnd,
                 p,
@@ -852,7 +847,7 @@ pub unsafe fn toggle(
                 label,
                 id,
                 BS_OWNERDRAW as u32 | WS_TABSTOP,
-                [x, y, 174, 36],
+                rect,
             );
         }
         ShowWindow(hwnd, SW_SHOW);

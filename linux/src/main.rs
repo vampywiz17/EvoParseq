@@ -70,6 +70,7 @@ mod cursor_theme;
 pub mod desktop_input;
 mod desktop_linux;
 mod desktop_ui;
+mod display_routes;
 #[path = "../../src-native/src/display_stream.rs"]
 mod display_stream;
 #[path = "../../src-native/src/event_log.rs"]

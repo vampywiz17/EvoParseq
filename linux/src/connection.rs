@@ -184,6 +184,9 @@ fn run_webrtc(
                 if channel == 0 && !text {
                     input.cursor_frame(&payload, playback);
                     diagnostics.receive(&payload, telemetry);
+                    if payload.get(12) == Some(&9) {
+                        continue;
+                    }
                     if let Ok(message) = control::decode(&payload) {
                         if let control::Message::Status(code) = &message {
                             ensure!(*code == 0, "The host ended the connection (status {code})");
@@ -401,6 +404,9 @@ fn run_bud(
                     Event::ExternalControl { bytes } => {
                         input.cursor_frame(&bytes, playback);
                         diagnostics.receive(&bytes, telemetry);
+                        if bytes.get(12) == Some(&9) {
+                            continue;
+                        }
                         if let Ok(message) = control::decode(&bytes) {
                             if let control::Message::Status(code) = &message {
                                 ensure!(
@@ -693,6 +699,17 @@ impl Input {
         bytes: &[u8],
         playback: &crate::playback::Playback,
     ) {
+        let active = playback
+            .displays()
+            .and_then(|d| {
+                d.get(
+                    d.owner
+                        .load(std::sync::atomic::Ordering::Acquire)
+                        .saturating_sub(1),
+                )
+            })
+            .map(|c| c.playback.clone());
+        let playback = active.as_deref().unwrap_or(playback);
         if let control::Message::Buffer {
             event,
             payload: Some(range),
@@ -774,18 +791,28 @@ impl Input {
         if let Some(displays) = playback.displays() {
             for stream in 1..crate::display_stream::STREAMS {
                 if let Some(channel) = displays.get(stream) {
-                    self.pump_one(
-                        &channel.playback,
-                        ready,
-                        |bytes| {
-                            if bytes.len() == 13 && bytes[12] == 3 {
-                                send(&crate::display_stream::motion(stream, bytes)?)
-                            } else {
-                                send(bytes)
-                            }
-                        },
-                        &mut command,
-                    )?;
+                    if self
+                        .pump_one(
+                            &channel.playback,
+                            ready,
+                            |bytes| {
+                                if bytes.len() == 13 && bytes[12] == 3 {
+                                    send(&crate::display_stream::motion(stream, bytes)?)
+                                } else {
+                                    send(bytes)
+                                }
+                            },
+                            &mut command,
+                        )
+                        .is_err()
+                    {
+                        channel.playback.stop();
+                        crate::event_log::record(
+                            "ERROR",
+                            "additional_display_input_failed",
+                            serde_json::json!({"stream":stream}),
+                        );
+                    }
                 }
             }
         }
@@ -817,6 +844,9 @@ impl Input {
                         continue;
                     }
                     self.engine.geometry(playback.input_geometry());
+                    if let Some((capture, x, y)) = playback.cursor_state() {
+                        self.engine.host_cursor(capture, false, x, y);
+                    }
                     if self.owner != playback.stream() + 1 {
                         self.engine.event(
                             crate::desktop_input::Event::Release,
@@ -913,7 +943,7 @@ mod input_tests {
     #[test]
     fn linux_screen_handoff_routes_first_click_and_ignores_late_old_focus_loss() {
         let ctx = eframe::egui::Context::default();
-        let displays = Arc::new(crate::multi_display::Displays::default());
+        let displays = Arc::new(crate::display_routes::Displays::default());
         let primary = crate::playback::Playback::new(ctx.clone());
         primary.attach_displays(&displays, 0);
         primary.set_input_geometry((1920, 1080));

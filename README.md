@@ -81,19 +81,28 @@ AMD Radeon 780M H.264 playback has also been tested. These observations do not
 establish support for every GPU, driver or codec. The package defaults to
 `ANV_DEBUG=video-decode` for Mesa Intel's experimental video path.
 
-**NVIDIA Linux validation is pending.** On the tested AMD/NVIDIA hybrid Pop!_OS
+**NVIDIA H.264 playback is also live-confirmed** on RTX 3060 with Nobara Linux,
+on the same hybrid AMD/NVIDIA configuration (1920 × 1200, 8-bit 4:2:0).
+NVIDIA HEVC and longer stability testing remain pending. On the tested hybrid Pop!_OS
 system, RTX 3060 / driver 595.84 fails Vulkan presentation before decoding.
 The failure also reproduces in native `vkcube` outside EvoParseq/Flatpak, including
 with only the NVIDIA ICD selected. This establishes an independent system-level
-reproducer, not successful NVIDIA playback. It resembles a known class of
+reproducer. It resembles a known class of
 [NVIDIA/Wayland presentation issues](https://github.com/gfx-rs/wgpu/issues/5382);
 the exact cause and contribution of hybrid presentation remain unconfirmed.
-Validation on a dedicated NVIDIA system is planned; no alternative decoder or
-cross-GPU copy fallback has been introduced.
+The successful Nobara test shows that hybrid hardware alone is not a blocker;
+no alternative decoder or cross-GPU copy fallback has been introduced.
 
 **Not yet integrated on Linux:** 10-bit/4:4:4 playback, the application's
-Zero copy mode, AI upscaling, runtime GPU switching, verified VRR control and simultaneous multi-display windows.
+Zero copy mode, AI upscaling, runtime GPU switching and verified VRR control.
 The full Settings layout is present; unimplemented controls remain disabled.
+
+Linux now implements up to three simultaneous host-listed display windows on
+one BUD or WebRTC connection, with one decoder per active display and one audio
+output. Additional windows have independent resolution controls and input;
+Connection stats remains on the primary window. Multi-display Linux hardware
+validation is pending. GPU selection is saved with the shared Windows settings
+schema and matching policy; changing the Vulkan GPU requires an app restart.
 
 See [Linux installation, current scope and diagnostics](linux/README.md) and
 the [video-path audit](linux/VIDEO_PATH.md). The Windows feature list below

@@ -38,7 +38,7 @@ impl Pending {
 type GpuWake = Box<dyn Fn() -> bool + Send + Sync>;
 
 pub struct Playback {
-    displays: OnceLock<(std::sync::Weak<crate::multi_display::Displays>, usize)>,
+    displays: OnceLock<(std::sync::Weak<crate::display_routes::Displays>, usize)>,
     gpu_wakeup: Mutex<Option<GpuWake>>,
     stopped: AtomicBool,
     hevc: AtomicBool,
@@ -55,6 +55,7 @@ pub struct Playback {
     clipboard_pending: AtomicBool,
     pub(crate) immersive: std::sync::atomic::AtomicU8,
     cursor_restore: Mutex<Option<(i32, i32)>>,
+    cursor_state: AtomicU64,
 }
 
 impl Playback {
@@ -102,6 +103,7 @@ impl Playback {
             clipboard_pending: AtomicBool::new(false),
             immersive: std::sync::atomic::AtomicU8::new(0),
             cursor_restore: Mutex::new(None),
+            cursor_state: AtomicU64::new(0),
         })
     }
     pub fn set_hevc(&self, enabled: bool) {
@@ -122,13 +124,13 @@ impl Playback {
         self.ui.request_repaint();
         if self.stream() != 0 {
             self.ui
-                .request_repaint_of(crate::multi_display::viewport(self.stream()));
+                .request_repaint_of(crate::display_routes::viewport(self.stream()));
         }
     }
-    pub fn attach_displays(&self, displays: &Arc<crate::multi_display::Displays>, stream: usize) {
+    pub fn attach_displays(&self, displays: &Arc<crate::display_routes::Displays>, stream: usize) {
         let _ = self.displays.set((Arc::downgrade(displays), stream));
     }
-    pub fn displays(&self) -> Option<Arc<crate::multi_display::Displays>> {
+    pub fn displays(&self) -> Option<Arc<crate::display_routes::Displays>> {
         self.displays.get()?.0.upgrade()
     }
     pub fn stream(&self) -> usize {
@@ -171,9 +173,15 @@ impl Playback {
         }
     }
     pub fn clipboard_read(&self) {
-        self.ui
-            .send_viewport_cmd(eframe::egui::ViewportCommand::RequestPaste);
-        self.ui.request_repaint();
+        self.ui.send_viewport_cmd_to(
+            if self.stream() == 0 {
+                eframe::egui::ViewportId::ROOT
+            } else {
+                crate::display_routes::viewport(self.stream())
+            },
+            eframe::egui::ViewportCommand::RequestPaste,
+        );
+        self.repaint();
     }
     pub fn controller_focus(&self, active: bool) {
         self.pad_focus.store(active, Ordering::Release);
@@ -225,6 +233,13 @@ impl Playback {
         }
     }
     pub fn host_cursor(&self, capture: bool, x: i32, y: i32) {
+        self.cursor_state.store(
+            (1 << 33)
+                | (u64::from(capture) << 32)
+                | (u64::from(x as u16) << 16)
+                | u64::from(y as u16),
+            Ordering::Release,
+        );
         let mut restore = self
             .cursor_restore
             .lock()
@@ -241,6 +256,14 @@ impl Playback {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take()
+    }
+    pub fn cursor_state(&self) -> Option<(bool, i32, i32)> {
+        let state = self.cursor_state.load(Ordering::Acquire);
+        (state & (1 << 33) != 0).then_some((
+            state & (1 << 32) != 0,
+            ((state >> 16) & 65535) as i32,
+            (state & 65535) as i32,
+        ))
     }
     pub fn capture(&self) -> bool {
         self.capture.load(Ordering::Acquire)

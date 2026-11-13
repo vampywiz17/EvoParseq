@@ -48,7 +48,7 @@ fn identity(
 ) -> crate::connection_settings::GpuPreference {
     let info = adapter.get_info();
     // The persisted schema stays the same as Windows. Its native identity slot
-    // contains a stable UUID prefix on Linux, never an enumeration index.
+    // contains a stable hash of the complete UUID on Linux, never an index.
     let luid = unsafe {
         instance
             .as_hal::<wgpu::hal::api::Vulkan>()
@@ -59,7 +59,12 @@ fn identity(
                 i.shared_instance()
                     .raw_instance()
                     .get_physical_device_properties2(a.raw_physical_device(), &mut props);
-                u64::from_le_bytes(ids.device_uuid[..8].try_into().unwrap())
+                use sha2::Digest;
+                u64::from_le_bytes(
+                    sha2::Sha256::digest(ids.device_uuid)[..8]
+                        .try_into()
+                        .unwrap(),
+                )
             })
             .unwrap_or(0)
     };

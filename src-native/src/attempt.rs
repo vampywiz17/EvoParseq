@@ -163,7 +163,7 @@ struct Completion {
     #[cfg(target_os = "linux")]
     linux_video: Option<Arc<dyn crate::video_output::NativeSink>>,
     #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
-    linux_displays: std::sync::Weak<crate::multi_display::Displays>,
+    linux_displays: std::sync::Weak<crate::display_routes::Displays>,
     #[cfg(target_os = "linux")]
     linux_consumer: Option<std::thread::Thread>,
     #[cfg(any(windows, target_os = "android"))]
@@ -876,7 +876,7 @@ impl Attempt {
     }
 
     #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
-    pub fn set_linux_displays(&self, displays: &Arc<crate::multi_display::Displays>) {
+    pub fn set_linux_displays(&self, displays: &Arc<crate::display_routes::Displays>) {
         self.completion
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -2145,14 +2145,14 @@ mod tests {
     #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
     #[test]
     fn linux_additional_channels_are_isolated_and_bypass_control_receipts() {
-        let displays = Arc::new(crate::multi_display::Displays::default());
+        let displays = Arc::new(crate::display_routes::Displays::default());
         displays.open(1, &eframe::egui::Context::default()).unwrap();
         let mut state = empty_completion();
         state.discard_unavailable_media = true;
         state.linux_displays = Arc::downgrade(&displays);
-        let bytes = [
-            0, 0, 1, 0x67, 100, 0, 41, 0, 0, 1, 0x68, 0xee, 0, 0, 1, 0x65, 0x88,
-        ];
+        let fixture = include_bytes!("../../linux/tests/data/h264-40-frames.bin");
+        let length = u32::from_le_bytes(fixture[..4].try_into().unwrap()) as usize;
+        let bytes = &fixture[4..4 + length];
         let delivery = state.prepare_receive(3, false, &bytes).unwrap();
         assert_eq!(delivery.submit(&bytes), Some(false));
         assert!(state.messages.is_empty());

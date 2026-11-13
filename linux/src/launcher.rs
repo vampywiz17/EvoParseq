@@ -298,6 +298,7 @@ mod tests {
         let (commands, _incoming) = std::sync::mpsc::channel();
         let (_outgoing, replies) = std::sync::mpsc::channel();
         let mut app = Desktop {
+            screens: Default::default(),
             commands,
             replies,
             settings: crate::connection_settings::Manager::open(

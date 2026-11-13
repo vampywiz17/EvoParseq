@@ -744,6 +744,23 @@ pub const SESSION_LABELS: [&str; 6] = [
     "Orientation",
     "Immersive mode",
 ];
+/// Additional desktop display panel: canonical Windows wording and geometry.
+pub fn secondary_actions(input_enabled: bool) -> [(&'static str, [i32; 4]); 5] {
+    [
+        ("Apply", [24, 120, 174, 36]),
+        ("Fullscreen", [220, 120, 174, 36]),
+        (
+            if input_enabled {
+                "Release input"
+            } else {
+                "Capture input"
+            },
+            [24, 172, 174, 36],
+        ),
+        ("Close screen", [220, 172, 174, 36]),
+        ("Close", [220, 224, 174, 36]),
+    ]
+}
 #[cfg(target_os = "linux")]
 pub const SESSION_ACTIONS: [(&str, [i32; 4]); 6] = [
     ("Settings", [24, 838, 178, 36]),

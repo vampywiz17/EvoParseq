@@ -206,6 +206,14 @@ impl Desktop {
                         });
                 });
             } else if row.label == f::VIDEO_GPU.label {
+                if let Some(index) = draft
+                    .values
+                    .video_gpu
+                    .as_ref()
+                    .and_then(|p| p.match_index(&self.video_gpus))
+                {
+                    draft.values.video_gpu = Some(self.video_gpus[index].clone());
+                }
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     egui::ComboBox::from_id_salt(row.label)
                         .width(400.)

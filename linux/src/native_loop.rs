@@ -115,6 +115,7 @@ pub struct Application<'a> {
     pub keyboard: Arc<KeyboardBridge>,
     modifiers: ModifiersState,
     root: Option<WindowId>,
+    focused: Option<WindowId>,
     pasting: bool,
 }
 impl<'a> Application<'a> {
@@ -124,6 +125,7 @@ impl<'a> Application<'a> {
             keyboard,
             modifiers: ModifiersState::empty(),
             root: None,
+            focused: None,
             pasting: false,
         }
     }
@@ -211,10 +213,22 @@ impl ApplicationHandler<eframe::UserEvent> for Application<'_> {
             }
         }
         match &event {
+            WindowEvent::Focused(true) => {
+                if self.focused != Some(window) {
+                    self.keyboard.release();
+                }
+                self.focused = Some(window);
+            }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
-            WindowEvent::Focused(false) | WindowEvent::CloseRequested => self.keyboard.release(),
+            WindowEvent::Focused(false) | WindowEvent::CloseRequested
+                if self.focused == Some(window) =>
+            {
+                self.focused = None;
+                self.keyboard.release();
+            }
             WindowEvent::KeyboardInput { event, .. }
-                if self.key(event.physical_key, event.state == ElementState::Pressed) =>
+                if self.focused == Some(window)
+                    && self.key(event.physical_key, event.state == ElementState::Pressed) =>
             {
                 return;
             }

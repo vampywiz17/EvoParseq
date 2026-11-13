@@ -20,7 +20,7 @@ pub struct Host {
     pub primary_ready: bool,
 }
 pub struct Session {
-    pub displays: Arc<crate::multi_display::Displays>,
+    pub displays: Arc<crate::display_routes::Displays>,
     pub bus: Arc<stats::Shared>,
     pub generation: u64,
     pub mode: Mode,
@@ -36,7 +36,7 @@ impl Session {
         let bus = Arc::new(stats::Shared::default());
         let generation = bus.begin();
         Arc::new(Self {
-            displays: Arc::new(crate::multi_display::Displays::default()),
+            displays: Arc::new(crate::display_routes::Displays::default()),
             bus,
             generation,
             mode,
@@ -147,8 +147,10 @@ impl Control {
         mut send: impl FnMut(Bytes) -> Result<()>,
     ) -> Result<()> {
         use crate::session_controls::{Command, Status};
-        if matches!(&command, Command::Apply(_) | Command::SelectDisplay(_))
-            && (self.confirmation.is_some() || self.selection.is_some())
+        if matches!(
+            &command,
+            Command::Apply(_) | Command::SelectDisplay(_) | Command::DisplayResolution { .. }
+        ) && (self.confirmation.is_some() || self.selection.is_some())
         {
             return Ok(());
         }
@@ -159,6 +161,16 @@ impl Control {
                     anyhow::ensure!(
                         !host.hid_mouse,
                         "Additional displays require normal mouse input"
+                    );
+                    anyhow::ensure!(
+                        session.mode != Mode::Bud
+                            || !session
+                                .settings
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .as_ref()
+                                .is_some_and(|m| m.view().0.hid_keyboard_enabled()),
+                        "Additional displays require normal keyboard input"
                     );
                     anyhow::ensure!(
                         session.displays.get(stream).is_some(),
@@ -191,8 +203,16 @@ impl Control {
                         .unwrap_or_else(|e| e.into_inner())
                         .config
                         .resolution(stream, resolution, size)?;
+                    let confirmation = crate::host_video::Confirmation::resolution(
+                        &frame,
+                        stream,
+                        Instant::now(),
+                    )?;
                     send(frame)?;
-                    send(crate::host_video::query()?)?;
+                    self.confirmation = Some(confirmation);
+                    let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
+                    host.pending = true;
+                    host.status = Status::Waiting.text().into();
                 }
                 Command::RefreshDisplays => {
                     self.primary_attempted = None;

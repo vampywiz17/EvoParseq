@@ -429,7 +429,7 @@ pub struct Snapshot {
     pub input_drops: u32,
 }
 
-#[cfg(feature = "native-core")]
+#[cfg(any(feature = "native-core", target_os = "linux"))]
 pub fn cursor_message(bytes: &[u8]) -> Result<lowlat_core::cursor::Message<'_>> {
     let control =
         lowlat_core::control::parse(bytes).map_err(|_| anyhow!("Invalid cursor control"))?;
