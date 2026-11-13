@@ -567,6 +567,7 @@ mod peer_cursor_tests {
     #[test]
     fn linux_drag_endpoint_uses_destination_geometry_without_releasing_host_buttons() {
         let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
         let displays = std::sync::Arc::new(crate::display_routes::Displays::default());
         let primary = Playback::new(ctx.clone());
         primary.attach_displays(&displays, 0);
@@ -604,7 +605,14 @@ mod peer_cursor_tests {
                     egui::ViewportCommand::CursorGrab(egui::CursorGrab::None)
                 ))
         );
-        let out = ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &primary));
+        let out = ctx.run(Default::default(), |ctx| {
+            ctx.show_viewport_deferred(
+                crate::display_routes::viewport(1),
+                Default::default(),
+                |_, _| {},
+            );
+            adapter.cursor(ctx, &primary);
+        });
         assert!(out.viewport_output[&crate::display_routes::viewport(1)].commands.iter().any(|cmd| matches!(cmd,egui::ViewportCommand::CursorPosition(p) if *p==egui::pos2(730.,429.))));
         assert!(
             !out.viewport_output[&egui::ViewportId::ROOT]
