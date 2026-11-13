@@ -1777,34 +1777,6 @@ mod tests {
             }
         };
         let window = Window::create_mode(false).unwrap();
-        let peer = Window::create_mode(false).unwrap();
-        struct ClosePeer(Arc<Window>);
-        impl Drop for ClosePeer {
-            fn drop(&mut self) {
-                self.0.end_session();
-                self.0.close();
-            }
-        }
-        let _peer = ClosePeer(peer.clone());
-        peer.display_stream.store(1, Ordering::Release);
-        peer.video_ready.store(true, Ordering::Release);
-        *peer.video_report.lock().unwrap() = Some(crate::video_output::Snapshot {
-            width: Some(3840),
-            height: Some(2160),
-            frames_presented: 1,
-            ..Default::default()
-        });
-        unsafe {
-            SetWindowPos(
-                peer.handle(),
-                HWND_BOTTOM,
-                200,
-                120,
-                400,
-                320,
-                SWP_NOACTIVATE,
-            );
-        }
         #[track_caller]
         fn wait(mut ready: impl FnMut() -> bool) {
             let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -1937,6 +1909,34 @@ mod tests {
             }
         };
         let window = Window::create_mode(false).unwrap();
+        let peer = Window::create_mode(false).unwrap();
+        struct ClosePeer(Arc<Window>);
+        impl Drop for ClosePeer {
+            fn drop(&mut self) {
+                self.0.end_session();
+                self.0.close();
+            }
+        }
+        let _peer = ClosePeer(peer.clone());
+        peer.display_stream.store(1, Ordering::Release);
+        peer.video_ready.store(true, Ordering::Release);
+        *peer.video_report.lock().unwrap() = Some(crate::video_output::Snapshot {
+            width: Some(3840),
+            height: Some(2160),
+            frames_presented: 1,
+            ..Default::default()
+        });
+        unsafe {
+            SetWindowPos(
+                peer.handle(),
+                HWND_BOTTOM,
+                200,
+                120,
+                400,
+                320,
+                SWP_NOACTIVATE,
+            );
+        }
         #[track_caller]
         fn wait(mut check: impl FnMut() -> bool) {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
