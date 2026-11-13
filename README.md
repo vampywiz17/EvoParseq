@@ -30,9 +30,9 @@ Parsec, Unity or lowlat.** A Parsec account and a compatible host are required.
 The latest stable Windows/Android release is
 [**EvoParseq v0.9.7**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.7)
 on `main`. The current dev release,
-[**v0.9.8-dev.1**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8-dev.1),
+[**v0.9.8-dev.2**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8-dev.2),
 includes Windows ZIPs, the signed Android TV APK and the experimental Linux Flatpak.
-All three report version **0.9.8-dev.1**; development continues here on `dev`.
+All three report version **0.9.8-dev.2**; development continues here on `dev`.
 Linux development artifacts are also available from successful
 [dev Linux CI runs](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Adev).
 Windows previews are installed manually; signed Android builds can check the
@@ -143,6 +143,12 @@ The Windows features below remain available on this branch.
 - **Session overlay:** draggable icon; resolution, bandwidth, FPS, constant FPS,
   orientation, fullscreen and immersive input controls. Switch the current stream
   between host-listed physical or virtual displays.
+- **Windows multi-display (dev):** open up to three host-listed extended outputs
+  on one BUD/WebRTC connection, with independent resolution controls and one audio
+  pipeline. Normal input, activating clicks and cross-display window dragging are
+  live-tested with two screens. Additional windows have their own draggable controls;
+  Connection stats stays on the primary window. Configure Parsec VDD outputs on the
+  host first; this feature does not create virtual displays or override host policy.
 - **Audio:** stereo Opus, configurable buffering, BUD raw PCM and experimental
   multichannel output. Automatically reopen the Windows audio output after
   transient device errors or default-device changes, retiring stale audio.

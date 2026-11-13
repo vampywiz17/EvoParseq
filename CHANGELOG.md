@@ -2,6 +2,122 @@
 
 ## Unreleased
 
+## v0.9.8-dev.2 — Windows multi-display and cursor handoff (2026-11-13)
+
+This development preview builds on **EvoParseq v0.9.8-dev.1** and covers all
+implemented changes since that dev release. It includes Windows x64, a
+distribution-signed Android TV APK and the experimental Linux x86_64 Flatpak.
+All three application versions are **0.9.8-dev.2**.
+
+**This is a development preview. EvoParseq v0.9.7 remains the stable release.**
+
+## What's new and improved
+
+- **Windows multi-display:** open a second or third host-reported display from
+  the primary session overlay's **Add screen** menu, over the existing BUD or
+  WebRTC connection. Each stream uses its own bounded decoder/reference state
+  and the existing D3D11 presentation path. Keep one connection and one audio
+  pipeline; no application decoded-frame copy, composition pass or CPU readback
+  is added.
+- **Independent display lifecycle:** prevent duplicate display windows, isolate
+  rejected/ended/failed additional streams and close an extra window that receives
+  no decoded picture within ten seconds. Closing an additional window disables
+  only that stream. Preserve negotiated codec/format flags and existing bounded
+  keyframe recovery. Release the display-worker registry guard before teardown
+  or synchronous window operations, avoiding a nested-lock deadlock.
+- **Per-display controls:** additional windows use the same draggable translucent
+  session icon with Resolution/Apply, Fullscreen, Release/Capture input and Close
+  screen. Disable Connection stats on additional windows; the primary window
+  remains the session settings/statistics owner. Refresh host configuration
+  before each resolution write, patch only the target stream's dimensions,
+  preserve other/unknown host settings and confirm that stream through the
+  existing bounded readback transaction. Serialize changes across windows.
+- **Correct first click after switching displays:** send the normal absolute
+  pointer's target stream and position before button-down on the same ordered
+  channel. Relative camera and HID paths do not receive an extra absolute warp.
+- **Cross-display window dragging:** release stale hidden/relative capture when
+  the host reports a visible, unsuppressed absolute pointer on another live
+  display. Restore cursor drawing at the destination viewport rather than the
+  source position, suppress synthetic-move echoes at both endpoints and retain
+  held buttons/keys. Respect Disable cursor warp, explicit confinement and
+  closed/minimized destinations. Same-screen camera/hidden/suppressed cursor
+  behavior is preserved. Add transition-only stream diagnostics without logging
+  pointer positions, keystrokes or image contents.
+- **Regression coverage:** add isolated native display-window lifecycle tests
+  covering stream enable/disable packets, independent workers, resolution
+  forwarding, focus-release ownership, cursor transitions, overflow isolation
+  and rollback after a closed command receiver. Include the existing isolated
+  native cursor/capture fixture in the measured Sonar report. Tests use private
+  fixtures and the real bounded command handoff, without accounts or host access;
+  the strict coverage/quality gate is unchanged. Measured Sonar coverage is
+  **85.3% on new code** and **72.1% overall**; all required Quality Gate conditions
+  pass. The 80% threshold applies to new code, not the whole repository.
+- **Maintenance:** remove the BUD adapter's unused direct Tokio dependency and
+  refresh the validated display documentation. Windows, Android and Linux
+  application dependency/feature graphs remain unchanged by that removal; the
+  standalone adapter no longer pulls in unnecessary Tokio socket/runtime crates.
+
+## Compatibility and validation
+
+Multi-display is **Windows-only** in this preview, with at most three streams
+in total and normal Parsec mouse/keyboard input. It opens existing host-listed
+extended outputs; it does not remotely create Parsec VDD devices or bypass the
+host's account/driver policy. Configure the required virtual displays on the
+host first. Fallback To Virtual Display alone creates only a fallback output.
+
+The maintainer has live-tested two-screen Windows playback, independent
+resolution changes, activating clicks and dragging windows between displays.
+This does not validate every host, account or display topology. A previously
+reported BUD delivery/acknowledgement timeout is not claimed fixed by this work.
+
+Linux Vulkan Video playback remains tested on **Intel HD 520** and **AMD Radeon
+780M**. **NVIDIA playback remains unverified**: the hybrid Pop!_OS test system
+also failed Vulkan presentation queries outside EvoParseq. This suggests an
+independent system/driver/compositor issue; its exact cause is not established.
+There is no VAAPI, OpenGL, software-decoding or cross-GPU-copy fallback.
+Existing Linux H.264/HEVC Main 8-bit 4:2:0 limitations remain applicable.
+
+Android receives an aligned, signed maintenance rebuild; no new Android-only
+feature is claimed. Windows x64 and Android 10+ ARMv7/ARM64 requirements and
+existing transport/codec limitations remain as documented. The Windows changes
+add no Linux or Android multi-display frontend.
+
+VirusTotal reports are point-in-time evidence, not a safety certification or
+Google Play Protect approval. Detection counts and any accepted exception stay
+visible; no finding is silently discarded. No universal performance gain is claimed.
+
+## Updating
+
+**Windows:** close the client and extract **EvoParseq-v0.9.8-dev.2-win64.zip**,
+retaining settings.json under the same Windows account. The migration package
+**ParsecWebTurn-v0.9.8-dev.2-win64.zip** contains the identical executable under
+the old filename. ZIPs exclude user settings and the optional NVIDIA runtime.
+
+**Android TV:** install **EvoParseq-TV.apk**, or select the prerelease channel in
+Settings > Updates. Android versionCode is 33, above v0.9.8-dev.1's 32. The
+distribution signing key is unchanged; normal updates retain settings/sign-in.
+**EvoParseq-TV-v0.9.8-dev.2.zip** includes the APK, setup guide and notices. Old
+debug-signed previews may still require the documented one-time reinstall.
+
+**Linux:** install **EvoParseq-Linux-v0.9.8-dev.2-x86_64.flatpak**:
+
+```sh
+flatpak install --user --reinstall EvoParseq-Linux-v0.9.8-dev.2-x86_64.flatpak
+flatpak run io.github.vampywiz17.EvoParseq
+```
+
+The application ID remains io.github.vampywiz17.EvoParseq. Existing private
+settings and protected sessions are retained under the same Linux account.
+GitHub update checks can offer this build when prereleases are included; the
+system installer still asks for confirmation.
+
+Verify downloads with SHA256SUMS.txt. This prerelease does not replace v0.9.7 as
+the stable updater's latest release. Protected credentials are not portable
+between OS accounts or machines.
+
+Source changes since the previous dev release:
+https://github.com/vampywiz17/EvoParseq/compare/v0.9.8-dev.1...v0.9.8-dev.2
+
 ## v0.9.8-dev.1 — Linux Flatpak, Vulkan Video and Windows session fixes (2026-11-12)
 
 This development preview builds on **EvoParseq v0.9.6-dev.5** and covers all
