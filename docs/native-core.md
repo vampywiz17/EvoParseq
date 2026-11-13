@@ -450,7 +450,7 @@ Each additional window uses the existing D3D11 decoder/presenter once for its
 stream, with its own bounded reference/queue state. No decoded readback, screen
 composition or additional decoded-image copy is introduced. One audio pipeline
 and one connection remain active. Additional windows use the draggable session
-icon for Fullscreen/Close screen; the main window owns session settings and
+icon for Fullscreen, Release/Capture input and Close screen; the main window owns session settings and
 Disconnect. Closing an extra window sends only its stream-disable request. If
 the host rejects it or no picture is decoded within ten seconds, that window
 closes and the event log records its stream/status. Existing presentation-mode

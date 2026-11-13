@@ -33,10 +33,7 @@ impl Config {
     /// Keep the negotiated capabilities on later per-stream reconfigurations.
     /// Only native, capability-checked preferences can request full chroma.
     pub fn encoder_request(&self, bytes: Bytes) -> Bytes {
-        if bytes.len() < 13 || bytes[12] != 13 {
-            return bytes;
-        }
-        if bytes[..4] != [0; 4] {
+        if bytes.len() < 13 || bytes[12] != 13 || bytes[..4] != [0; 4] {
             return bytes;
         }
         let old = u32::from_be_bytes(bytes[4..8].try_into().unwrap());

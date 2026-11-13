@@ -502,7 +502,7 @@ impl Pipeline {
                         .unwrap_or_else(|e| e.into_inner()) = Some(q.report.clone());
                 })
         };
-        drop(previous);
+        drop(workers);
         if spawned.is_err() {
             let mut q = error_state.0.lock().unwrap_or_else(|e| e.into_inner());
             q.fail("video-worker-start", None);
