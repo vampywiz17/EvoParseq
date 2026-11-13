@@ -169,6 +169,15 @@ The Windows features below remain available on this branch.
   display/driver; DXGI support alone does not verify panel activation. Zero copy
   retains Windows-managed timing. WebRTC uses bounded recent queue history.
 
+**Recommended VDD for Windows multi-display:**
+[ParsecDisplay / parsec-vdd](https://github.com/nomi-san/parsec-vdd) is the
+project's recommended virtual display manager because it uses Parsec's official
+Virtual Display Driver. Use the driver already installed by Parsec on the host;
+there is no need to reinstall the driver when setting up ParsecDisplay. Create
+the required virtual displays on the host before opening them in EvoParseq.
+Multi-display also works with other VDD solutions that expose compatible host
+displays; using Parsec VDD is a recommendation, not a requirement.
+
 Host permissions, encoders and graphics drivers determine the actual stream.
 **Connection stats shows the received depth/chroma and application RGB output**;
 a selected preference alone does not prove that the host accepted it.
