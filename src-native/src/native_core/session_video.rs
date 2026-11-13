@@ -631,6 +631,101 @@ mod tests {
     }
 
     #[test]
+    fn secondary_resolution_refreshes_preserves_and_confirms_the_selected_stream() {
+        use crate::session_preferences::Resolution;
+        let (attempt, packets) = Attempt::recorded_commands();
+        let view = TestView::default();
+        let mut settings = HostSettings::default();
+        let initial = serde_json::json!({"privateOption":42,"video":[
+            {"output":"first","resolutionX":1920,"resolutionY":1080},
+            {"output":"second","resolutionX":1920,"resolutionY":1080,"encoderFPS":30},
+            {"output":"third","resolutionX":800,"resolutionY":600}]});
+        settings.receive(initial.to_string().as_bytes(), &attempt, &view);
+        assert!(packets().is_empty());
+        for stream in [0, 3, usize::MAX] {
+            assert!(settings
+                .display_resolution(&attempt, &view, stream, Resolution::Host, (0, 0))
+                .is_err());
+        }
+        settings
+            .display_resolution(
+                &attempt,
+                &view,
+                1,
+                Resolution::Fixed(1280, 720),
+                (1920, 1080),
+            )
+            .unwrap();
+        assert_eq!(packets(), vec![host_video::query().unwrap()]);
+        assert!(settings
+            .display_resolution(&attempt, &view, 2, Resolution::Host, (0, 0))
+            .is_err());
+        // Another client changed unrelated settings after our cached snapshot.
+        let mut fresh = initial.clone();
+        fresh["privateOption"] = 77.into();
+        fresh["video"][2]["encoderFPS"] = 60.into();
+        settings.receive(fresh.to_string().as_bytes(), &attempt, &view);
+        let sent = packets();
+        assert_eq!(sent.len(), 1);
+        let actual: serde_json::Value =
+            serde_json::from_slice(&sent[0][13..sent[0].len() - 1]).unwrap();
+        let mut expected = fresh.clone();
+        expected["video"][1]["resolutionX"] = 1280.into();
+        expected["video"][1]["resolutionY"] = 720.into();
+        assert_eq!(actual, expected);
+        settings.poll(&attempt, &view).unwrap();
+        assert!(
+            settings.busy(),
+            "the pre-write reply must not confirm the write"
+        );
+        assert!(packets().iter().all(|p| *p == host_video::query().unwrap()));
+        settings.receive(expected.to_string().as_bytes(), &attempt, &view);
+        assert!(
+            packets().is_empty(),
+            "a repeated host reply must not resend the write"
+        );
+        settings.poll(&attempt, &view).unwrap();
+        assert!(!settings.busy());
+        assert!(view.notifications.borrow().iter().any(|(n, _)| matches!(
+            n,
+            Notification::DisplayResolution {
+                stream: 1,
+                status: Status::Confirmed,
+                resolution: Some(Resolution::Fixed(1280, 720))
+            }
+        )));
+
+        // Query timeout, malformed host reply and missing stream fail locally,
+        // release the transaction and allow a subsequent request.
+        settings
+            .display_resolution(&attempt, &view, 2, Resolution::Host, (0, 0))
+            .unwrap();
+        packets();
+        settings.query_deadline = Some(Instant::now());
+        settings.poll(&attempt, &view).unwrap();
+        assert!(!settings.busy());
+        settings
+            .display_resolution(&attempt, &view, 1, Resolution::Host, (0, 0))
+            .unwrap();
+        packets();
+        settings.receive(b"invalid", &attempt, &view);
+        assert!(!settings.busy());
+        settings
+            .display_resolution(&attempt, &view, 2, Resolution::Host, (0, 0))
+            .unwrap();
+        packets();
+        settings.receive(br#"{"video":[{}]}"#, &attempt, &view);
+        assert!(!settings.busy());
+        assert!(packets().is_empty());
+        let (closed, receiver) = Attempt::recorded_commands();
+        drop(receiver);
+        assert!(settings
+            .display_resolution(&closed, &view, 1, Resolution::Host, (0, 0))
+            .is_err());
+        assert!(!settings.busy());
+    }
+
+    #[test]
     fn secondary_resolution_owns_the_transaction_and_only_confirms_its_target() {
         let view = TestView::default();
         let mut settings = HostSettings {

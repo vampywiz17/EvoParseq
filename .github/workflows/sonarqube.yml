@@ -65,9 +65,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Instrumented Rust tests failed' }
           # Foreground fixtures run separately to prevent other windows stealing focus.
           # Merge their actual execution, retaining the normal tests' profiles.
-          cargo llvm-cov --locked --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --no-report immersive_native_capture_lifecycle -- --ignored --test-threads=1
+          cargo llvm-cov --locked --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --no-report -- immersive_native_capture_lifecycle --ignored --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'Instrumented foreground cursor fixture failed' }
-          cargo llvm-cov --locked --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --no-report additional_display_native_lifecycle -- --ignored --test-threads=1
+          cargo llvm-cov --locked --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --no-report -- additional_display_native_lifecycle --ignored --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'Instrumented additional display fixture failed' }
           cargo llvm-cov report --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --lcov --output-path coverage/rust-raw.info
           if ($LASTEXITCODE -ne 0) { throw 'Merged Rust coverage export failed' }
