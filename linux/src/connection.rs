@@ -830,11 +830,13 @@ impl Input {
             return Ok(());
         }
         if let Err(error) = playback.input.take(&mut self.events) {
-            let _ = self.engine.event(
-                crate::desktop_input::Event::Release,
-                Instant::now(),
-                &mut send,
-            );
+            if playback.owns_input() {
+                let _ = self.engine.event(
+                    crate::desktop_input::Event::Release,
+                    Instant::now(),
+                    &mut send,
+                );
+            }
             return Err(error);
         }
         while let Some(event) = self.events.pop_front() {

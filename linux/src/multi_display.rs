@@ -1,6 +1,9 @@
 //! Wayland display viewports and Vulkan decoder ownership only.
 use crate::{
-    desktop_linux::DesktopInput, display_routes::viewport, playback::Playback, video_vulkan,
+    desktop_linux::DesktopInput,
+    display_routes::{Channel, viewport},
+    playback::Playback,
+    video_vulkan,
 };
 use anyhow::Result;
 use eframe::egui;

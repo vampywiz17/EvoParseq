@@ -302,6 +302,7 @@ impl Completion {
         #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
         if (3..=4).contains(&channel) {
             if let Some(displays) = self.linux_displays.upgrade() {
+                self.progress.open_mask &= !(1 << channel);
                 displays.close(usize::from(channel) - 2);
                 return;
             }
