@@ -1304,7 +1304,6 @@ dependencies = [
  "lowlat-core",
  "lowlat-crypto",
  "serde_json",
- "tokio",
 ]
 
 [[package]]

@@ -443,10 +443,10 @@ The session overlay's **Add screen** menu requests a second or third host displa
 on the existing connection (BUD or WebRTC). The initial implementation exposes
 the host's stream slots 1/2, corresponding to its second/third listed outputs.
 Use extended host displays and normal Parsec mouse/keyboard input. Already-open
-outputs are not opened twice. Two-screen playback has been observed in a live
-Windows test; independent resolution changes and activating clicks need live
-validation in this build. Host acceptance, including account restrictions, is
-not guaranteed.
+outputs are not opened twice. Live Windows tests have verified two-screen
+playback, independent resolution changes, activating clicks and cross-display
+window dragging with cursor restoration. This does not prove host acceptance
+for every account, display topology or driver.
 
 Each additional window uses the existing D3D11 decoder/presenter once for its
 stream, with its own bounded reference/queue state. No decoded readback, screen
