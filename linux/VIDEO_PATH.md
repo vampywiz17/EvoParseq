@@ -403,7 +403,9 @@ notebook's exact HEVC GPU/profile was not recorded.
 
 HEVC Main10 is available when the selected GPU/queue and original P010 surface
 sampling pass capability checks. Presentation remains SDR RGB; HDR output is
-not implied. Main10 live validation is pending. Display timing VRR requests
+not implied. Intel ARL Main10 playback was subsequently reported working on
+2026-11-14, with decoded depth 10 confirmed in the session log. Main10 on other
+GPUs remains unverified. Display timing VRR requests
 Vulkan AutoNoVsync with the documented supported-mode fallback. Physical VRR
 remains compositor-, monitor- and driver-controlled and unverified.
 
@@ -432,9 +434,23 @@ A peer cursor message during an already captured drag no longer unlocks the
 source while physical buttons are held. Source raw motion continues unchanged;
 the default Linux pointer is drawn at the host-reported peer coordinates in the
 existing GUI pass. This is pointer geometry, not video readback or composition.
-Button-up forwards no source absolute move, then the existing two-presentation
-unlock/peer-warp sequence runs. Source restoration echoes remain suppressed until
+Button-up forwards no source absolute move, then the unlock/peer-warp sequence
+runs. Source restoration echoes remain suppressed until
 an intentional click reacquires that window. Focus loss still releases input.
 Wayland may decline pointer warping; successful request submission alone is not
 proof of native relocation. The wire regression verifies continued relative
 motion and a button-up packet with no source absolute-position packet.
+
+The follow-up test still showed native cursor restoration in the source window.
+Separating unlock and warp into two presentations did not guarantee a committed
+source surface. Before a cross-surface warp, the Wayland adapter now commits the
+pointer-focused source surface and completes one display-sync roundtrip. This
+orders buffered constraint destruction before the warp and consumes any updated
+enter serial before sending it. The roundtrip is limited to cross-window cursor
+handoffs; normal motion, same-window hints and video presentation do not wait.
+The isolated Wayland wire test models an unlock-time enter-serial change and
+requires source commit, sync completion and the new serial before the peer warp.
+Request processing still does not prove compositor acceptance; live validation
+of this repair remains required.
+
+Reference: [KWin buffered unlock/warp bug 524804](https://bugs.kde.org/show_bug.cgi?id=524804).

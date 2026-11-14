@@ -17,6 +17,7 @@ struct State {
     seat: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
     serial: Option<u32>,
+    focus: Option<wl_surface::WlSurface>,
     pending: Option<(wayland_client::backend::ObjectId, f64, f64)>,
 }
 impl Dispatch<wl_registry::WlRegistry, ()> for State {
@@ -64,6 +65,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
                     }
                 }
                 s.serial = None;
+                s.focus = None;
             }
         }
     }
@@ -85,6 +87,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         } = event
         {
             s.serial = Some(serial);
+            s.focus = Some(surface.clone());
             if s.pending
                 .as_ref()
                 .is_some_and(|(id, _, _)| *id == surface.id())
@@ -99,6 +102,9 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                     }),
                 );
             }
+        } else if matches!(event, wl_pointer::Event::Leave { .. }) {
+            s.focus = None;
+            s.serial = None;
         }
     }
 }
@@ -154,6 +160,7 @@ impl Warp {
         // never retain mouse events until the next rare cursor transition.
         if self.queue.dispatch_pending(&mut self.state).is_err() {
             self.state.serial = None;
+            self.state.focus = None;
         }
     }
     fn request(
@@ -176,22 +183,7 @@ impl Warp {
             .context("Surface ID unavailable")?;
             let surface = wl_surface::WlSurface::from_id(&self.connection, id)?;
             let position = position.to_logical::<f64>(window.scale_factor());
-            self.state
-                .manager
-                .as_ref()
-                .context("Warp manager unavailable")?
-                .warp_pointer(
-                    &surface,
-                    self.state.pointer.as_ref().context("Pointer unavailable")?,
-                    position.x,
-                    position.y,
-                    self.state
-                        .serial
-                        .context("Pointer enter serial unavailable")?,
-                );
-            self.connection.flush()?;
-            self.state.pending = Some((surface.id(), position.x, position.y));
-            Ok(())
+            self.warp_to(&surface, position.x, position.y)
         })();
         crate::event_log::record(
             "INFO",
@@ -199,6 +191,48 @@ impl Warp {
             serde_json::json!({"requested":result.is_ok(),"compositor_acknowledgement":false}),
         );
         result.is_ok()
+    }
+    fn warp_to(&mut self, surface: &wl_surface::WlSurface, x: f64, y: f64) -> Result<()> {
+        self.commit_source_unlock(surface)?;
+        self.state
+            .manager
+            .as_ref()
+            .context("Warp manager unavailable")?
+            .warp_pointer(
+                surface,
+                self.state.pointer.as_ref().context("Pointer unavailable")?,
+                x,
+                y,
+                self.state
+                    .serial
+                    .context("Pointer enter serial unavailable")?,
+            );
+        self.connection.flush()?;
+        self.state.pending = Some((surface.id(), x, y));
+        Ok(())
+    }
+    fn commit_source_unlock(&mut self, target: &wl_surface::WlSurface) -> Result<()> {
+        let source = self
+            .state
+            .focus
+            .as_ref()
+            .context("Pointer focus unavailable")?;
+        if source.id() != target.id() {
+            // Pointer-constraint destruction can be surface-commit buffered.
+            // A later egui frame does not guarantee that the source was committed
+            // before commands for another viewport. Commit that public surface,
+            // then wait for the compositor to process it and refresh enter serials.
+            // This roundtrip occurs only at a cross-window cursor handoff, never
+            // on ordinary motion, video frames or same-window restoration.
+            source.commit();
+            self.queue.roundtrip(&mut self.state)?;
+            crate::event_log::record(
+                "INFO",
+                "cursor_source_unlock_committed",
+                serde_json::json!({"compositor_processed":true}),
+            );
+        }
+        Ok(())
     }
 }
 impl Drop for Warp {
@@ -219,5 +253,95 @@ impl Drop for Warp {
             }
         }
         let _ = self.connection.flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use wayland_client::protocol::wl_compositor;
+
+    wayland_client::delegate_noop!(State:ignore wl_compositor::WlCompositor);
+    wayland_client::delegate_noop!(State:ignore wl_surface::WlSurface);
+
+    #[test]
+    fn linux_peer_warp_commits_source_and_uses_post_unlock_enter_serial() {
+        // An isolated wire fixture, without a desktop, GPU or user input. Model
+        // a compositor which applies unlock only at commit and changes the enter
+        // serial as a consequence. Merely waiting another egui frame is insufficient.
+        let (client, mut server) = UnixStream::pair().unwrap();
+        server
+            .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+            .unwrap();
+        let connection = Connection::from_socket(client).unwrap();
+        let queue = connection.new_event_queue::<State>();
+        let q = queue.handle();
+        let registry = connection.display().get_registry(&q, ());
+        let compositor = registry.bind::<wl_compositor::WlCompositor, _, _>(1, 4, &q, ());
+        let source = compositor.create_surface(&q, ());
+        let target = compositor.create_surface(&q, ());
+        let seat = registry.bind::<wl_seat::WlSeat, _, _>(2, 7, &q, ());
+        let pointer = seat.get_pointer(&q, ());
+        let manager = registry.bind::<warp::WpPointerWarpV1, _, _>(3, 1, &q, ());
+        let source_id = source.id().protocol_id();
+        let target_id = target.id().protocol_id();
+        let pointer_id = pointer.id().protocol_id();
+        let manager_id = manager.id().protocol_id();
+        let worker = std::thread::spawn(move || {
+            let mut committed = false;
+            let mut synchronized = false;
+            loop {
+                let mut header = [0; 8];
+                server.read_exact(&mut header).unwrap();
+                let id = u32::from_ne_bytes(header[..4].try_into().unwrap());
+                let tag = u32::from_ne_bytes(header[4..].try_into().unwrap());
+                let opcode = tag & 65535;
+                let mut body = vec![0; (tag >> 16) as usize - 8];
+                server.read_exact(&mut body).unwrap();
+                let words: Vec<_> = body
+                    .chunks_exact(4)
+                    .map(|b| u32::from_ne_bytes(b.try_into().unwrap()))
+                    .collect();
+                if id == source_id && opcode == 6 {
+                    committed = true;
+                } else if id == 1 && opcode == 0 {
+                    assert!(committed, "sync must follow the source surface commit");
+                    // wl_pointer.enter(serial=11, source, x=20, y=30), followed
+                    // by wl_callback.done for the display.sync request.
+                    for message in [
+                        vec![pointer_id, 24 << 16, 11, source_id, 20 << 8, 30 << 8],
+                        vec![words[0], 12 << 16, 1],
+                    ] {
+                        for word in message {
+                            server.write_all(&word.to_ne_bytes()).unwrap();
+                        }
+                    }
+                    synchronized = true;
+                } else if id == manager_id && opcode == 1 {
+                    assert!(committed && synchronized);
+                    assert_eq!(words, [target_id, pointer_id, 730 << 8, 429 << 8, 11]);
+                    break;
+                }
+            }
+        });
+        let mut adapter = Warp {
+            queue,
+            connection,
+            _registry: registry,
+            state: State {
+                manager: Some(manager),
+                seat: Some(seat),
+                pointer: Some(pointer),
+                focus: Some(source),
+                serial: Some(10),
+                ..Default::default()
+            },
+        };
+        adapter.warp_to(&target, 730., 429.).unwrap();
+        worker.join().unwrap();
+        assert_eq!(adapter.state.serial, Some(11));
+        assert_eq!(adapter.state.pending, Some((target.id(), 730., 429.)));
     }
 }
