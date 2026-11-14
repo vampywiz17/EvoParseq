@@ -303,8 +303,9 @@ impl Playback {
         Some(rect.min + eframe::egui::vec2(x as f32, y as f32))
     }
     pub fn pointer_buttons(&self, buttons: u32) {
-        self.pointer_buttons.store(buttons & 31, Ordering::Release);
-        if buttons == 0 {
+        let buttons = buttons & 31;
+        let previous = self.pointer_buttons.swap(buttons, Ordering::AcqRel);
+        if previous != 0 && buttons == 0 {
             let restore = *self
                 .cursor_restore
                 .lock()

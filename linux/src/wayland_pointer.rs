@@ -17,6 +17,7 @@ struct State {
     seat: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
     serial: Option<u32>,
+    pending: Option<(wayland_client::backend::ObjectId, f64, f64)>,
 }
 impl Dispatch<wl_registry::WlRegistry, ()> for State {
     fn event(
@@ -76,8 +77,28 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_pointer::Event::Enter { serial, .. } = event {
+        if let wl_pointer::Event::Enter {
+            serial,
+            surface,
+            surface_x,
+            surface_y,
+        } = event
+        {
             s.serial = Some(serial);
+            if s.pending
+                .as_ref()
+                .is_some_and(|(id, _, _)| *id == surface.id())
+            {
+                let (_, x, y) = s.pending.take().unwrap();
+                crate::event_log::record(
+                    "INFO",
+                    "cursor_peer_surface_entered",
+                    serde_json::json!({
+                        "after_warp_request":true,
+                        "position_matches_request":(surface_x-x).abs()<=1./256. && (surface_y-y).abs()<=1./256.
+                    }),
+                );
+            }
         }
     }
 }
@@ -169,6 +190,7 @@ impl Warp {
                         .context("Pointer enter serial unavailable")?,
                 );
             self.connection.flush()?;
+            self.state.pending = Some((surface.id(), position.x, position.y));
             Ok(())
         })();
         crate::event_log::record(
