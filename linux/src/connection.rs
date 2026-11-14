@@ -748,7 +748,18 @@ impl Input {
         }
         let capture = crate::desktop_input::relative_capture(update.relative, update.hidden);
         target.host_cursor(capture, i32::from(update.x), i32::from(update.y));
-        if !capture && !update.suppressed {
+        if capture || update.suppressed {
+            primary.hide_peer_cursor(usize::from(update.stream));
+            if let Some(displays) = &displays {
+                for stream in 1..crate::display_stream::STREAMS {
+                    if let Some(channel) = displays.get(stream) {
+                        channel
+                            .playback
+                            .hide_peer_cursor(usize::from(update.stream));
+                    }
+                }
+            }
+        } else {
             if update.stream != 0 {
                 primary.release_peer_cursor(
                     usize::from(update.stream),
@@ -1237,6 +1248,14 @@ mod peer_drag_wire_tests {
             .unwrap();
         assert_eq!(frames, [control::header(3, 1, 3, -2).to_vec()]);
         frames.clear();
+        // Explicit hidden/relative host modes cancel the peer drawing/warp
+        // without inferring capture from mouse-button state.
+        cursor[32..34].copy_from_slice(&512u16.to_be_bytes());
+        input.cursor_frame(&cursor, &primary);
+        assert!(primary.capture());
+        assert!(primary.peer_cursor().is_none());
+        cursor[32..34].copy_from_slice(&0u16.to_be_bytes());
+        input.cursor_frame(&cursor, &primary);
         primary.push_input(motion(false, false, 0));
         primary.pointer_buttons(0);
         assert!(!primary.capture());

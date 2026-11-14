@@ -323,6 +323,17 @@ impl Playback {
             .unwrap_or_else(|e| e.into_inner()))
         .filter(|(stream, _, _)| *stream != self.stream())
     }
+    pub fn hide_peer_cursor(&self, stream: usize) {
+        let mut restore = self
+            .cursor_restore
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if restore.is_some_and(|(target, _, _)| target == stream && target != self.stream()) {
+            *restore = None;
+            drop(restore);
+            self.repaint();
+        }
+    }
     fn finish_peer_cursor(&self, stream: usize, x: i32, y: i32) {
         self.cursor_state.store(
             (1 << 33) | (u64::from(x as u16) << 16) | u64::from(y as u16),
