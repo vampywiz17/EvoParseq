@@ -1166,3 +1166,91 @@ mod clipboard_tests {
             .unwrap();
     }
 }
+
+#[cfg(test)]
+mod peer_drag_wire_tests {
+    use super::*;
+    use crate::desktop_input::{Event, Pointer};
+    #[test]
+    fn linux_peer_drag_stays_relative_and_buttonup_cannot_send_source_position() {
+        let ctx = eframe::egui::Context::default();
+        let primary = crate::playback::Playback::new(ctx.clone());
+        let displays = std::sync::Arc::new(crate::display_routes::Displays::default());
+        primary.attach_displays(&displays, 0);
+        displays.open(1, &ctx).unwrap();
+        primary.activate_input();
+        primary.set_input_geometry((1920, 1080));
+        let mut input = Input::default();
+        let mut cursor = vec![0; 34];
+        cursor[12] = 9;
+        cursor[32..34].copy_from_slice(&256u16.to_be_bytes());
+        input.cursor_frame(&cursor, &primary);
+        primary.pointer_buttons(1);
+        primary.push_input(Event::Focus(true));
+        let motion = |moved, relative, buttons| {
+            Event::Pointer(Pointer {
+                x: 3.,
+                y: -2.,
+                relative,
+                moved,
+                viewport: (960, 540),
+                buttons,
+                wheel: (0, 0),
+            })
+        };
+        primary.push_input(motion(true, true, 1));
+        let mut frames = Vec::new();
+        input
+            .pump(
+                &primary,
+                true,
+                |b| {
+                    frames.push(b.to_vec());
+                    Ok(())
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert!(
+            frames
+                .iter()
+                .any(|b| b.as_slice() == control::header(3, 1, 3, -2).as_ref())
+        );
+        frames.clear();
+        cursor[8..12].copy_from_slice(&1i32.to_be_bytes());
+        cursor[24..26].copy_from_slice(&1440u16.to_be_bytes());
+        cursor[26..28].copy_from_slice(&810u16.to_be_bytes());
+        cursor[32..34].copy_from_slice(&0u16.to_be_bytes());
+        input.cursor_frame(&cursor, &primary);
+        assert!(primary.capture());
+        primary.push_input(motion(true, true, 1));
+        input
+            .pump(
+                &primary,
+                true,
+                |b| {
+                    frames.push(b.to_vec());
+                    Ok(())
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(frames, [control::header(3, 1, 3, -2).to_vec()]);
+        frames.clear();
+        primary.push_input(motion(false, false, 0));
+        primary.pointer_buttons(0);
+        assert!(!primary.capture());
+        input
+            .pump(
+                &primary,
+                true,
+                |b| {
+                    frames.push(b.to_vec());
+                    Ok(())
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(frames, [control::header(1, 1, 0, 0).to_vec()]);
+    }
+}

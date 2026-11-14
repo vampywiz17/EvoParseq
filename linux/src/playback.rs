@@ -58,6 +58,7 @@ pub struct Playback {
     cursor_restore: Mutex<Option<(usize, i32, i32)>>,
     video_rect: Mutex<Option<eframe::egui::Rect>>,
     cursor_state: AtomicU64,
+    pointer_buttons: std::sync::atomic::AtomicU32,
 }
 
 impl Playback {
@@ -108,6 +109,7 @@ impl Playback {
             cursor_restore: Mutex::new(None),
             video_rect: Mutex::new(None),
             cursor_state: AtomicU64::new(0),
+            pointer_buttons: std::sync::atomic::AtomicU32::new(0),
         })
     }
     pub fn set_hevc(&self, enabled: bool) {
@@ -300,20 +302,87 @@ impl Playback {
         .unmap(x, y)?;
         Some(rect.min + eframe::egui::vec2(x as f32, y as f32))
     }
-    pub fn release_peer_cursor(&self, stream: usize, x: i32, y: i32) {
-        if stream == self.stream() || !self.capture() {
-            return;
+    pub fn pointer_buttons(&self, buttons: u32) {
+        self.pointer_buttons.store(buttons & 31, Ordering::Release);
+        if buttons == 0 {
+            let restore = *self
+                .cursor_restore
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some((stream, x, y)) = restore.filter(|(stream, _, _)| *stream != self.stream())
+            {
+                self.finish_peer_cursor(stream, x, y);
+            }
         }
+    }
+    pub fn peer_cursor(&self) -> Option<(usize, i32, i32)> {
+        (*self
+            .cursor_restore
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()))
+        .filter(|(stream, _, _)| *stream != self.stream())
+    }
+    fn finish_peer_cursor(&self, stream: usize, x: i32, y: i32) {
         self.cursor_state.store(
             (1 << 33) | (u64::from(x as u16) << 16) | u64::from(y as u16),
             Ordering::Release,
         );
+        self.set_capture(false);
+        crate::event_log::record(
+            "INFO",
+            "cursor_peer_drag_released",
+            serde_json::json!({"stream":self.stream(),"visible_stream":stream}),
+        );
+        self.repaint();
+    }
+    pub fn release_peer_cursor(&self, stream: usize, x: i32, y: i32) {
+        if stream == self.stream() || !self.capture() {
+            return;
+        }
         *self
             .cursor_restore
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some((stream, x, y));
-        self.set_capture(false);
+        if self.pointer_buttons.load(Ordering::Acquire) == 0 {
+            self.finish_peer_cursor(stream, x, y);
+        }
         self.repaint();
+        if let Some(displays) = self.displays() {
+            let target = if stream == 0 {
+                displays
+                    .primary
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .upgrade()
+            } else {
+                displays.get(stream).map(|c| c.playback.clone())
+            };
+            if let Some(target) = target {
+                target.repaint();
+            }
+        }
+    }
+    /// Only a host-reported visible peer of the active captured drag is drawn.
+    /// The source retains raw motion until button-up; no early native warp.
+    pub fn peer_drag_position(&self) -> Option<eframe::egui::Pos2> {
+        let displays = self.displays()?;
+        let source = displays.owner.load(Ordering::Acquire).checked_sub(1)?;
+        let source = if source == 0 {
+            displays
+                .primary
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .upgrade()?
+        } else {
+            displays.get(source)?.playback.clone()
+        };
+        if !source.capture() || source.pointer_buttons.load(Ordering::Acquire) == 0 {
+            return None;
+        }
+        let (stream, x, y) = source.peer_cursor()?;
+        (stream == self.stream())
+            .then(|| self.cursor_endpoint(stream, x, y))
+            .flatten()
     }
     pub fn capture(&self) -> bool {
         self.capture.load(Ordering::Acquire)
@@ -327,8 +396,8 @@ impl Playback {
         let mut state = self.packets.lock().unwrap_or_else(|e| e.into_inner());
         state.check()?;
         ensure!(
-            bytes.len() <= crate::control::MAX_CHANNEL_MESSAGE,
-            "Linux video input exceeds the shared message limit"
+            bytes.len() <= MAX_BYTES,
+            "Linux encoded video exceeds the compressed video byte budget"
         );
         if info.parameters {
             state.parameters.observe(bytes, info.codec);
@@ -356,9 +425,10 @@ impl Playback {
         }
         let mut buffer = state.queue.take_buffer();
         buffer.extend_from_slice(bytes);
-        let accepted = state
-            .queue
-            .submit_codec(buffer, info.idr, info.parameters, 0, info.codec);
+        let accepted =
+            state
+                .queue
+                .submit_native_codec(buffer, info.idr, info.parameters, 0, info.codec);
         if accepted {
             state.queue.set_last_packet(rotation, info.picture);
             if state.decoder_generation != state.queue.reset_generation

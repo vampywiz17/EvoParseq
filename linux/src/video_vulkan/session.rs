@@ -5,7 +5,7 @@ use lowlat_decode::h264::{Job, dpb::MAX_FRAMES, pps::Pps, sps::Sps};
 use std::sync::{Arc, Mutex, OnceLock};
 
 const WAIT_NS: u64 = 100_000_000;
-const MAX_INPUT: u64 = 8 * 1024 * 1024;
+const MAX_INPUT: u64 = crate::video_output::MAX_BYTES as u64;
 
 pub struct Session {
     resources: Option<Box<Resources>>,
@@ -693,6 +693,8 @@ impl Session {
             "vulkan_video_initialized",
             serde_json::json!({
                 "codec": if hevc { "HEVC" } else { "H.264" },
+                "decoded_bit_depth": if self.ten_bit { 10 } else { 8 },
+                "max_encoded_bytes": MAX_INPUT,
                 "gpu_timeline_sync": self.sync.is_some(),
                 "surface_tracking": self.sync.is_some(),
                 "selected_output_lease": true,

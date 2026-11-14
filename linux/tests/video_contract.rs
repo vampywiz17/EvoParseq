@@ -438,7 +438,7 @@ fn shared_byte_limit_still_bounds_memory_and_consumption_releases_it() {
     }
     assert!(
         playback
-            .submit(&vec![0; control::MAX_CHANNEL_MESSAGE + 1])
+            .submit(&vec![0; video_output::MAX_BYTES + 1])
             .is_err()
     );
 }
@@ -917,4 +917,46 @@ fn linux_main10_metadata_preserves_depth_and_profile_without_allowing_444() {
     invalid = job.sps.clone();
     invalid.bit_depth_chroma_minus8 = 0;
     assert!(hevc_parameters::validate(&invalid).is_err());
+}
+
+#[test]
+fn linux_large_hevc_access_unit_uses_video_budget_without_growing_the_queue() {
+    let playback = playback::Playback::new(eframe::egui::Context::default());
+    let fixture = include_bytes!("data/hevc-main10-lowlat-8-frames.bin");
+    let size = u32::from_le_bytes(fixture[..4].try_into().unwrap()) as usize;
+    let mut bytes = fixture[4..4 + size].to_vec();
+    // Valid HEVC filler-data NAL expands a genuine Main10 keyframe beyond the
+    // control-channel ceiling; no captured screen or GPU is needed.
+    bytes.extend_from_slice(&[0, 0, 1, 76, 1]);
+    bytes.resize(control::MAX_CHANNEL_MESSAGE + 257, 255);
+    bytes.push(128);
+    let mut parser = lowlat_decode::hevc::Stream::new();
+    assert_eq!(
+        parser.read(&bytes).unwrap(),
+        lowlat_decode::hevc::Read::Picture
+    );
+    let info = video_stream::PacketInfo {
+        picture: true,
+        codec: video_stream::Codec::Hevc,
+        idr: true,
+        parameters: true,
+    };
+    assert!(playback.submit_packet(&bytes, info).unwrap());
+    assert_eq!(playback.video_snapshot().queue_bytes, bytes.len());
+    assert_eq!(
+        playback
+            .decode_pending_codec(|actual, codec| {
+                assert_eq!(actual, bytes);
+                assert_eq!(codec, video_stream::Codec::Hevc);
+                Ok(())
+            })
+            .unwrap(),
+        1
+    );
+    assert_eq!(playback.video_snapshot().queue_bytes, 0);
+    assert!(
+        playback
+            .submit_packet(&vec![0; video_output::MAX_BYTES + 1], info)
+            .is_err()
+    );
 }

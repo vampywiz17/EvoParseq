@@ -424,6 +424,39 @@ impl Queue {
         timestamp_100ns: i64,
         codec: crate::video_stream::Codec,
     ) -> bool {
+        self.submit_codec_limit(
+            bytes,
+            idr,
+            parameters,
+            timestamp_100ns,
+            codec,
+            crate::control::MAX_CHANNEL_MESSAGE,
+        )
+    }
+
+    /// Native encoded video has its own bounded byte budget; this does not
+    /// increase control/SCTP message limits or the total compressed queue size.
+    #[cfg(target_os = "linux")]
+    pub fn submit_native_codec(
+        &mut self,
+        bytes: Vec<u8>,
+        idr: bool,
+        parameters: bool,
+        timestamp_100ns: i64,
+        codec: crate::video_stream::Codec,
+    ) -> bool {
+        self.submit_codec_limit(bytes, idr, parameters, timestamp_100ns, codec, MAX_BYTES)
+    }
+
+    fn submit_codec_limit(
+        &mut self,
+        bytes: Vec<u8>,
+        idr: bool,
+        parameters: bool,
+        timestamp_100ns: i64,
+        codec: crate::video_stream::Codec,
+        limit: usize,
+    ) -> bool {
         if self.report.codec.is_some_and(|previous| previous != codec) {
             self.fail("video-unexpected-codec-change", None);
             return false;
@@ -436,7 +469,7 @@ impl Queue {
             self.recycle(bytes);
             return false;
         }
-        if bytes.len() > crate::control::MAX_CHANNEL_MESSAGE {
+        if bytes.len() > limit {
             self.fail("video-input-too-large", None);
             self.report.frames_dropped += 1;
             return false;
@@ -1332,5 +1365,56 @@ mod optional_warmup_tests {
             queue.report.failure_stage,
             Some("video-native-setup-timeout-restart-required")
         );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod native_limit_tests {
+    use super::*;
+    #[test]
+    fn linux_native_frame_budget_preserves_control_limit_and_total_queue_bound() {
+        let size = crate::control::MAX_CHANNEL_MESSAGE + 1;
+        let mut legacy = Queue::default();
+        assert!(!legacy.submit_codec(
+            vec![0; size],
+            true,
+            false,
+            0,
+            crate::video_stream::Codec::Hevc
+        ));
+        let mut native = Queue::default();
+        assert!(native.submit_native_codec(
+            vec![0; size],
+            true,
+            false,
+            0,
+            crate::video_stream::Codec::Hevc
+        ));
+        assert_eq!(native.report.queue_bytes, size);
+        native.clear();
+        assert!(native.submit_native_codec(
+            vec![0; MAX_BYTES],
+            true,
+            false,
+            0,
+            crate::video_stream::Codec::Hevc
+        ));
+        assert!(!native.submit_native_codec(
+            vec![0; 1],
+            false,
+            false,
+            0,
+            crate::video_stream::Codec::Hevc
+        ));
+        assert!(native.report.queue_bytes <= MAX_BYTES);
+        let mut oversized = Queue::default();
+        assert!(!oversized.submit_native_codec(
+            vec![0; MAX_BYTES + 1],
+            true,
+            false,
+            0,
+            crate::video_stream::Codec::Hevc
+        ));
+        assert_eq!(oversized.report.queue_bytes, 0);
     }
 }

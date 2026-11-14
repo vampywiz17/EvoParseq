@@ -21,6 +21,7 @@ pub struct DesktopInput {
     capture_anchor: Option<Pos2>,
     restored_position: Option<Pos2>,
     peer_restore: Option<(usize, i32, i32)>,
+    peer_departed: bool,
 }
 impl DesktopInput {
     pub fn keyboard(&self) -> std::sync::Arc<crate::native_loop::KeyboardBridge> {
@@ -58,6 +59,8 @@ impl DesktopInput {
         self.capture_anchor = None;
         self.restored_position = None;
         self.peer_restore = None;
+        self.peer_departed = false;
+        playback.pointer_buttons(0);
         playback.take_cursor_restore();
         self.controls = None;
         self.badge = None;
@@ -76,6 +79,38 @@ impl DesktopInput {
         }
     }
     pub fn cursor(&mut self, ctx: &egui::Context, playback: &Playback) {
+        if let Some(position) = playback.peer_drag_position() {
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Tooltip,
+                egui::Id::new("peer-drag-cursor"),
+            ));
+            let painter = if let Some(rect) = self.video {
+                painter.with_clip_rect(rect)
+            } else {
+                painter
+            };
+            let points = [
+                egui::vec2(0., 0.),
+                egui::vec2(0., 18.),
+                egui::vec2(5., 13.),
+                egui::vec2(9., 21.),
+                egui::vec2(12., 19.),
+                egui::vec2(8., 12.),
+                egui::vec2(15., 12.),
+            ];
+            let mut mesh = egui::Mesh::default();
+            for p in points {
+                mesh.colored_vertex(position + p, egui::Color32::WHITE);
+            }
+            for [a, b, c] in [[0, 1, 2], [0, 2, 5], [0, 5, 6], [2, 3, 4], [2, 4, 5]] {
+                mesh.add_triangle(a, b, c);
+            }
+            painter.add(egui::Shape::mesh(mesh));
+            painter.add(egui::Shape::closed_line(
+                points.into_iter().map(|p| position + p).collect(),
+                egui::Stroke::new(1., egui::Color32::BLACK),
+            ));
+        }
         if let Some((stream, x, y)) = self.peer_restore.take() {
             if self.enabled && ctx.input(|i| i.focused) {
                 if let Some(position) = playback.cursor_endpoint(stream, x, y) {
@@ -121,6 +156,7 @@ impl DesktopInput {
                     }
                     // A disappeared peer must not warp inside the wrong window.
                 } else if let Some(rect) = self.video {
+                    self.peer_departed = false;
                     let viewport = crate::viewport::Viewport {
                         source: playback.input_geometry(),
                         client: (rect.width().round() as u32, rect.height().round() as u32),
@@ -211,6 +247,7 @@ impl DesktopInput {
             buttons: self.buttons,
             wheel,
         }));
+        playback.pointer_buttons(self.buttons);
     }
     pub fn events(
         &mut self,
@@ -227,6 +264,9 @@ impl DesktopInput {
             }
             return;
         }
+        if playback.peer_cursor().is_some() {
+            self.peer_departed = true;
+        }
         let paste = raw
             .events
             .iter()
@@ -237,6 +277,11 @@ impl DesktopInput {
                 pos, pressed: true, ..
             } = event
             {
+                if self.peer_departed && self.inside(*pos) {
+                    self.peer_departed = false;
+                    self.capture_anchor = None;
+                    self.restored_position = None;
+                }
                 if !self.enabled && self.inside(*pos) {
                     self.enable(playback);
                 }
@@ -262,7 +307,7 @@ impl DesktopInput {
                 {
                     // Do not send the stale pre-lock location or the compositor's
                     // restoration echo back to the host as a new absolute move.
-                    if self.capture_anchor == Some(*pos) || self.restored_position == Some(*pos) { return true; }
+                    if self.peer_departed || self.capture_anchor == Some(*pos) || self.restored_position == Some(*pos) { return true; }
                     self.capture_anchor = None;
                     self.restored_position = None;
                     self.last_absolute = Some(*pos);
@@ -298,6 +343,7 @@ impl DesktopInput {
                         *pos - self.video.unwrap().min,
                         false,
                         !self.grabbed
+                            && !self.peer_departed
                             && self.capture_anchor != Some(*pos)
                             && self.restored_position != Some(*pos),
                         (0, 0),
@@ -592,9 +638,63 @@ mod peer_cursor_tests {
             video: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1920., 1080.))),
             ..Default::default()
         };
+        primary.activate_input();
+        primary.pointer_buttons(1);
         primary.host_cursor(true, 20, 30);
         let _ = ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &primary));
         primary.release_peer_cursor(1, 1440, 810);
+        let held = ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &primary));
+        assert!(primary.capture());
+        assert!(adapter.grabbed);
+        assert!(
+            !held.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|cmd| matches!(
+                    cmd,
+                    egui::ViewportCommand::CursorGrab(egui::CursorGrab::None)
+                ))
+        );
+        assert_eq!(peer.peer_drag_position(), Some(egui::pos2(730., 429.)));
+        let mut raw = egui::RawInput::default();
+        raw.events = vec![Event::MouseMoved(egui::vec2(3., -2.))];
+        adapter.events(&ctx, &mut raw, &primary);
+        let mut input = std::collections::VecDeque::new();
+        primary.input.take(&mut input).unwrap();
+        assert!(matches!(
+            input.pop_front(),
+            Some(crate::input_handoff::Event::Desktop(Input::Pointer(
+                Pointer {
+                    relative: true,
+                    moved: true,
+                    buttons: 1,
+                    ..
+                }
+            )))
+        ));
+        assert!(input.is_empty());
+        // Button-up is forwarded without an absolute move in the source frame.
+        raw.events = vec![Event::PointerButton {
+            pos: egui::pos2(20., 30.),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }];
+        adapter.events(&ctx, &mut raw, &primary);
+        primary.input.take(&mut input).unwrap();
+        assert!(matches!(
+            input.pop_front(),
+            Some(crate::input_handoff::Event::Desktop(Input::Pointer(
+                Pointer {
+                    moved: false,
+                    buttons: 0,
+                    ..
+                }
+            )))
+        ));
+        assert!(input.is_empty());
+        assert!(!primary.capture());
+        assert!(peer.peer_drag_position().is_none());
         let unlock = ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &primary));
         assert!(
             unlock.viewport_output[&egui::ViewportId::ROOT]
@@ -620,8 +720,13 @@ mod peer_cursor_tests {
                 .iter()
                 .any(|cmd| matches!(cmd, egui::ViewportCommand::CursorPosition(_)))
         );
-        assert_eq!(adapter.buttons, 1);
-        let mut input = std::collections::VecDeque::new();
+        // Both a restoration echo and a different stale source position must
+        // not send the host back to the first stream after native unlock.
+        raw.events = vec![
+            Event::PointerMoved(egui::pos2(20., 30.)),
+            Event::PointerMoved(egui::pos2(50., 60.)),
+        ];
+        adapter.events(&ctx, &mut raw, &primary);
         primary.input.take(&mut input).unwrap();
         assert!(input.is_empty());
         primary.release_peer_cursor(1, 100, 100);

@@ -416,3 +416,25 @@ AI upscaling stays disabled on Linux, as requested. Application Zero copy stays
 disabled because the presentation pass performs YUV-to-RGB conversion. The
 current wgpu format API exposes NV12/P010 but no 4:4:4 multiplanar format;
 4:4:4 needs further renderer integration, not just a host-request switch.
+
+
+## Native frame budget and cross-display drag repair (2026-11-14)
+
+The reported Main10 run stopped after 1077 pictures with the Linux frontend's
+1 MiB control-message check. Native compressed access units now use the existing
+8 MiB video-queue/input budget through the shared queue's explicit native entry
+point. The total queue, Vulkan input allocations, control/SCTP ceiling and
+Windows/Android queue entry points have not been enlarged. A genuine Main10
+access unit with a filler NAL tests the >1 MiB boundary without a GPU; oversized
+native units and queue overflow remain bounded.
+
+A peer cursor message during an already captured drag no longer unlocks the
+source while physical buttons are held. Source raw motion continues unchanged;
+the default Linux pointer is drawn at the host-reported peer coordinates in the
+existing GUI pass. This is pointer geometry, not video readback or composition.
+Button-up forwards no source absolute move, then the existing two-presentation
+unlock/peer-warp sequence runs. Source restoration echoes remain suppressed until
+an intentional click reacquires that window. Focus loss still releases input.
+Wayland may decline pointer warping; successful request submission alone is not
+proof of native relocation. The wire regression verifies continued relative
+motion and a button-up packet with no source absolute-position packet.
