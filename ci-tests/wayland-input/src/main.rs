@@ -18,8 +18,8 @@ use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle,
     protocol::{
         wl_buffer, wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer,
-        wl_data_source, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
-        wl_surface,
+        wl_data_source, wl_keyboard, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm,
+        wl_shm_pool, wl_surface,
     },
 };
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
@@ -301,6 +301,7 @@ wayland_client::delegate_noop!(Fixture:ignore wl_shm_pool::WlShmPool);
 wayland_client::delegate_noop!(Fixture:ignore wl_surface::WlSurface);
 wayland_client::delegate_noop!(Fixture:ignore wl_buffer::WlBuffer);
 wayland_client::delegate_noop!(Fixture:ignore wl_seat::WlSeat);
+wayland_client::delegate_noop!(Fixture:ignore wl_keyboard::WlKeyboard);
 wayland_client::delegate_noop!(Fixture:ignore wl_data_device_manager::WlDataDeviceManager);
 wayland_client::delegate_noop!(Fixture:ignore wl_data_offer::WlDataOffer);
 wayland_client::delegate_noop!(Fixture:ignore wl_data_source::WlDataSource);
@@ -373,6 +374,7 @@ fn main() -> Result<()> {
             .unwrap()
             .get_data_device(f.seat.as_ref().unwrap(), &q, ());
     let _pointer = f.seat.as_ref().unwrap().get_pointer(&q, ());
+    let _keyboard = f.seat.as_ref().unwrap().get_keyboard(&q, ());
     f.clipboard = Some(_toolkit_device.clone());
     let mut toplevels = Vec::new();
     for index in 0..3 {
