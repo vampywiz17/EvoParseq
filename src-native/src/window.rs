@@ -78,7 +78,6 @@ pub struct Window {
     pressed_buttons: AtomicUsize,
     pressed_keys: Mutex<std::collections::BTreeSet<&'static str>>,
     local_shortcuts: Mutex<crate::input::Shortcuts>,
-    text_decoder: Mutex<crate::input::TextDecoder>,
     cursor_pending: Mutex<crate::cursor::Pending>,
     cursor_posted: AtomicBool,
     cursor: Mutex<crate::cursor::State>,
@@ -210,7 +209,6 @@ impl Window {
             pressed_buttons: AtomicUsize::new(0),
             pressed_keys: Default::default(),
             local_shortcuts: Default::default(),
-            text_decoder: Default::default(),
             cursor_pending: Default::default(),
             cursor_posted: AtomicBool::new(false),
             cursor: Default::default(),
@@ -1552,7 +1550,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                 }
 
                 crate::native_core::session_ui::raise(s);
-                s.push(Event::Size(w, h));
+                s.push(Event::Size);
                 s.apply_input_capture();
             }
             WM_MOVE => {
@@ -1607,7 +1605,6 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                     s.push(Event::Key(false, code, 0));
                 }
                 s.push(Event::Focus(false));
-                *s.text_decoder.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
             }
             WM_CAPTURECHANGED => s.release_buttons(),
             WM_MOUSEMOVE if !s.relative_mouse.load(Ordering::Acquire) => {
@@ -1639,15 +1636,8 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                     return 0;
                 }
             }
-            WM_CHAR => {
-                if let Some(event) = crate::input_windows::text(
-                    wp,
-                    &mut s.text_decoder.lock().unwrap_or_else(|e| e.into_inner()),
-                ) {
-                    s.push(event);
-                }
-                return 0;
-            }
+            // Remote typing follows physical key events and the host layout.
+            WM_CHAR => return 0,
             WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
                 #[cfg(feature = "bud")]
                 {
@@ -1689,7 +1679,7 @@ unsafe extern "system" fn video_surface_proc(
 mod tests {
     use super::*;
     #[test]
-    fn native_input_boundary_keeps_signed_axes_text_and_focus_release_order() {
+    fn native_input_boundary_keeps_signed_axes_and_focus_release_order() {
         struct Close(Arc<Window>);
         impl Drop for Close {
             fn drop(&mut self) {
@@ -1715,14 +1705,11 @@ mod tests {
                 usize::from(-120i16 as u16) << 16,
                 point(-20, 30),
             );
-            SendMessageW(hwnd, WM_CHAR, 0xd83e, 0);
             SendMessageW(hwnd, WM_KEYDOWN, VK_LWIN as usize, 0x5b << 16);
             SendMessageW(hwnd, WM_KEYDOWN, b'A' as usize, 0x1e << 16);
             SendMessageW(hwnd, WM_KEYUP, VK_LWIN as usize, (0x5b << 16) | (1 << 31));
             SendMessageW(hwnd, WM_LBUTTONDOWN, 1, point(120, 120));
             SendMessageW(hwnd, WM_KILLFOCUS, 0, 0);
-            SendMessageW(hwnd, WM_CHAR, 0xdd80, 0); // Pending high surrogate was reset.
-            SendMessageW(hwnd, WM_CHAR, 'ő' as usize, 0);
         }
         let events = window.events.drain();
         assert!(events.iter().any(|e| matches!(e, Event::Motion(-12, 34))));
@@ -1744,8 +1731,6 @@ mod tests {
             .position(|e| matches!(e, Event::Focus(false)))
             .unwrap();
         assert!(button_release < key_release && key_release < focus_loss);
-        assert!(events.iter().any(|e| matches!(e, Event::Text(0x151))));
-        assert!(!events.iter().any(|e| matches!(e, Event::Text(0x1f980))));
         assert!(window.pressed_keys.lock().unwrap().is_empty());
     }
     #[cfg(feature = "bud")]

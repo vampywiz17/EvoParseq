@@ -1,86 +1,73 @@
-EvoParseq v0.9.5-dev.2 - AI upscaling, diagnostics and input fixes
+EvoParseq v0.9.8-dev.3 - Linux multi-display, HEVC Main10 and shared-core cleanup
 
-This Windows prerelease builds on **EvoParseq v0.9.5-dev.1**, with optional GPU
-upscaling, clearer diagnostics and input/recovery fixes for existing, unmodified
-Parsec hosts.
+This development preview builds on **EvoParseq v0.9.8-dev.2**. It includes
+Windows x64, the distribution-signed Android TV APK and the experimental Linux
+x86_64 Flatpak. All three application versions are **0.9.8-dev.3**.
 
-**This is a development preview. ParsecWebTurn v0.9.4 remains the stable release.**
+**This is a development preview. EvoParseq v0.9.7 remains the stable release.**
 
 ## What's new and improved
 
-- **Simultaneous mouse-button holds:** fix capture being reacquired when the
-  stream window already owns it. Holding left and right together no longer
-  generates premature releases. Independent releases, focus-loss cleanup and
-  relative-camera transitions retain their existing behavior.
-- **Input under load:** combine adjacent absolute mouse positions and sum
-  relative camera movement without crossing button, wheel, focus or mode
-  boundaries. Reserve queue capacity for other input and fail safely on
-  unrecoverable overflow instead of leaving held input behind.
-- **Clipboard reliability:** retry a failed Windows clipboard write using only
-  the newest remote text, with bounded retries. Cancel obsolete writes after
-  focus/permission changes or a new local copy.
-- **Organized Connection stats:** group diagnostics into Overview, Network,
-  Video, Audio and Timings tabs with a fixed header and separate scrolling.
-  Add recent two-second video timing averages, expire stale values and show
-  decoded FPS separately from presentation-submission FPS.
-- **Native video stall handling:** supervise decoder/device setup, processing,
-  presentation and teardown. Keep driver-owned resources on their owning worker
-  and prevent accumulating replacement workers. An unrecoverable native timeout
-  requires restarting the app.
-- **DXGI VRR:** add optional variable-refresh presentation to the
-  normal DXGI path used by vendor and Media Foundation decoders. Check tearing
-  support, preserve configuration through resize/precision changes and fall back
-  without adding decoded-frame copies. Physical panel activation depends on the
-  display, driver and Windows settings.
-- **Experimental AI upscaling:** one GPU-dependent selector offers NVIDIA RTX
-  VSR quality levels or Intel VPL AI. Off by default, upscaling only, with normal
-  GPU rendering retained on unsupported configurations. NVIDIA RTX 3060 playback
-  is live-confirmed. Intel support is implemented but **not hardware-validated**;
-  installed runtimes may reject the AI filter.
-- **Optional NVIDIA runtime:** keep the VSR DLL outside the EXE. With explicit
-  consent, download the pinned official NVIDIA RTX Video SDK 1.1.0 payload and
-  verify both archive and DLL SHA-256 hashes. Reuse verified caches and store the
-  runtime under `%LOCALAPPDATA%/EvoParseq/vsr/1.1.0`, without administrator rights.
-  Intel uses its installed driver runtime and downloads no DLL or model.
-- **VSR startup/recovery:** preserve warmed effect state on the same GPU during
-  decoder-reference recovery, reducing repeated setup and black-picture
-  interruptions. Genuine native errors still recreate the decoder; repeated
-  steady-state overload disables the effect rather than growing the queue.
-- **AMD HEVC compatibility:** check coded Main/Main10 dimensions once through
-  D3D11 on the selected GPU before AMF initialization. Unsupported configurations
-  take the existing logged Media Foundation fallback; visible-size AMF setup and
-  normal frame processing remain unchanged.
-- **WebRTC cryptography and maintenance:** update the existing DTLS engine's
-  P-256/P-384 dependencies while preserving the WebRTC/ICE/SCTP integration,
-  certificate checks, record ciphers and transport policy. Update Tokio to
-  1.54.1, webpki-roots to 1.0.11 and serde_json to 1.0.154. Remove unused legacy
-  control callback payloads and unnecessary copies.
+- **Linux GPU selection:** enumerate available Intel, AMD and NVIDIA Vulkan
+  adapters, save the selected adapter identity and restore it on startup.
+  The command-line adapter override remains available.
+- **Linux multi-display:** open additional host-listed outputs over the existing
+  BUD or WebRTC session, with independent Vulkan Video decoders and per-display
+  resolution, fullscreen, input and close controls. Keep a single connection and
+  audio pipeline; closing an additional window closes only that stream.
+- **Native Wayland window dragging:** transfer held-button motion between stream
+  windows using the core Wayland drag-and-drop protocol and the existing shared
+  clipboard data device. Preserve first-click input, final target/position,
+  button release, cancellation and clipboard access. Show native pointer feedback
+  between stream windows without permanently locking the mouse or using XWayland.
+- **Linux HEVC Main10:** decode supported 10-bit HEVC into original P010 images
+  and sample them in the existing Vulkan presentation pass. Fix compressed-video
+  size validation so valid encoded pictures use the bounded video budget rather
+  than the smaller control-message limit.
+- **Linux session controls:** wire the available existing video/audio controls,
+  including fixed/dynamic host FPS, orientation, multichannel/PCM audio requests
+  and Vulkan VRR presentation requests. Keep capability-dependent controls gated.
+  Settings menus now open the settings page from any display, and the volume
+  track uses the same full width as Windows.
+- **Shared core and cleanup:** share desktop session action labels/bounds and
+  statistics tab definitions, and move Android's host frame-rate hint policy into
+  shared Rust. Remove unused statistics scaffolding, the unconsumed Windows
+  character-event/UTF-16 path, redundant resize-event payloads, obsolete cursor
+  state and temporary debugging traces. Vulkan format tests now exercise the
+  production NV12/P010 compatibility predicate.
+- **Virtual-display guidance:** document parsec-vdd as the recommended host-side
+  display manager. It uses Parsec's own VDD; an existing Parsec-installed driver
+  does not need reinstalling. Other compatible host virtual-display drivers also
+  work with already configured extended outputs.
 
 ## Compatibility and validation
 
-**AI upscaling, vendor HEVC, 10-bit HEVC, HEVC 4:4:4 and multichannel audio remain experimental.** For conservative
-operation, use H.264, stereo Opus and Automatic timing with optional effects off.
+Linux remains a Wayland/Vulkan Video preview. The maintainer has confirmed Linux
+playback on Intel, AMD and NVIDIA, including an NVIDIA RTX 3060 on a hybrid
+Nobara system. Linux HEVC playback is confirmed on the tested Intel notebooks;
+Main10 is confirmed on the Intel ARL test system. Cross-display dragging has been
+live-confirmed on Zorin OS 18/GNOME. This does not validate every driver, GPU or
+compositor. The earlier Pop!_OS NVIDIA surface-presentation failure is not a
+universal NVIDIA failure; that particular environment remains unverified.
 
-AI upscaling is **GPU processing, not the application's Zero copy mode**. It
-adds GPU resources/work and an output copy, and may increase latency. Intel AI
-currently supports 8-bit SDR normal rendering only; actual runtime support is
-required. VRR application flags do not prove physical variable-refresh scanout.
-10-bit output remains SDR, not HDR. No universal performance improvement is claimed.
+Linux output is **SDR**, including Main10. Its YUV-to-RGB presentation pass is
+GPU processing, not the application's strict Zero copy mode. Linux 4:4:4,
+Windows-only AI upscaling and unsupported rendering paths remain disabled.
+Requesting Vulkan VRR does not prove physical variable-refresh scanout or recover
+host capture cadence. No host protocol timing reconstruction is implemented.
 
-Existing host permissions, HID primary-display restrictions and codec/driver
-requirements still apply. The DTLS upgrade does not replace the separate BUD
-cryptography dependency chain. See README for the full compatibility limits.
+Multi-display uses existing host-reported extended outputs (up to three streams
+in total). It does not remotely create VDD devices or change host account/driver
+permissions. Normal and HID input retain their existing eligibility restrictions.
 
 ## Updating
 
-Close the client and extract **EvoParseq-v0.9.5-dev.2-win64.zip**. Keep your
-`settings.json` under the same Windows account; native encrypted remembered
-sessions and compatible settings are retained. Protected credentials are not
-portable between machines or Windows accounts.
+Windows: close the client and extract **EvoParseq-v0.9.8-dev.3-win64.zip**.
+The legacy **ParsecWebTurn-v0.9.8-dev.3-win64.zip** contains the same executable
+under its previous name. Neither ZIP contains user settings.
 
-**ParsecWebTurn-v0.9.5-dev.2-win64.zip** contains the same executable under the
-legacy name for existing shortcuts. Both ZIPs exclude settings.json; the NVIDIA
-runtime is not bundled. Run only one client and keep a backup while testing.
+Android TV: install the signed **EvoParseq-TV.apk**, or choose the prerelease
+channel in Settings > Updates. Its distribution signing identity is unchanged.
 
-This is a **Windows x64 prerelease**, installed manually. The main branch and
-stable ParsecWebTurn v0.9.4 remain unchanged.
+Linux: install **EvoParseq-Linux-v0.9.8-dev.3-x86_64.flatpak**. The application ID
+and settings directory are unchanged; the saved GPU selection is retained.

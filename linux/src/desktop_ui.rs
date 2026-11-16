@@ -619,11 +619,11 @@ impl Desktop {
             .color(color(app_style::SETTINGS_ACCENT)),
         );
         ui.horizontal(|ui| {
-            for (i, tab) in f::STATS_TABS.iter().enumerate() {
+            for (i, tab) in crate::stats_view::Tab::ALL.iter().enumerate() {
                 if ui
                     .add_sized(
                         [124., 34.],
-                        egui::Button::new(*tab).selected(i == self.ui_state.stats_tab),
+                        egui::Button::new(tab.caption()).selected(i == self.ui_state.stats_tab),
                     )
                     .clicked()
                 {

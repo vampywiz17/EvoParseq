@@ -278,9 +278,6 @@ pub fn scroll(message: u32, wp: WPARAM) -> Option<Event> {
         _ => None,
     }
 }
-pub fn text(wp: WPARAM, decoder: &mut crate::input::TextDecoder) -> Option<Event> {
-    decoder.push(wp as u16).map(|ch| Event::Text(ch as u32))
-}
 pub fn raw_motion(mouse: &RAWMOUSE, relative: bool) -> Option<Event> {
     (relative && mouse.usFlags & MOUSE_MOVE_ABSOLUTE == 0)
         .then_some(Event::RelativeMotion(mouse.lLastX, mouse.lLastY))
@@ -482,25 +479,6 @@ mod tests {
             ..Default::default()
         };
         assert!(raw_motion(&absolute, true).is_none());
-    }
-    #[test]
-    fn character_adapter_preserves_utf16_and_filters_control_duplicates() {
-        let mut decoder = crate::input::TextDecoder::default();
-        assert!(text(0xd83e, &mut decoder).is_none());
-        assert!(matches!(
-            text(0xdd80, &mut decoder),
-            Some(Event::Text(0x1f980))
-        ));
-        assert!(matches!(
-            text('ő' as usize, &mut decoder),
-            Some(Event::Text(0x151))
-        ));
-        for control in [0, 9, 13, 22] {
-            assert!(text(control, &mut decoder).is_none());
-        }
-        assert!(text(0xd83e, &mut decoder).is_none());
-        decoder = Default::default(); // The window resets this at focus loss.
-        assert!(text(0xdd80, &mut decoder).is_none());
     }
     #[test]
     fn keys_preserve_physical_position_and_navigation() {

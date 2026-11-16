@@ -11,8 +11,8 @@ android {
         applicationId = "app.evoparseq.tv"
         minSdk = 29
         targetSdk = 36
-        versionCode = 33
-        versionName = "0.9.8-dev.2"
+        versionCode = 34
+        versionName = "0.9.8-dev.3"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
     signingConfigs {

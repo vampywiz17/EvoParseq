@@ -30,9 +30,9 @@ Parsec, Unity or lowlat.** A Parsec account and a compatible host are required.
 The latest stable Windows/Android release is
 [**EvoParseq v0.9.7**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.7)
 on `main`. The current dev release,
-[**v0.9.8-dev.2**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8-dev.2),
+[**v0.9.8-dev.3**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8-dev.3),
 includes Windows ZIPs, the signed Android TV APK and the experimental Linux Flatpak.
-All three report version **0.9.8-dev.2**; development continues here on `dev`.
+All three report version **0.9.8-dev.3**; development continues here on `dev`.
 Linux development artifacts are also available from successful
 [dev Linux CI runs](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Adev).
 Windows previews are installed manually; signed Android builds can check the

@@ -62,16 +62,18 @@ pub fn original_surfaces(
         distinct: !decode.contains(vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE),
     })
 }
-pub fn original_nv12(format: &vk::VideoFormatPropertiesKHR<'_>) -> bool {
-    nv12(format)
-        && format
-            .image_create_flags
-            .contains(vk::ImageCreateFlags::MUTABLE_FORMAT)
-}
-fn nv12(format: &vk::VideoFormatPropertiesKHR<'_>) -> bool {
-    format.format == vk::Format::G8_B8R8_2PLANE_420_UNORM
+fn compatible_format(
+    format: &vk::VideoFormatPropertiesKHR<'_>,
+    pixel: vk::Format,
+    sampled: bool,
+) -> bool {
+    format.format == pixel
         && format.image_type == vk::ImageType::TYPE_2D
         && format.image_tiling == vk::ImageTiling::OPTIMAL
+        && (!sampled
+            || format
+                .image_create_flags
+                .contains(vk::ImageCreateFlags::MUTABLE_FORMAT))
 }
 pub unsafe fn validate_formats(
     video: &ash::khr::video_queue::Instance,
@@ -84,22 +86,17 @@ pub unsafe fn validate_formats(
     } else {
         vk::Format::G8_B8R8_2PLANE_420_UNORM
     };
-    let valid = |f: &vk::VideoFormatPropertiesKHR<'_>| {
-        f.format == pixel
-            && f.image_type == vk::ImageType::TYPE_2D
-            && f.image_tiling == vk::ImageTiling::OPTIMAL
-    };
     let output = unsafe { formats(video, gpu, profile, surfaces.output_usage())? };
     anyhow::ensure!(
-        output.iter().any(|f| valid(f)
-            && f.image_create_flags
-                .contains(vk::ImageCreateFlags::MUTABLE_FORMAT)),
+        output.iter().any(|f| compatible_format(f, pixel, true)),
         "Decode output requires sampleable mutable 2D optimal-tiling surfaces"
     );
     if surfaces.distinct {
         let references = unsafe { formats(video, gpu, profile, surfaces.reference_usage())? };
         anyhow::ensure!(
-            references.iter().any(valid),
+            references
+                .iter()
+                .any(|f| compatible_format(f, pixel, false)),
             "Decode reference surfaces are unavailable"
         );
     }
@@ -207,13 +204,27 @@ mod tests {
             .is_err()
         );
         assert!(original_surfaces(vk::VideoCapabilityFlagsKHR::empty(), 1, 0, both).is_err());
-        let mut format = vk::VideoFormatPropertiesKHR::default()
-            .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-            .image_type(vk::ImageType::TYPE_2D)
-            .image_tiling(vk::ImageTiling::OPTIMAL)
-            .image_create_flags(vk::ImageCreateFlags::MUTABLE_FORMAT);
-        assert!(original_nv12(&format));
-        format.image_create_flags = vk::ImageCreateFlags::empty();
-        assert!(!original_nv12(&format));
+        for pixel in [
+            vk::Format::G8_B8R8_2PLANE_420_UNORM,
+            vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16,
+        ] {
+            let mut format = vk::VideoFormatPropertiesKHR::default()
+                .format(pixel)
+                .image_type(vk::ImageType::TYPE_2D)
+                .image_tiling(vk::ImageTiling::OPTIMAL)
+                .image_create_flags(vk::ImageCreateFlags::MUTABLE_FORMAT);
+            assert!(compatible_format(&format, pixel, true));
+            format.image_create_flags = vk::ImageCreateFlags::empty();
+            assert!(!compatible_format(&format, pixel, true));
+            assert!(compatible_format(&format, pixel, false));
+            format.format = vk::Format::R8_UNORM;
+            assert!(!compatible_format(&format, pixel, false));
+            format.format = pixel;
+            format.image_tiling = vk::ImageTiling::LINEAR;
+            assert!(!compatible_format(&format, pixel, false));
+            format.image_tiling = vk::ImageTiling::OPTIMAL;
+            format.image_type = vk::ImageType::TYPE_3D;
+            assert!(!compatible_format(&format, pixel, false));
+        }
     }
 }

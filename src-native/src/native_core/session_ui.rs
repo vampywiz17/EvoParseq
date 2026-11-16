@@ -1024,20 +1024,14 @@ pub unsafe fn toggle(
         0,
         [24, 790, 370, 40],
     );
-    for (id, label, x, y, w) in [
-        (SETTINGS, "Settings", 24, 838, 178),
-        (APPLY, "Apply", 214, 838, 178),
-        (
-            DISCONNECT,
-            crate::app_style::session::DISCONNECT,
-            crate::app_style::session::DISCONNECT_RECT[0],
-            crate::app_style::session::DISCONNECT_RECT[1],
-            crate::app_style::session::DISCONNECT_RECT[2],
-        ),
-        (CLOSE, "Close", 214, 888, 178),
-        (HIDE_BUTTON, "Hide button", 24, 938, 178),
-        (SECURE_ATTENTION, "Send Ctrl+Alt+Del", 214, 938, 178),
-    ] {
+    for ((label, rect), id) in crate::app_style::forms::SESSION_ACTIONS.into_iter().zip([
+        SETTINGS,
+        APPLY,
+        DISCONNECT,
+        CLOSE,
+        HIDE_BUTTON,
+        SECURE_ATTENTION,
+    ]) {
         control(
             hwnd,
             p,
@@ -1045,7 +1039,7 @@ pub unsafe fn toggle(
             label,
             id,
             BS_OWNERDRAW as u32 | WS_TABSTOP,
-            [x, y, w, 36],
+            rect,
         );
     }
     ShowWindow(hwnd, SW_SHOW);

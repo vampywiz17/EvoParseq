@@ -520,7 +520,7 @@ pub(super) fn run(
                 local.observed_fullscreen(*active);
                 let _ = manager.update_native(|p| p.video.fullscreen = *active);
             }
-            if matches!(event, Event::Size(..))
+            if matches!(event, Event::Size)
                 && established
                 && local.video.resolution == profile::Resolution::Client
             {

@@ -215,7 +215,7 @@ mod tests {
         queue.push(Event::RelativeMotion(-4, 5));
         queue.push(Event::RelativeMode(false));
         queue.push(Event::Motion(10, 20));
-        queue.push(Event::Size(1920, 1080));
+        queue.push(Event::Size);
         queue.push(Event::Motion(30, 40));
         queue.push(Event::Focus(false));
         queue.push(Event::RelativeMotion(1, 1));
@@ -229,7 +229,7 @@ mod tests {
         assert!(matches!(events[2], Event::RelativeMotion(-4, 5)));
         assert!(matches!(events[3], Event::RelativeMode(false)));
         assert!(matches!(events[4], Event::Motion(10, 20)));
-        assert!(matches!(events[5], Event::Size(1920, 1080)));
+        assert!(matches!(events[5], Event::Size));
         assert!(matches!(events[6], Event::Motion(30, 40)));
         assert!(matches!(events[7], Event::Focus(false)));
         assert!(matches!(events[8], Event::RelativeMotion(1, 1)));
