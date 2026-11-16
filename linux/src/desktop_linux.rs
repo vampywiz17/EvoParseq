@@ -78,14 +78,17 @@ impl DesktopInput {
         }
     }
     pub fn cursor(&mut self, ctx: &egui::Context, playback: &Playback) {
+        let previous = (self.grabbed, self.confined);
+        let native_drag = playback
+            .native_drag
+            .load(std::sync::atomic::Ordering::Acquire);
+        // The compositor must be able to cross surfaces from the first held
+        // press through post-drop hover, even with mouse immersive mode enabled.
+        let free_pointer = native_drag || self.drag_candidate.is_some() || self.transferred;
         let grab = self.enabled
             && playback.input_active()
             && playback.capture()
-            && !playback
-                .native_drag
-                .load(std::sync::atomic::Ordering::Acquire)
-            && self.drag_candidate.is_none()
-            && !self.transferred
+            && !free_pointer
             && ctx.input(|i| i.focused);
         if grab && self.unlock_after_present {
             self.unlock_after_present = false;
@@ -135,7 +138,9 @@ impl DesktopInput {
             }));
         }
         let confined = self.enabled
+            && playback.input_active()
             && !grab
+            && !free_pointer
             && ctx.input(|i| i.focused)
             && matches!(
                 playback
@@ -156,12 +161,19 @@ impl DesktopInput {
         // Keep None while locked, but let ordinary UI hover choose its cursor.
         // Repeated native visibility commands would overwrite Wayland CSD resize
         // cursors even though the capture state has not changed.
-        if grab
-            || playback
-                .native_drag
-                .load(std::sync::atomic::Ordering::Acquire)
-        {
+        if grab || native_drag {
             ctx.set_cursor_icon(egui::CursorIcon::None);
+        }
+        if previous != (self.grabbed, self.confined) {
+            crate::event_log::record(
+                "INFO",
+                "pointer_constraint_requested",
+                serde_json::json!({
+                    "stream":playback.stream(),
+                    "mode": if self.grabbed {"locked"} else if self.confined {"confined"} else {"none"},
+                    "native_drag":native_drag,
+                }),
+            );
         }
     }
     pub fn restore_cursor(ctx: &egui::Context) {
@@ -572,6 +584,7 @@ mod immersive_tests {
     fn linux_mouse_immersive_confines_without_inventing_relative_camera_deltas() {
         let ctx = egui::Context::default();
         let playback = Playback::new(ctx.clone());
+        playback.activate_input();
         playback
             .immersive
             .store(3, std::sync::atomic::Ordering::Release);
@@ -590,6 +603,32 @@ mod immersive_tests {
                     egui::ViewportCommand::CursorGrab(egui::CursorGrab::Confined)
                 ))
         );
+        playback.set_input_ready(true);
+        input.video = Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.)));
+        let button = |pressed| Event::PointerButton {
+            pos: egui::pos2(300., 200.),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let mut raw = egui::RawInput::default();
+        raw.events.push(button(true));
+        input.events(&ctx, &mut raw, &playback);
+        let dragging = ctx.run(Default::default(), |ctx| input.cursor(ctx, &playback));
+        assert!(!input.grabbed && !input.confined);
+        assert!(
+            dragging.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|c| matches!(c, egui::ViewportCommand::CursorGrab(egui::CursorGrab::None)))
+        );
+        raw.events = vec![button(false)];
+        input.events(&ctx, &mut raw, &playback);
+        let _ = ctx.run(Default::default(), |ctx| input.cursor(ctx, &playback));
+        assert!(
+            input.confined && !input.grabbed,
+            "ordinary click retains explicit immersive policy"
+        );
     }
 }
 
@@ -604,15 +643,25 @@ mod native_drag_tests {
         playback.activate_input();
         playback.host_cursor(true, 20, 30);
         playback
+            .immersive
+            .store(3, std::sync::atomic::Ordering::Release);
+        playback
             .native_drag
             .store(true, std::sync::atomic::Ordering::Release);
         let mut adapter = DesktopInput {
             enabled: true,
+            confined: true,
             video: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.))),
             ..Default::default()
         };
         let out = ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &playback));
-        assert!(!adapter.grabbed);
+        assert!(!adapter.grabbed && !adapter.confined);
+        assert!(
+            out.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|c| matches!(c, egui::ViewportCommand::CursorGrab(egui::CursorGrab::None)))
+        );
         assert_eq!(out.platform_output.cursor_icon, egui::CursorIcon::None);
         assert!(
             !out.viewport_output[&egui::ViewportId::ROOT]
@@ -620,7 +669,9 @@ mod native_drag_tests {
                 .iter()
                 .any(|c| matches!(
                     c,
-                    egui::ViewportCommand::CursorGrab(egui::CursorGrab::Locked)
+                    egui::ViewportCommand::CursorGrab(
+                        egui::CursorGrab::Locked | egui::CursorGrab::Confined
+                    )
                 ))
         );
         playback
@@ -634,6 +685,11 @@ mod native_drag_tests {
         raw.events.push(Event::PointerMoved(egui::pos2(100., 80.)));
         adapter.events(&ctx, &mut raw, &playback);
         assert!(adapter.enabled && adapter.transferred);
+        let _ = ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &playback));
+        assert!(
+            !adapter.grabbed && !adapter.confined,
+            "post-drop hover must remain free even if keyboard focus follows later"
+        );
         let mut events = std::collections::VecDeque::new();
         playback.input.take(&mut events).unwrap();
         assert!(events.iter().any(|e| matches!(

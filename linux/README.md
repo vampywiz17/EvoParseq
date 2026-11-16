@@ -507,6 +507,10 @@ Stream windows share one native clipboard service. The drag data device is
 bound only for an active gesture, preventing a later clipboard device from
 swallowing the first drag on Mutter. CI also checks clipboard selection updates
 after dragging; it never reads the user's clipboard.
+Native desktop drags release both relative locks and immersive pointer
+confinement, including the held-press candidate and post-drop destination hover.
+`pointer_constraint_requested` logs constraint changes as requests, not proof of
+compositor activation.
 With event logging enabled, `cursor_mode_changed` records each display's
 relative/hidden/suppressed transitions, without cursor images or coordinates.
 The stock Windows host can composite its pointer into the video while dragging
