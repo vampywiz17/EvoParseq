@@ -142,6 +142,11 @@ impl State {
             clipboard
         });
 
+        #[cfg(all(target_os = "linux", feature = "smithay-clipboard"))]
+        if let Some(drag) = clipboard.lock().unwrap_or_else(|e| e.into_inner()).drag_context() {
+            egui_ctx.data_mut(|d| d.insert_temp(egui::Id::new("native-data-device"), drag));
+        }
+
         let mut slf = Self {
             egui_ctx,
             viewport_id,

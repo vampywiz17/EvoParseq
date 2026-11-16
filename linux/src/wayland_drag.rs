@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex, atomic::Ordering};
 use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle,
     protocol::{
-        wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer, wl_data_source,
-        wl_pointer, wl_registry, wl_seat, wl_shm, wl_surface,
+        wl_compositor, wl_data_device_manager, wl_data_source, wl_pointer, wl_registry, wl_seat,
+        wl_shm, wl_surface,
     },
 };
 use winit::raw_window_handle::{
@@ -42,23 +42,29 @@ struct DragIcon {
 struct State {
     ctx: egui::Context,
     manager: Option<wl_data_device_manager::WlDataDeviceManager>,
-    device: Option<wl_data_device::WlDataDevice>,
+    drag: smithay_clipboard::DragContext,
+    destination: Arc<Mutex<Destination>>,
     seat: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
     focus: Option<wayland_client::backend::ObjectId>,
     enter_serial: Option<u32>,
     press: Option<(u32, wayland_client::backend::ObjectId)>,
-    surfaces: [Option<wl_surface::WlSurface>; crate::display_stream::STREAMS],
-    gesture: Option<Gesture>,
-    offer: Option<wl_data_offer::WlDataOffer>,
+
     compositor: Option<wl_compositor::WlCompositor>,
     shm: Option<wl_shm::WlShm>,
     icon: Option<DragIcon>,
 }
-impl State {
+struct Destination {
+    surfaces: [Option<wl_surface::WlSurface>; crate::display_stream::STREAMS],
+    gesture: Option<Gesture>,
+    image: Option<wayland_cursor::CursorImageBuffer>,
+    zoom: f64,
+    reset: Option<egui::ViewportId>,
+}
+impl Destination {
     fn show_icon(&mut self, visible: bool) {
         let Some(g) = &mut self.gesture else { return };
-        let (Some(surface), Some(icon)) = (&g.icon, &self.icon) else {
+        let (Some(surface), Some(icon)) = (&g.icon, &self.image) else {
             return;
         };
         if g.icon_visible == visible || (g.ended && visible) {
@@ -68,11 +74,11 @@ impl State {
             let (x, y) = if g.icon_positioned {
                 (0, 0)
             } else {
-                let (x, y) = icon.image.hotspot();
+                let (x, y) = icon.hotspot();
                 (-(x as i32), -(y as i32))
             };
-            surface.attach(Some(&icon.image), x, y);
-            let (w, h) = icon.image.dimensions();
+            surface.attach(Some(icon), x, y);
+            let (w, h) = icon.dimensions();
             surface.damage(0, 0, w as i32, h as i32);
             g.icon_positioned = true;
         } else {
@@ -99,7 +105,7 @@ impl State {
             self.end(true);
             return;
         };
-        let zoom = f64::from(self.ctx.zoom_factor());
+        let zoom = self.zoom;
         if let Some(pointer) =
             target.desktop_pointer(egui::pos2((x / zoom) as f32, (y / zoom) as f32), 1)
         {
@@ -155,8 +161,7 @@ impl State {
         } else {
             crate::display_routes::viewport(g.origin.stream())
         };
-        self.ctx
-            .input_mut_for(id, |input| input.pointer = Default::default());
+        self.reset = Some(id);
         crate::event_log::record(
             "INFO",
             "wayland_display_drag_ended",
@@ -164,17 +169,11 @@ impl State {
         );
     }
     fn clear(&mut self) {
-        if let Some(offer) = self.offer.take() {
-            offer.destroy();
-        }
         if let Some(g) = self.gesture.take() {
             g.source.destroy();
             if let Some(icon) = g.icon {
                 icon.destroy();
             }
-        }
-        if let Some(device) = self.device.take() {
-            device.release();
         }
     }
 }
@@ -224,8 +223,8 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
             if c.contains(wl_seat::Capability::Pointer) && s.pointer.is_none() {
                 s.pointer = Some(seat.get_pointer(q, ()));
             } else if !c.contains(wl_seat::Capability::Pointer) {
-                s.end(true);
-                s.clear();
+                s.destination.lock().unwrap().end(true);
+                s.destination.lock().unwrap().clear();
                 s.press = None;
                 s.focus = None;
                 if let Some(p) = s.pointer.take() {
@@ -269,88 +268,14 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
             } => {
                 s.press = None;
                 // A rejected start_drag still delivers ordinary pointer release.
-                if s.gesture.is_some() {
-                    s.end(true);
-                    s.clear();
+                if s.destination.lock().unwrap().gesture.is_some() {
+                    s.destination.lock().unwrap().end(true);
+                    s.destination.lock().unwrap().clear();
                 }
             }
             _ => {}
         }
     }
-}
-impl Dispatch<wl_data_device::WlDataDevice, ()> for State {
-    fn event(
-        s: &mut Self,
-        _: &wl_data_device::WlDataDevice,
-        e: wl_data_device::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        match e {
-            wl_data_device::Event::Enter {
-                serial,
-                surface,
-                x,
-                y,
-                id,
-            } => {
-                if s.gesture.is_none() {
-                    if let Some(offer) = id {
-                        offer.destroy();
-                    }
-                    return;
-                }
-                let target = s
-                    .surfaces
-                    .iter()
-                    .position(|p| p.as_ref().is_some_and(|p| p.id() == surface.id()));
-                s.gesture.as_mut().unwrap().target = target;
-                crate::event_log::record(
-                    "INFO",
-                    "wayland_display_drag_target",
-                    serde_json::json!({"stream":target}),
-                );
-                if let Some(offer) = id {
-                    offer.accept(serial, target.map(|_| MIME.to_owned()));
-                    offer.set_actions(
-                        wl_data_device_manager::DndAction::Move,
-                        wl_data_device_manager::DndAction::Move,
-                    );
-                    s.offer = Some(offer);
-                }
-                s.position(x, y);
-            }
-            wl_data_device::Event::Motion { x, y, .. } => s.position(x, y),
-            wl_data_device::Event::Leave => {
-                if let Some(g) = &mut s.gesture {
-                    crate::event_log::record(
-                        "INFO",
-                        "wayland_display_drag_left",
-                        serde_json::json!({"stream":g.target,"ended":g.ended}),
-                    );
-                    g.target = None;
-                    g.inside_video = false;
-                }
-                s.show_icon(true);
-                if let Some(offer) = s.offer.take() {
-                    offer.destroy();
-                }
-            }
-            wl_data_device::Event::Drop => {
-                s.end(false);
-                if let Some(offer) = s.offer.take() {
-                    offer.finish();
-                    offer.destroy();
-                }
-            }
-            wl_data_device::Event::Selection { id: Some(offer) } => offer.destroy(),
-            _ => {}
-        }
-    }
-    wayland_client::event_created_child!(State, wl_data_device::WlDataDevice, [
-        0 => (wl_data_offer::WlDataOffer, ())
-    ]);
 }
 impl Dispatch<wl_data_source::WlDataSource, ()> for State {
     fn event(
@@ -361,18 +286,25 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if !s.gesture.as_ref().is_some_and(|g| g.source == *source) {
+        if !s
+            .destination
+            .lock()
+            .unwrap()
+            .gesture
+            .as_ref()
+            .is_some_and(|g| g.source == *source)
+        {
             return;
         }
         match e {
-            wl_data_source::Event::DndDropPerformed => s.end(false),
+            wl_data_source::Event::DndDropPerformed => s.destination.lock().unwrap().end(false),
             wl_data_source::Event::Cancelled => {
-                s.end(true);
-                s.clear();
+                s.destination.lock().unwrap().end(true);
+                s.destination.lock().unwrap().clear();
             }
             wl_data_source::Event::DndFinished => {
-                s.end(false);
-                s.clear();
+                s.destination.lock().unwrap().end(false);
+                s.destination.lock().unwrap().clear();
             }
             // No file, clipboard or host data is offered by this private gesture.
             // Dropping the Send event closes its fd without disclosing any data.
@@ -381,7 +313,6 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
     }
 }
 wayland_client::delegate_noop!(State:ignore wl_data_device_manager::WlDataDeviceManager);
-wayland_client::delegate_noop!(State:ignore wl_data_offer::WlDataOffer);
 wayland_client::delegate_noop!(State:ignore wl_compositor::WlCompositor);
 wayland_client::delegate_noop!(State:ignore wl_shm::WlShm);
 wayland_client::delegate_noop!(State:ignore wl_surface::WlSurface);
@@ -404,7 +335,13 @@ impl Drag {
         let backend = unsafe {
             wayland_client::backend::Backend::from_foreign_display(display.display.as_ptr().cast())
         };
-        let mut result = Self::connect(Connection::from_backend(backend), ctx.clone())?;
+        let data_device = ctx
+            .data(|d| {
+                d.get_temp::<smithay_clipboard::DragContext>(egui::Id::new("native-data-device"))
+            })
+            .context("Shared Wayland data device unavailable")?;
+        let mut result =
+            Self::connect(Connection::from_backend(backend), ctx.clone(), data_device)?;
         result.surface(0, window)?;
         let result = Arc::new(Mutex::new(result));
         let weak = Arc::downgrade(&result);
@@ -429,21 +366,29 @@ impl Drag {
         });
         Ok(result)
     }
-    pub(crate) fn connect(connection: Connection, ctx: egui::Context) -> Result<Self> {
+    pub(crate) fn connect(
+        connection: Connection,
+        ctx: egui::Context,
+        drag: smithay_clipboard::DragContext,
+    ) -> Result<Self> {
         let mut queue = connection.new_event_queue();
         let registry = connection.display().get_registry(&queue.handle(), ());
         let mut state = State {
-            ctx,
+            ctx: ctx.clone(),
             manager: None,
-            device: None,
+            drag: drag.clone(),
+            destination: Arc::new(Mutex::new(Destination {
+                surfaces: Default::default(),
+                gesture: None,
+                image: None,
+                zoom: f64::from(ctx.zoom_factor()),
+                reset: None,
+            })),
             seat: None,
             pointer: None,
             focus: None,
             enter_serial: None,
             press: None,
-            surfaces: Default::default(),
-            gesture: None,
-            offer: None,
             compositor: None,
             shm: None,
             icon: None,
@@ -473,6 +418,56 @@ impl Drag {
                 )
             })
             .ok();
+        state.destination.lock().unwrap().image = state.icon.as_ref().map(|i| i.image.clone());
+        let weak = Arc::downgrade(&state.destination);
+        drag.set_handler(
+            MIME.to_owned(),
+            Arc::new(move |event| {
+                let Some(shared) = weak.upgrade() else {
+                    return false;
+                };
+                let mut d = shared.lock().unwrap();
+                if !d.gesture.as_ref().is_some_and(|g| !g.ended) {
+                    return false;
+                }
+                match event {
+                    smithay_clipboard::DragEvent::Enter { surface, x, y } => {
+                        let target = d
+                            .surfaces
+                            .iter()
+                            .position(|s| s.as_ref().is_some_and(|s| s.id() == surface.id()));
+                        d.gesture.as_mut().unwrap().target = target;
+                        crate::event_log::record(
+                            "INFO",
+                            "wayland_display_drag_target",
+                            serde_json::json!({"stream":target}),
+                        );
+                        d.position(x, y);
+                        target.is_some()
+                    }
+                    smithay_clipboard::DragEvent::Motion { x, y } => {
+                        d.position(x, y);
+                        true
+                    }
+                    smithay_clipboard::DragEvent::Leave => {
+                        let g = d.gesture.as_mut().unwrap();
+                        crate::event_log::record(
+                            "INFO",
+                            "wayland_display_drag_left",
+                            serde_json::json!({"stream":g.target,"ended":g.ended}),
+                        );
+                        g.target = None;
+                        g.inside_video = false;
+                        d.show_icon(true);
+                        true
+                    }
+                    smithay_clipboard::DragEvent::Drop => {
+                        d.end(false);
+                        true
+                    }
+                }
+            }),
+        );
         state.manager.as_ref().context("DnD v3 unavailable")?;
         state.seat.as_ref().context("Seat unavailable")?;
         queue.roundtrip(&mut state)?;
@@ -494,35 +489,46 @@ impl Drag {
             )
         }
         .context("Surface unavailable")?;
-        if !self.state.surfaces[stream]
+        if !self.state.destination.lock().unwrap().surfaces[stream]
             .as_ref()
             .is_some_and(|s| s.id() == id)
         {
-            self.state.surfaces[stream] =
+            self.state.destination.lock().unwrap().surfaces[stream] =
                 Some(wl_surface::WlSurface::from_id(&self.connection, id)?);
         }
         Ok(())
     }
     pub fn dispatch(&mut self) {
+        let zoom = f64::from(self.state.ctx.zoom_factor());
         if self.queue.dispatch_pending(&mut self.state).is_err() {
-            self.state.end(true);
-            self.state.clear();
+            let mut d = self.state.destination.lock().unwrap();
+            d.end(true);
+            d.clear();
         }
-        if self
-            .state
-            .gesture
-            .as_ref()
-            .is_some_and(|g| !g.ended && (!g.origin.input_active() || g.origin.stopped()))
-        {
-            self.state.end(true);
-            self.state.clear();
+        let reset = {
+            let mut d = self.state.destination.lock().unwrap();
+            d.zoom = zoom;
+            if d.gesture
+                .as_ref()
+                .is_some_and(|g| !g.ended && (!g.origin.input_active() || g.origin.stopped()))
+            {
+                d.end(true);
+                d.clear();
+            }
+            d.reset.take()
+        };
+        if let Some(id) = reset {
+            self.state
+                .ctx
+                .input_mut_for(id, |input| input.pointer = Default::default());
         }
         let _ = self.connection.flush();
     }
     pub(crate) fn begin(&mut self, origin: &Arc<Playback>, point: egui::Pos2) -> Result<()> {
         self.dispatch();
+        let mut destination = self.state.destination.lock().unwrap();
         anyhow::ensure!(
-            self.state.gesture.is_none() && origin.owns_input() && origin.input_active(),
+            destination.gesture.is_none() && origin.owns_input() && origin.input_active(),
             "Not a desktop drag"
         );
         let root = origin.primary().context("No primary display")?;
@@ -531,8 +537,8 @@ impl Drag {
             "No peer display"
         );
         let pointer = origin.desktop_pointer(point, 1).context("Outside video")?;
-        let surface = self.state.surfaces[origin.stream()]
-            .as_ref()
+        let surface = destination.surfaces[origin.stream()]
+            .clone()
             .context("Native surface unavailable")?;
         let (serial, id) = self.state.press.clone().context("No held button")?;
         anyhow::ensure!(id == surface.id(), "Button belongs to another surface");
@@ -554,14 +560,11 @@ impl Drag {
             .as_ref()
             .unwrap()
             .create_data_source(&self.queue.handle(), ());
-        // Bind only for this gesture, after click-to-focus. Mutter selects the
-        // latest data device; a later clipboard binding can otherwise swallow
-        // the first drag. Leave the shared clipboard's focused device intact.
-        self.state.device = Some(self.state.manager.as_ref().unwrap().get_data_device(
-            self.state.seat.as_ref().unwrap(),
-            &self.queue.handle(),
-            (),
-        ));
+        let device = self
+            .state
+            .drag
+            .device()
+            .context("Shared clipboard seat unavailable")?;
         source.offer(MIME.to_owned());
         source.set_actions(wl_data_device_manager::DndAction::Move);
         origin.native_drag.store(true, Ordering::Release);
@@ -576,13 +579,8 @@ impl Drag {
             pointer,
             phase: DragPhase::Begin,
         });
-        self.state.device.as_ref().unwrap().start_drag(
-            Some(&source),
-            surface,
-            icon.as_ref(),
-            serial,
-        );
-        self.state.gesture = Some(Gesture {
+        device.start_drag(Some(&source), &surface, icon.as_ref(), serial);
+        destination.gesture = Some(Gesture {
             origin: origin.clone(),
             root,
             source,
@@ -595,8 +593,8 @@ impl Drag {
             icon_positioned: false,
         });
         if let Err(error) = self.connection.flush() {
-            self.state.end(true);
-            self.state.clear();
+            destination.end(true);
+            destination.clear();
             return Err(error.into());
         }
         crate::event_log::record(
@@ -619,15 +617,15 @@ pub fn begin(ctx: &egui::Context, origin: &Arc<Playback>, point: egui::Pos2) -> 
 }
 impl Drop for Drag {
     fn drop(&mut self) {
-        self.state.end(true);
-        self.state.clear();
+        {
+            let mut d = self.state.destination.lock().unwrap();
+            d.end(true);
+            d.clear();
+        }
         if let Some(p) = self.state.pointer.take() {
             if p.version() >= 3 {
                 p.release();
             }
-        }
-        if let Some(d) = self.state.device.take() {
-            d.release();
         }
         if let Some(s) = self.state.seat.take() {
             if s.version() >= 5 {

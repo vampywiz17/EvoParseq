@@ -373,11 +373,20 @@ fn main() -> Result<()> {
     let mut driver = Driver::new()?;
     driver.command(serde_json::json!(["escape"]))?;
     queue.roundtrip(&mut f)?;
-    let _toolkit_device =
-        f.manager
-            .as_ref()
-            .unwrap()
-            .get_data_device(f.seat.as_ref().unwrap(), &q, ());
+    let clipboard =
+        unsafe { smithay_clipboard::Clipboard::new(connection.backend().display_ptr().cast()) };
+    let shared = clipboard.drag_context();
+    for _ in 0..50 {
+        if shared.device().is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        queue.roundtrip(&mut f)?;
+    }
+    anyhow::ensure!(
+        shared.device().is_some(),
+        "clipboard data device unavailable"
+    );
     let _pointer = f.seat.as_ref().unwrap().get_pointer(&q, ());
     let _keyboard = f.seat.as_ref().unwrap().get_keyboard(&q, ());
     f.clipboard = Some(_toolkit_device.clone());
@@ -412,12 +421,13 @@ fn main() -> Result<()> {
         std::thread::sleep(std::time::Duration::from_millis(30));
     }
     anyhow::ensure!(f.configured >= 2, "surfaces were not mapped");
-    let mut drag = wayland_drag::Drag::connect(connection.clone(), egui::Context::default())?;
+    let mut drag =
+        wayland_drag::Drag::connect(connection.clone(), egui::Context::default(), shared)?;
     for i in 0..2 {
         drag.surface(i, &SurfaceHandle(f.surfaces[i].clone()))?;
     }
     let playback = playback::Playback::pair();
-    let mut selections = Vec::new();
+
     // All movement is generated inside the disposable headless compositor.
     let mut pump = |drag: &mut wayland_drag::Drag, f: &mut Fixture| -> Result<()> {
         for _ in 0..4 {
@@ -428,13 +438,6 @@ fn main() -> Result<()> {
         Ok(())
     };
     for (source, target) in [(0, 1), (1, 0)] {
-        // egui-winit creates a clipboard data device for a newly opened
-        // viewport on the same display. Exercise that late binding too.
-        let _late_toolkit_device =
-            f.manager
-                .as_ref()
-                .unwrap()
-                .get_data_device(f.seat.as_ref().unwrap(), &q, ());
         driver.command(serde_json::json!(["move", -10000., -10000.]))?;
         pump(&mut drag, &mut f)?;
         // Edges may be outside mapped surface input regions. First move inside
@@ -526,20 +529,12 @@ fn main() -> Result<()> {
             f.current == Some(source),
             "post-drop pointer could not freely leave destination"
         );
-        // Rebinding DnD must leave the ordinary clipboard service subscribed.
-        // This source is synthetic; no real clipboard/account data is read.
-        let selected = f.selections;
-        let selection = f.manager.as_ref().unwrap().create_data_source(&q, ());
-        selection.offer("text/plain;charset=utf-8".to_owned());
-        f.clipboard
-            .as_ref()
-            .unwrap()
-            .set_selection(Some(&selection), f.serial);
-        selections.push(selection);
+        // The same real clipboard service remains usable after each direction.
+        clipboard.store("isolated-native-drag-test");
         pump(&mut drag, &mut f)?;
         anyhow::ensure!(
-            f.selections > selected,
-            "clipboard lost selection updates after drag"
+            clipboard.load()? == "isolated-native-drag-test",
+            "clipboard contents lost after drag"
         );
         playback[0].events.lock().unwrap().clear();
     }

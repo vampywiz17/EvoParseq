@@ -53,6 +53,11 @@ impl Clipboard {
         }
     }
 
+    #[cfg(all(target_os = "linux", feature = "smithay-clipboard"))]
+    pub fn drag_context(&self) -> Option<smithay_clipboard::DragContext> {
+        self.smithay.as_ref().map(|c| c.drag_context())
+    }
+
     pub fn get(&mut self) -> Option<String> {
         #[cfg(all(
             any(
