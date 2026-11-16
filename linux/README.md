@@ -93,9 +93,10 @@ Click the video to activate normal remote mouse/keyboard input.
 **Ctrl+Shift+M releases input.** Focus loss, disconnect and queue overload release
 host keys/buttons. Geometry, key framing, button mapping, fractional relative
 motion and the bounded input handoff reuse shared Rust implementations. Host
-cursor flags can request Wayland relative pointer locking. Remote window-drag
-endpoints are restored before unlocking to avoid leaving the cursor at the
-initial drag position.
+cursor flags can request Wayland relative pointer locking for camera input.
+Desktop drags between stream windows use native Wayland drag-and-drop; the
+compositor transfers the pointer to the destination without a cross-window warp
+or persistent pointer lock after button-up.
 
 Physical key events preserve ISO/numpad keys and left/right modifiers. The
 host keyboard layout and IME handle them; local IME/text payloads are not sent.
@@ -495,13 +496,14 @@ unverified. Display timing VRR requests
 Vulkan AutoNoVsync with the documented supported-mode fallback. Physical VRR
 remains compositor-, monitor- and driver-controlled and unverified.
 
-Cross-display drags keep relative input captured while the host reports a
-visible cursor on a peer display. The software pointer follows its host-reported
-coordinates after button-up, so subsequent motion and clicks do not return to
-the source window's capture anchor. Native cross-window warping is not required,
-including on GNOME 46. Use Ctrl+Shift+M or Release input to leave capture; focus
-loss also releases it. Returning to the source uses its same-window cursor hint.
-Live verification of this repair on Zorin OS 18 is pending.
+Cross-display desktop drags now use the core Wayland data-device protocol.
+The private drag offer contains no clipboard/file/session data. Only our live
+stream surfaces accept it, forwarding absolute motion to the corresponding host
+display. Drop transfers input ownership; cancellation releases held input.
+The previous persistent-capture/software-pointer workaround has been removed.
+An isolated GNOME 46 CI fixture exercises the production adapter in both
+directions, post-drop pointer motion and cancellation before building Flatpak.
+Live validation of this implementation on Zorin OS 18 remains pending.
 
 AI upscaling stays disabled on Linux, as requested. Application Zero copy stays
 disabled because the presentation pass performs YUV-to-RGB conversion. The

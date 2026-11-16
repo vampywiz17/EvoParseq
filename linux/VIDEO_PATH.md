@@ -409,11 +409,10 @@ GPUs remains unverified. Display timing VRR requests
 Vulkan AutoNoVsync with the documented supported-mode fallback. Physical VRR
 remains compositor-, monitor- and driver-controlled and unverified.
 
-Cross-display drags retain the existing captured relative-input path while the
-host reports a visible cursor on a peer display. A software pointer follows the
-host's peer coordinates, including after button-up. Returning to the source uses
-its same-window locked-pointer hint. Ctrl+Shift+M or focus loss releases capture.
-No cross-window pointer-warp protocol or input-injection service is required.
+Cross-display desktop drags use native Wayland data-device drag-and-drop.
+This replaces the persistent pointer-capture/software-pointer workaround.
+No cross-window pointer-warp protocol or production input-injection service is
+required; genuine relative camera input retains its existing capture path.
 
 AI upscaling stays disabled on Linux, as requested. Application Zero copy stays
 disabled because the presentation pass performs YUV-to-RGB conversion. The
@@ -440,22 +439,24 @@ contained peer-release events without warp requests. GNOME 46 predates the
 pointer-warp extension. The failed optional adapter and vendor dispatch hook
 have been removed rather than extending that dependency.
 
-A visible peer cursor now leaves the source's host-requested capture intact.
-Button-up sends only the release packet; later motion stays raw-relative and a
-new click cannot inject the source window's absolute anchor. The existing GUI
-pass keeps drawing the default pointer at the latest visible peer coordinates
-after the drop. This is cursor geometry, with no video readback or extra pass.
-Hidden/suppressed host cursors still remove the peer pointer. The source's own
-visible cursor message ends capture through the existing same-window hint.
-Focus loss, Ctrl+Shift+M, Release input and peer closure release local capture;
-while operating the peer, use Ctrl+Shift+M to return to local UI. Keyboard focus
-remains on the captured source window. No new thread, timer, queue, dependency
-or synthetic host capture flag is introduced. Windows/Android runtime is unchanged.
+The replacement uses core `wl_data_device.start_drag` with the actual pointer
+press serial and a private data source. Destination enter/motion events identify
+our own surface and its logical position. A single ordered, bounded input inbox
+retains the held button through display changes, then releases it exactly once
+at drop/cancel. A successful drop activates destination input, without keeping
+the source pointer locked. No clipboard or file data is transferred.
 
-The input-adapter regression covers drop, stale absolute motion, subsequent raw
-motion/click, focus loss and peer closure. The wire regression checks the exact
-button-up, post-drop delta and following click packets, with no source absolute
-move, then the host's genuine return-to-source transition. These tests verify
-policy and framing; live Zorin validation of this change is still required.
+The adapter shares the existing Wayland connection and UI loop. Its optional
+egui-winit observer only exposes public native window events/handles. No worker,
+recurring timer, display connection, media copy or production dependency is added.
+Windows/Android runtime and Vulkan Video decoding/presentation remain unchanged.
+
+Wire regressions cover ordered button transitions, the following destination
+click, late source focus loss, cancellation and a closed destination. A separate
+headless Mutter 46 fixture runs the production Wayland adapter on two real
+surfaces, checking both drag directions, free pointer motion after drop and
+Escape cancellation. Its private Mutter D-Bus input driver is confined to the
+disposable CI compositor/session bus; it is not included in Flatpak. Live Zorin
+validation remains necessary after these checks.
 
 Reference: [GNOME Mutter source branches](https://github.com/GNOME/mutter).

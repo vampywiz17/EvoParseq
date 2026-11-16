@@ -434,11 +434,19 @@ fn main() -> Result<()> {
             f.current == Some(target),
             "native pointer did not remain on target"
         );
+        println!(
+            "drop {source}->{target}: surface={:?}, point={:?}, outputs={:?}",
+            f.current,
+            f.point,
+            f.outputs.iter().map(|o| (o.1, o.2)).collect::<Vec<_>>()
+        );
         driver.command(serde_json::json!(["move", 12., 8.]))?;
         pump(&mut drag, &mut f)?;
         anyhow::ensure!(
             f.current == Some(target),
-            "post-drop pointer was captured by source"
+            "post-drop pointer left target {target}: surface={:?}, point={:?}",
+            f.current,
+            f.point
         );
         playback[0].events.lock().unwrap().clear();
     }
