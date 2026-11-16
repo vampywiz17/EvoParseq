@@ -1,5 +1,5 @@
-//! Supported eframe external-event-loop adapter. Only physical key translation
-//! lives here; egui/winit continue to own windowing, pointers and rendering.
+//! Supported eframe external-event-loop adapter. Physical key translation and
+//! pending native drag dispatch live here; egui/winit retain windowing/rendering.
 use crate::{desktop_input::Event as Input, playback::Playback};
 use std::sync::{
     Arc, Mutex,
@@ -49,6 +49,7 @@ pub fn report_framework_errors() {
 
 #[derive(Default)]
 pub struct KeyboardBridge {
+    drag: Mutex<std::sync::Weak<Mutex<crate::wayland_drag::Drag>>>,
     target: Mutex<Option<Arc<Playback>>>,
     session: Mutex<Option<std::sync::Weak<Playback>>>,
     released: AtomicBool,
@@ -56,6 +57,19 @@ pub struct KeyboardBridge {
     paste: Mutex<Option<std::time::Instant>>,
 }
 impl KeyboardBridge {
+    pub fn drag(&self, drag: &Arc<Mutex<crate::wayland_drag::Drag>>) {
+        *self.drag.lock().unwrap_or_else(|e| e.into_inner()) = Arc::downgrade(drag);
+    }
+    fn dispatch_drag(&self) {
+        let drag = self
+            .drag
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .upgrade();
+        if let Some(drag) = drag {
+            drag.lock().unwrap_or_else(|e| e.into_inner()).dispatch();
+        }
+    }
     pub fn session(&self, playback: &Arc<Playback>) {
         *self.session.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::downgrade(playback));
     }
@@ -261,6 +275,9 @@ impl ApplicationHandler<eframe::UserEvent> for Application<'_> {
         self.inner.device_event(event_loop, device, event);
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // A private-MIME DnD motion need not generate a winit WindowEvent.
+        // Dispatch after winit reads Wayland, even when no video redraw occurs.
+        self.keyboard.dispatch_drag();
         self.inner.about_to_wait(event_loop);
     }
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {

@@ -290,9 +290,6 @@ impl eframe::App for Desktop {
         self.drag.take();
     }
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
-        if let Some(drag) = &self.drag {
-            drag.lock().unwrap_or_else(|e| e.into_inner()).dispatch();
-        }
         if raw.viewport_id != egui::ViewportId::ROOT {
             return;
         }
@@ -640,6 +637,7 @@ fn main() -> anyhow::Result<()> {
                         desktop_input: desktop_linux::DesktopInput::new(keyboard.clone()),
                         shortcuts: wayland_keys::Shortcuts::new(cc).ok(),
                         drag: wayland_drag::Drag::install(&cc.egui_ctx, cc)
+                            .inspect(|drag| keyboard.drag(drag))
                             .map_err(|_| {
                                 event_log::record(
                                     "WARN",
