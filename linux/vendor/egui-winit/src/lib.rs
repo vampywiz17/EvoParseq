@@ -86,7 +86,7 @@ pub struct State {
     any_pointer_button_down: bool,
     current_cursor_icon: Option<egui::CursorIcon>,
 
-    clipboard: clipboard::Clipboard,
+    clipboard: std::sync::Arc<std::sync::Mutex<clipboard::Clipboard>>,
 
     /// If `true`, mouse inputs will be treated as touches.
     /// Useful for debugging touch support in egui.
@@ -125,6 +125,16 @@ impl State {
             focused: false, // winit will tell us when we have focus
             ..Default::default()
         };
+        // One clipboard service per application display, including secondary
+        // viewports. New per-window data devices compete with native DnD on
+        // Mutter and needlessly duplicate clipboard workers.
+        let clipboard = egui_ctx.data_mut(|d| {
+            d.get_temp_mut_or_insert_with(egui::Id::new("native-shared-clipboard"), || {
+                std::sync::Arc::new(std::sync::Mutex::new(clipboard::Clipboard::new(
+                    display_target.display_handle().ok().map(|h| h.as_raw()),
+                )))
+            }).clone()
+        });
 
         let mut slf = Self {
             egui_ctx,
@@ -135,9 +145,7 @@ impl State {
             any_pointer_button_down: false,
             current_cursor_icon: None,
 
-            clipboard: clipboard::Clipboard::new(
-                display_target.display_handle().ok().map(|h| h.as_raw()),
-            ),
+            clipboard,
 
             simulate_touch_screen: false,
             pointer_touch_id: None,
@@ -188,12 +196,12 @@ impl State {
 
     /// Fetches text from the clipboard and returns it.
     pub fn clipboard_text(&mut self) -> Option<String> {
-        self.clipboard.get()
+        self.clipboard.lock().unwrap_or_else(|e| e.into_inner()).get()
     }
 
     /// Places the text onto the clipboard.
     pub fn set_clipboard_text(&mut self, text: String) {
-        self.clipboard.set_text(text);
+        self.clipboard.lock().unwrap_or_else(|e| e.into_inner()).set_text(text);
     }
 
     /// Returns [`false`] or the last value that [`Window::set_ime_allowed()`] was called with, used for debouncing.
@@ -836,7 +844,7 @@ impl State {
                     self.egui_input.events.push(egui::Event::Copy);
                     return;
                 } else if is_paste_command(self.egui_input.modifiers, active_key) {
-                    if let Some(contents) = self.clipboard.get() {
+                    if let Some(contents) = self.clipboard.lock().unwrap_or_else(|e| e.into_inner()).get() {
                         let contents = contents.replace("\r\n", "\n");
                         if !contents.is_empty() {
                             self.egui_input.events.push(egui::Event::Paste(contents));
@@ -909,10 +917,10 @@ impl State {
         for command in commands {
             match command {
                 egui::OutputCommand::CopyText(text) => {
-                    self.clipboard.set_text(text);
+                    self.clipboard.lock().unwrap_or_else(|e| e.into_inner()).set_text(text);
                 }
                 egui::OutputCommand::CopyImage(image) => {
-                    self.clipboard.set_image(&image);
+                    self.clipboard.lock().unwrap_or_else(|e| e.into_inner()).set_image(&image);
                 }
                 egui::OutputCommand::OpenUrl(open_url) => {
                     open_url_in_browser(&open_url.url);

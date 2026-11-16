@@ -17,8 +17,9 @@ use std::{
 use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle,
     protocol::{
-        wl_buffer, wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer, wl_output,
-        wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
+        wl_buffer, wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer,
+        wl_data_source, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
+        wl_surface,
     },
 };
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
@@ -146,6 +147,9 @@ struct Fixture {
     current: Option<usize>,
     point: (f64, f64),
     pressed: bool,
+    serial: u32,
+    clipboard: Option<wl_data_device::WlDataDevice>,
+    selections: usize,
     configured: usize,
 }
 impl Dispatch<wl_registry::WlRegistry, ()> for Fixture {
@@ -253,17 +257,21 @@ impl Dispatch<wl_pointer::WlPointer, ()> for Fixture {
                 ..
             } => s.point = (surface_x, surface_y),
             wl_pointer::Event::Button {
+                serial,
                 state: wayland_client::WEnum::Value(state),
                 ..
-            } => s.pressed = state == wl_pointer::ButtonState::Pressed,
+            } => {
+                s.serial = serial;
+                s.pressed = state == wl_pointer::ButtonState::Pressed;
+            }
             _ => {}
         }
     }
 }
 impl Dispatch<wl_data_device::WlDataDevice, ()> for Fixture {
     fn event(
-        _: &mut Self,
-        _: &wl_data_device::WlDataDevice,
+        s: &mut Self,
+        device: &wl_data_device::WlDataDevice,
         e: wl_data_device::Event,
         _: &(),
         _: &Connection,
@@ -271,6 +279,9 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for Fixture {
     ) {
         // Simulate a toolkit which already has its own data-device resource.
         if let wl_data_device::Event::Selection { id: Some(o) } = e {
+            if s.clipboard.as_ref() == Some(device) {
+                s.selections += 1;
+            }
             o.destroy();
         }
     }
@@ -284,6 +295,7 @@ wayland_client::delegate_noop!(Fixture:ignore wl_buffer::WlBuffer);
 wayland_client::delegate_noop!(Fixture:ignore wl_seat::WlSeat);
 wayland_client::delegate_noop!(Fixture:ignore wl_data_device_manager::WlDataDeviceManager);
 wayland_client::delegate_noop!(Fixture:ignore wl_data_offer::WlDataOffer);
+wayland_client::delegate_noop!(Fixture:ignore wl_data_source::WlDataSource);
 wayland_client::delegate_noop!(Fixture:ignore xdg_toplevel::XdgToplevel);
 
 struct SurfaceHandle(wl_surface::WlSurface);
@@ -353,6 +365,7 @@ fn main() -> Result<()> {
             .unwrap()
             .get_data_device(f.seat.as_ref().unwrap(), &q, ());
     let _pointer = f.seat.as_ref().unwrap().get_pointer(&q, ());
+    f.clipboard = Some(_toolkit_device.clone());
     let mut toplevels = Vec::new();
     for index in 0..2 {
         let surface = f.compositor.as_ref().unwrap().create_surface(&q, ());
@@ -390,6 +403,7 @@ fn main() -> Result<()> {
     }
     let playback = playback::Playback::pair();
     let mut driver = Driver::new()?;
+    let mut selections = Vec::new();
     // All movement is generated inside the disposable headless compositor.
     let mut pump = |drag: &mut wayland_drag::Drag, f: &mut Fixture| -> Result<()> {
         for _ in 0..4 {
@@ -481,6 +495,21 @@ fn main() -> Result<()> {
         anyhow::ensure!(
             f.current == Some(source),
             "post-drop pointer could not freely leave destination"
+        );
+        // Rebinding DnD must leave the ordinary clipboard service subscribed.
+        // This source is synthetic; no real clipboard/account data is read.
+        let selected = f.selections;
+        let selection = f.manager.as_ref().unwrap().create_data_source(&q, ());
+        selection.offer("text/plain;charset=utf-8".to_owned());
+        f.clipboard
+            .as_ref()
+            .unwrap()
+            .set_selection(Some(&selection), f.serial);
+        selections.push(selection);
+        pump(&mut drag, &mut f)?;
+        anyhow::ensure!(
+            f.selections > selected,
+            "clipboard lost selection updates after drag"
         );
         playback[0].events.lock().unwrap().clear();
     }

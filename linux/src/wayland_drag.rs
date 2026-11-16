@@ -110,6 +110,9 @@ impl State {
         if let Some(g) = self.gesture.take() {
             g.source.destroy();
         }
+        if let Some(device) = self.device.take() {
+            device.release();
+        }
     }
 }
 impl Dispatch<wl_registry::WlRegistry, ()> for State {
@@ -365,17 +368,8 @@ impl Drag {
             offer: None,
         };
         queue.roundtrip(&mut state)?;
-        state.device = Some(
-            state
-                .manager
-                .as_ref()
-                .context("DnD v3 unavailable")?
-                .get_data_device(
-                    state.seat.as_ref().context("Seat unavailable")?,
-                    &queue.handle(),
-                    (),
-                ),
-        );
+        state.manager.as_ref().context("DnD v3 unavailable")?;
+        state.seat.as_ref().context("Seat unavailable")?;
         queue.roundtrip(&mut state)?;
         Ok(Self {
             connection,
@@ -455,6 +449,14 @@ impl Drag {
             .as_ref()
             .unwrap()
             .create_data_source(&self.queue.handle(), ());
+        // Bind only for this gesture, after click-to-focus. Mutter selects the
+        // latest data device; a later clipboard binding can otherwise swallow
+        // the first drag. Leave the shared clipboard's focused device intact.
+        self.state.device = Some(self.state.manager.as_ref().unwrap().get_data_device(
+            self.state.seat.as_ref().unwrap(),
+            &self.queue.handle(),
+            (),
+        ));
         source.offer(MIME.to_owned());
         source.set_actions(wl_data_device_manager::DndAction::Move);
         origin.native_drag.store(true, Ordering::Release);
