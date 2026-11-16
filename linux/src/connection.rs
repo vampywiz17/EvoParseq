@@ -879,6 +879,7 @@ impl Input {
                 })?;
         }
         if cancelled || phase == DragPhase::Drop {
+            self.clipboard.revoke();
             self.drag_origin = None;
             let source = if origin == root.stream() {
                 None
@@ -891,6 +892,9 @@ impl Input {
                 source.as_deref()
             };
             if let Some(source) = source {
+                source
+                    .clipboard_allowed
+                    .store(false, std::sync::atomic::Ordering::Release);
                 source.deactivate_input();
                 source
                     .native_drag
@@ -1278,6 +1282,8 @@ mod native_drag_wire_tests {
         root.set_input_geometry((1920, 1080));
         peer.set_input_geometry((1280, 720));
         root.activate_input();
+        root.clipboard_allowed
+            .store(true, std::sync::atomic::Ordering::Release);
         root.push_input(Event::Focus(true));
         let pointer = |x, y, buttons| Pointer {
             x,
@@ -1332,6 +1338,11 @@ mod native_drag_wire_tests {
             .unwrap();
         assert!(cross < up);
         assert!(peer.input_active() && !root.input_active());
+        assert!(
+            !root
+                .clipboard_allowed
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
         assert!(
             peer.drag_activation
                 .load(std::sync::atomic::Ordering::Acquire)
