@@ -862,6 +862,11 @@ impl Input {
         };
         let cancelled = phase == DragPhase::Cancel || target.is_none_or(|p| p.stopped());
         if cancelled {
+            pointer.buttons = 0;
+            pointer.moved = false;
+            pointer.relative = false;
+            self.engine
+                .event(Event::Pointer(pointer), Instant::now(), &mut *send)?;
             self.engine
                 .event(Event::Release, Instant::now(), &mut *send)?;
         } else if let Some(target) = target {
