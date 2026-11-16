@@ -56,7 +56,7 @@ impl DesktopInput {
         self.unlock_after_present = false;
         self.capture_anchor = None;
         self.restored_position = None;
-        playback.take_cursor_restore();
+        playback.deactivate_input();
         self.controls = None;
         self.badge = None;
         Self::restore_cursor(ctx);
@@ -708,6 +708,7 @@ mod peer_cursor_tests {
         raw.events.clear();
         adapter.events(&ctx, &mut raw, &primary);
         assert!(!adapter.enabled);
+        primary.show_peer_cursor(1, 1400, 800);
         assert!(peer.peer_cursor_position().is_none());
         primary.input.take(&mut input).unwrap();
         assert!(matches!(

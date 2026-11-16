@@ -58,6 +58,7 @@ pub struct Playback {
     cursor_restore: Mutex<Option<(usize, i32, i32)>>,
     video_rect: Mutex<Option<eframe::egui::Rect>>,
     cursor_state: AtomicU64,
+    input_active: AtomicBool,
 }
 
 impl Playback {
@@ -108,6 +109,7 @@ impl Playback {
             cursor_restore: Mutex::new(None),
             video_rect: Mutex::new(None),
             cursor_state: AtomicU64::new(0),
+            input_active: AtomicBool::new(false),
         })
     }
     pub fn set_hevc(&self, enabled: bool) {
@@ -147,9 +149,15 @@ impl Playback {
         self.displays.get().map_or(0, |d| d.1)
     }
     pub fn activate_input(&self) {
+        self.input_active.store(true, Ordering::Release);
         if let Some(displays) = self.displays() {
             displays.owner.store(self.stream() + 1, Ordering::Release);
         }
+    }
+    pub fn deactivate_input(&self) {
+        self.input_active.store(false, Ordering::Release);
+        self.take_cursor_restore();
+        self.repaint();
     }
     pub fn owns_input(&self) -> bool {
         self.displays()
@@ -319,7 +327,8 @@ impl Playback {
         }
     }
     pub fn show_peer_cursor(&self, stream: usize, x: i32, y: i32) {
-        if stream == self.stream() || !self.capture() {
+        if stream == self.stream() || !self.capture() || !self.input_active.load(Ordering::Acquire)
+        {
             return;
         }
         let previous = self
@@ -364,7 +373,7 @@ impl Playback {
         } else {
             displays.get(source)?.playback.clone()
         };
-        if !source.capture() || source.stopped() {
+        if !source.capture() || source.stopped() || !source.input_active.load(Ordering::Acquire) {
             return None;
         }
         let (stream, x, y) = source.peer_cursor()?;
