@@ -17,8 +17,7 @@ use std::{
 use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle,
     protocol::{
-        wl_buffer, wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer,
-        wl_data_source, wl_keyboard, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm,
+        wl_buffer, wl_compositor, wl_keyboard, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm,
         wl_shm_pool, wl_surface,
     },
 };
@@ -148,7 +147,6 @@ struct Fixture {
     shm: Option<wl_shm::WlShm>,
     wm: Option<xdg_wm_base::XdgWmBase>,
     seat: Option<wl_seat::WlSeat>,
-    manager: Option<wl_data_device_manager::WlDataDeviceManager>,
     outputs: Vec<(wl_output::WlOutput, i32, i32)>,
     surfaces: Vec<wl_surface::WlSurface>,
     buffers: Vec<wl_buffer::WlBuffer>,
@@ -156,8 +154,6 @@ struct Fixture {
     point: (f64, f64),
     pressed: bool,
     serial: u32,
-    clipboard: Option<wl_data_device::WlDataDevice>,
-    selections: usize,
     configured: usize,
 }
 impl Dispatch<wl_registry::WlRegistry, ()> for Fixture {
@@ -180,7 +176,6 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Fixture {
                 "wl_shm" => s.shm = Some(r.bind(name, 1, q, ())),
                 "xdg_wm_base" => s.wm = Some(r.bind(name, 1, q, ())),
                 "wl_seat" => s.seat = Some(r.bind(name, version.min(7), q, ())),
-                "wl_data_device_manager" => s.manager = Some(r.bind(name, 3, q, ())),
                 "wl_output" => {
                     let output = r.bind(name, version.min(3), q, ());
                     s.outputs.push((output, 0, 0));
@@ -276,25 +271,6 @@ impl Dispatch<wl_pointer::WlPointer, ()> for Fixture {
         }
     }
 }
-impl Dispatch<wl_data_device::WlDataDevice, ()> for Fixture {
-    fn event(
-        s: &mut Self,
-        device: &wl_data_device::WlDataDevice,
-        e: wl_data_device::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        // Simulate a toolkit which already has its own data-device resource.
-        if let wl_data_device::Event::Selection { id: Some(o) } = e {
-            if s.clipboard.as_ref() == Some(device) {
-                s.selections += 1;
-            }
-            o.destroy();
-        }
-    }
-    wayland_client::event_created_child!(Fixture,wl_data_device::WlDataDevice,[0=>(wl_data_offer::WlDataOffer,())]);
-}
 wayland_client::delegate_noop!(Fixture:ignore wl_compositor::WlCompositor);
 wayland_client::delegate_noop!(Fixture:ignore wl_shm::WlShm);
 wayland_client::delegate_noop!(Fixture:ignore wl_shm_pool::WlShmPool);
@@ -302,9 +278,6 @@ wayland_client::delegate_noop!(Fixture:ignore wl_surface::WlSurface);
 wayland_client::delegate_noop!(Fixture:ignore wl_buffer::WlBuffer);
 wayland_client::delegate_noop!(Fixture:ignore wl_seat::WlSeat);
 wayland_client::delegate_noop!(Fixture:ignore wl_keyboard::WlKeyboard);
-wayland_client::delegate_noop!(Fixture:ignore wl_data_device_manager::WlDataDeviceManager);
-wayland_client::delegate_noop!(Fixture:ignore wl_data_offer::WlDataOffer);
-wayland_client::delegate_noop!(Fixture:ignore wl_data_source::WlDataSource);
 wayland_client::delegate_noop!(Fixture:ignore xdg_toplevel::XdgToplevel);
 
 struct SurfaceHandle(wl_surface::WlSurface);
@@ -389,7 +362,6 @@ fn main() -> Result<()> {
     );
     let _pointer = f.seat.as_ref().unwrap().get_pointer(&q, ());
     let _keyboard = f.seat.as_ref().unwrap().get_keyboard(&q, ());
-    f.clipboard = Some(_toolkit_device.clone());
     let mut toplevels = Vec::new();
     for index in 0..3 {
         let surface = f.compositor.as_ref().unwrap().create_surface(&q, ());

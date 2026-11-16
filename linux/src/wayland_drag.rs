@@ -297,7 +297,10 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
             return;
         }
         match e {
-            wl_data_source::Event::DndDropPerformed => s.destination.lock().unwrap().end(false),
+            // The source notification can precede queued destination motion.
+            // Only the destination Drop (or Finished after its acknowledgement)
+            // releases input, preserving the final target/position.
+            wl_data_source::Event::DndDropPerformed => {}
             wl_data_source::Event::Cancelled => {
                 s.destination.lock().unwrap().end(true);
                 s.destination.lock().unwrap().clear();
