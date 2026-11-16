@@ -489,14 +489,19 @@ notebook's exact HEVC GPU/profile was not recorded.
 
 HEVC Main10 is available when the selected GPU/queue and original P010 surface
 sampling pass capability checks. Presentation remains SDR RGB; HDR output is
-not implied. Main10 live validation is pending. Display timing VRR requests
+not implied. Intel ARL Main10 playback was reported working on 2026-11-14, with
+decoded depth 10 confirmed in the session log. Main10 on other GPUs remains
+unverified. Display timing VRR requests
 Vulkan AutoNoVsync with the documented supported-mode fallback. Physical VRR
 remains compositor-, monitor- and driver-controlled and unverified.
 
-Cross-display cursor restoration targets the destination viewport using the
-public Wayland pointer-warp protocol when advertised. A request is not an
-acknowledgement; older compositors may lack it or decline a cross-window warp.
-Same-window locked-pointer hints remain the fallback.
+Cross-display drags keep relative input captured while the host reports a
+visible cursor on a peer display. The software pointer follows its host-reported
+coordinates after button-up, so subsequent motion and clicks do not return to
+the source window's capture anchor. Native cross-window warping is not required,
+including on GNOME 46. Use Ctrl+Shift+M or Release input to leave capture; focus
+loss also releases it. Returning to the source uses its same-window cursor hint.
+Live verification of this repair on Zorin OS 18 is pending.
 
 AI upscaling stays disabled on Linux, as requested. Application Zero copy stays
 disabled because the presentation pass performs YUV-to-RGB conversion. The
