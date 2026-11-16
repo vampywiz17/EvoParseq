@@ -1,7 +1,6 @@
 //! Exercise the production native adapter against a real, disposable compositor.
 //! Only playback/media is replaced: the tested Wayland protocol code is included
 //! directly from the Linux client. This executable is never shipped in Flatpak.
-#![allow(dead_code)]
 extern crate self as eframe;
 use anyhow::{Context, Result};
 pub use egui;
@@ -33,8 +32,11 @@ mod control {
         out.into()
     }
 }
+// The fixture includes full production modules but exercises only their pointer path.
+#[allow(dead_code, unused_imports)]
 #[path = "../../../src-native/src/desktop_input.rs"]
 mod desktop_input;
+#[allow(dead_code)]
 #[path = "../../../src-native/src/viewport.rs"]
 mod viewport;
 mod input_handoff {
@@ -138,6 +140,7 @@ mod playback {
         }
     }
 }
+#[allow(dead_code)]
 #[path = "../../../linux/src/wayland_drag.rs"]
 mod wayland_drag;
 
@@ -152,8 +155,6 @@ struct Fixture {
     buffers: Vec<wl_buffer::WlBuffer>,
     current: Option<usize>,
     point: (f64, f64),
-    pressed: bool,
-    serial: u32,
     configured: usize,
 }
 impl Dispatch<wl_registry::WlRegistry, ()> for Fixture {
@@ -259,14 +260,6 @@ impl Dispatch<wl_pointer::WlPointer, ()> for Fixture {
                 surface_y,
                 ..
             } => s.point = (surface_x, surface_y),
-            wl_pointer::Event::Button {
-                serial,
-                state: wayland_client::WEnum::Value(state),
-                ..
-            } => {
-                s.serial = serial;
-                s.pressed = state == wl_pointer::ButtonState::Pressed;
-            }
             _ => {}
         }
     }
@@ -464,18 +457,12 @@ fn main() -> Result<()> {
         driver.command(serde_json::json!(["button", false]))?;
         pump(&mut drag, &mut f)?;
         let events = playback[0].events.lock().unwrap();
-        anyhow::ensure!(events.iter().any(|e|matches!(e,input_handoff::Event::DisplayDrag{stream,phase:input_handoff::DragPhase::Motion,..} if *stream==target)),"missing peer motion: {events:?}");
-        anyhow::ensure!(events.iter().filter(|e|matches!(e,input_handoff::Event::DisplayDrag{stream,phase:input_handoff::DragPhase::Drop,..} if *stream==target)).count()==1,"drop was not delivered once: {events:?}");
+        anyhow::ensure!(events.iter().any(|e|matches!(e,input_handoff::Event::DisplayDrag{stream,pointer,phase:input_handoff::DragPhase::Motion} if *stream==target && pointer.buttons==1 && !pointer.relative)),"missing peer motion: {events:?}");
+        anyhow::ensure!(events.iter().filter(|e|matches!(e,input_handoff::Event::DisplayDrag{stream,pointer,phase:input_handoff::DragPhase::Drop} if *stream==target && pointer.buttons==0)).count()==1,"drop was not delivered once: {events:?}");
         drop(events);
         anyhow::ensure!(
             f.current == Some(target),
             "native pointer did not remain on target"
-        );
-        println!(
-            "drop {source}->{target}: surface={:?}, point={:?}, outputs={:?}",
-            f.current,
-            f.point,
-            f.outputs.iter().map(|o| (o.1, o.2)).collect::<Vec<_>>()
         );
         let previous = f.point;
         driver.command(serde_json::json!([

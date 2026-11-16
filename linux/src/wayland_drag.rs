@@ -108,13 +108,6 @@ impl Destination {
         if let Some(pointer) =
             target.desktop_pointer(egui::pos2((x / zoom) as f32, (y / zoom) as f32), 1)
         {
-            if !g.inside_video {
-                crate::event_log::record(
-                    "INFO",
-                    "wayland_display_drag_video_boundary",
-                    serde_json::json!({"stream":stream,"inside_video":true}),
-                );
-            }
             g.inside_video = true;
             g.last = (stream, pointer);
             g.root.push_routed(Event::DisplayDrag {
@@ -123,13 +116,6 @@ impl Destination {
                 phase: DragPhase::Motion,
             });
         } else {
-            if g.inside_video {
-                crate::event_log::record(
-                    "INFO",
-                    "wayland_display_drag_video_boundary",
-                    serde_json::json!({"stream":stream,"inside_video":false}),
-                );
-            }
             g.inside_video = false;
         }
         let show = !g.inside_video;
@@ -453,11 +439,6 @@ impl Drag {
                     }
                     smithay_clipboard::DragEvent::Leave => {
                         let g = d.gesture.as_mut().unwrap();
-                        crate::event_log::record(
-                            "INFO",
-                            "wayland_display_drag_left",
-                            serde_json::json!({"stream":g.target,"ended":g.ended}),
-                        );
                         g.target = None;
                         g.inside_video = false;
                         d.show_icon(true);

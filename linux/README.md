@@ -519,15 +519,13 @@ directions and the real clipboard service, including a synthetic text roundtrip
 after each drag. It never reads the user's clipboard.
 Native desktop drags release both relative locks and immersive pointer
 confinement, including the held-press candidate and post-drop destination hover.
-`pointer_constraint_requested` logs constraint changes as requests, not proof of
-compositor activation.
-With event logging enabled, `cursor_mode_changed` records each display's
-relative/hidden/suppressed transitions, without cursor images or coordinates.
 The stock Windows host can composite its pointer into the video while dragging
 windows (`hidden`); a local pointer cannot replace those pixels independently.
 An isolated GNOME 46 CI fixture exercises the production adapter in both
 directions, post-drop pointer motion and cancellation before building Flatpak.
-Live validation of this implementation on Zorin OS 18 remains pending.
+The user confirmed working cross-display dragging on Zorin OS 18 (GNOME) on
+2026-11-16. Temporary cursor-mode, confinement and video-boundary traces have
+been removed; lifecycle/target events and the isolated regression fixture remain.
 
 AI upscaling stays disabled on Linux, as requested. Application Zero copy stays
 disabled because the presentation pass performs YUV-to-RGB conversion. The

@@ -78,7 +78,6 @@ impl DesktopInput {
         }
     }
     pub fn cursor(&mut self, ctx: &egui::Context, playback: &Playback) {
-        let previous = (self.grabbed, self.confined);
         let native_drag = playback
             .native_drag
             .load(std::sync::atomic::Ordering::Acquire);
@@ -163,17 +162,6 @@ impl DesktopInput {
         // cursors even though the capture state has not changed.
         if grab || native_drag {
             ctx.set_cursor_icon(egui::CursorIcon::None);
-        }
-        if previous != (self.grabbed, self.confined) {
-            crate::event_log::record(
-                "INFO",
-                "pointer_constraint_requested",
-                serde_json::json!({
-                    "stream":playback.stream(),
-                    "mode": if self.grabbed {"locked"} else if self.confined {"confined"} else {"none"},
-                    "native_drag":native_drag,
-                }),
-            );
         }
     }
     pub fn restore_cursor(ctx: &egui::Context) {
@@ -505,10 +493,10 @@ mod ordinary_cursor_tests {
 }
 
 #[cfg(test)]
-mod drag_restore_tests {
+mod relative_capture_restore_tests {
     use super::*;
     #[test]
-    fn linux_drag_exit_commits_position_hint_before_unlock_and_ignores_stale_anchor() {
+    fn linux_relative_capture_exit_commits_position_hint_before_unlock_and_ignores_stale_anchor() {
         let ctx = egui::Context::default();
         let playback = Playback::new(ctx.clone());
         playback.activate_input();
