@@ -501,6 +501,8 @@ The private drag offer contains no clipboard/file/session data. Only our live
 stream surfaces accept it, forwarding absolute motion to the corresponding host
 display. Drop transfers input ownership; cancellation releases held input.
 The previous persistent-capture/software-pointer workaround has been removed.
+The local pointer is hidden during native dragging to avoid duplicating the
+host-rendered cursor; normal pointer visibility returns after drop/cancel.
 An isolated GNOME 46 CI fixture exercises the production adapter in both
 directions, post-drop pointer motion and cancellation before building Flatpak.
 Live validation of this implementation on Zorin OS 18 remains pending.

@@ -39,6 +39,7 @@ struct State {
     seat: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
     focus: Option<wayland_client::backend::ObjectId>,
+    enter_serial: Option<u32>,
     press: Option<(u32, wayland_client::backend::ObjectId)>,
     surfaces: [Option<wl_surface::WlSurface>; crate::display_stream::STREAMS],
     gesture: Option<Gesture>,
@@ -174,7 +175,12 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         _: &QueueHandle<Self>,
     ) {
         match e {
-            wl_pointer::Event::Enter { surface, .. } => s.focus = Some(surface.id()),
+            wl_pointer::Event::Enter {
+                serial, surface, ..
+            } => {
+                s.focus = Some(surface.id());
+                s.enter_serial = Some(serial);
+            }
             wl_pointer::Event::Leave { .. } => s.focus = None,
             wl_pointer::Event::Button {
                 serial,
@@ -352,6 +358,7 @@ impl Drag {
             seat: None,
             pointer: None,
             focus: None,
+            enter_serial: None,
             press: None,
             surfaces: Default::default(),
             gesture: None,
@@ -430,6 +437,18 @@ impl Drag {
             .context("Native surface unavailable")?;
         let (serial, id) = self.state.press.clone().context("No held button")?;
         anyhow::ensure!(id == surface.id(), "Button belongs to another surface");
+        // Hide the local duplicate while pointer focus still belongs to us.
+        // set_cursor requires the enter serial, not the button's drag serial.
+        self.state
+            .pointer
+            .as_ref()
+            .context("No pointer")?
+            .set_cursor(
+                self.state.enter_serial.context("No pointer enter")?,
+                None,
+                0,
+                0,
+            );
         let source = self
             .state
             .manager
