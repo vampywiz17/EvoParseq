@@ -400,6 +400,13 @@ fn main() -> Result<()> {
         Ok(())
     };
     for (source, target) in [(0, 1), (1, 0)] {
+        // egui-winit creates a clipboard data device for a newly opened
+        // viewport on the same display. Exercise that late binding too.
+        let _late_toolkit_device =
+            f.manager
+                .as_ref()
+                .unwrap()
+                .get_data_device(f.seat.as_ref().unwrap(), &q, ());
         driver.command(serde_json::json!(["move", -10000., -10000.]))?;
         pump(&mut drag, &mut f)?;
         // Edges may be outside mapped surface input regions. First move inside
