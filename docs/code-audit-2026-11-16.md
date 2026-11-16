@@ -14,6 +14,8 @@ consumers; unused upstream APIs/tests are not fork-pruned.
   route. The session never consumed these events: physical USB usages and the
   host keyboard layout remain the implemented typing path. WM_CHAR is consumed
   without creating remote input. Clipboard paste and local text controls remain.
+- Removed clipboard counters/mutex bookkeeping that only tests consumed. The
+  test adapter records calls inside cfg(test) and verifies rejection before OS IO.
 - Replaced unused resize dimensions in the event FIFO with a notification. Client
   resolution matching already reads the current viewport from the view.
 - Windows and Linux now consume one session action table and stats tab model.

@@ -36,7 +36,8 @@ x86_64 Flatpak. All three application versions are **0.9.8-dev.3**.
 - **Shared core and cleanup:** share desktop session action labels/bounds and
   statistics tab definitions, and move Android's host frame-rate hint policy into
   shared Rust. Remove unused statistics scaffolding, the unconsumed Windows
-  character-event/UTF-16 path, redundant resize-event payloads, obsolete cursor
+  character-event/UTF-16 path, runtime-only test counters, redundant resize-event
+  payloads, obsolete cursor
   state, temporary debugging traces and the forced-CPU diagnostic switch. Vulkan
   format tests now exercise the
   production NV12/P010 compatibility predicate.
