@@ -1,6 +1,14 @@
 //! One bounded UI-to-session handoff for controllers, keyboards and pointing devices.
 use crate::{desktop_input, gamepad};
 use std::{collections::VecDeque, sync::Mutex};
+#[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DragPhase {
+    Begin,
+    Motion,
+    Drop,
+    Cancel,
+}
 #[derive(Clone, Debug)]
 #[cfg_attr(
     not(all(target_os = "linux", feature = "desktop-telemetry")),
@@ -9,6 +17,17 @@ use std::{collections::VecDeque, sync::Mutex};
 pub enum Event {
     Controller(gamepad::Event),
     Desktop(desktop_input::Event),
+    #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
+    DisplayDesktop {
+        stream: usize,
+        event: desktop_input::Event,
+    },
+    #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
+    DisplayDrag {
+        stream: usize,
+        pointer: desktop_input::Pointer,
+        phase: DragPhase,
+    },
     #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
     Session(crate::session_controls::Command),
 }
@@ -38,6 +57,38 @@ impl Inbox {
             return;
         }
         match (q.0.back_mut(), &event) {
+            #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
+            (
+                Some(Event::DisplayDesktop {
+                    stream,
+                    event: desktop_input::Event::Pointer(old),
+                }),
+                Event::DisplayDesktop {
+                    stream: next_stream,
+                    event: desktop_input::Event::Pointer(next),
+                },
+            ) if *stream == *next_stream => {
+                if old.merge(*next) {
+                    return;
+                }
+            }
+            #[cfg(all(target_os = "linux", feature = "desktop-telemetry"))]
+            (
+                Some(Event::DisplayDrag {
+                    stream,
+                    pointer: old,
+                    phase: DragPhase::Motion,
+                }),
+                Event::DisplayDrag {
+                    stream: next_stream,
+                    pointer: next,
+                    phase: DragPhase::Motion,
+                },
+            ) if *stream == *next_stream => {
+                if old.merge(*next) {
+                    return;
+                }
+            }
             (
                 Some(Event::Controller(gamepad::Event::Axes(id, old, hat))),
                 Event::Controller(gamepad::Event::Axes(next, state, nhat)),

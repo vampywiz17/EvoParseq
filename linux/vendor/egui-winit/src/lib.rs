@@ -16,6 +16,7 @@ pub use egui;
 use egui::accesskit;
 use egui::{Pos2, Rect, Theme, Vec2, ViewportBuilder, ViewportCommand, ViewportId, ViewportInfo};
 pub use winit;
+pub type NativeWindowObserver = std::sync::Arc<dyn Fn(ViewportId, &Window, &winit::event::WindowEvent) + Send + Sync>;
 
 pub mod clipboard;
 mod safe_area;
@@ -268,6 +269,11 @@ impl State {
         event: &winit::event::WindowEvent,
     ) -> EventResponse {
         profiling::function_scope!(short_window_event_description(event));
+        if !matches!(event, winit::event::WindowEvent::RedrawRequested) {
+            if let Some(observer) = self.egui_ctx.data(|d| d.get_temp::<NativeWindowObserver>(egui::Id::new("native-window-observer"))) {
+                observer(self.viewport_id, window, event);
+            }
+        }
 
         #[cfg(feature = "accesskit")]
         if let Some(accesskit) = self.accesskit.as_mut() {

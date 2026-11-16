@@ -114,6 +114,7 @@ pub mod video_stream;
 mod video_vulkan;
 #[path = "../../src-native/src/viewport.rs"]
 pub mod viewport;
+mod wayland_drag;
 mod wayland_keys;
 mod window_mode;
 
@@ -161,6 +162,7 @@ struct Desktop {
     logo: egui::TextureHandle,
     desktop_input: desktop_linux::DesktopInput,
     shortcuts: Option<wayland_keys::Shortcuts>,
+    drag: Option<Arc<std::sync::Mutex<wayland_drag::Drag>>>,
     signed_in: bool,
     busy: bool,
     status_text: &'static str,
@@ -285,8 +287,12 @@ impl Desktop {
 impl eframe::App for Desktop {
     fn on_exit(&mut self) {
         self.shortcuts.take();
+        self.drag.take();
     }
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if let Some(drag) = &self.drag {
+            drag.lock().unwrap_or_else(|e| e.into_inner()).dispatch();
+        }
         if raw.viewport_id != egui::ViewportId::ROOT {
             return;
         }
@@ -633,6 +639,15 @@ fn main() -> anyhow::Result<()> {
                         logo,
                         desktop_input: desktop_linux::DesktopInput::new(keyboard.clone()),
                         shortcuts: wayland_keys::Shortcuts::new(cc).ok(),
+                        drag: wayland_drag::Drag::install(&cc.egui_ctx, cc)
+                            .map_err(|_| {
+                                event_log::record(
+                                    "WARN",
+                                    "wayland_display_drag_unavailable",
+                                    serde_json::json!({}),
+                                );
+                            })
+                            .ok(),
                         signed_in: false,
                         busy: restore,
                         status_text: if restore {

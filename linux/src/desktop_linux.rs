@@ -20,6 +20,8 @@ pub struct DesktopInput {
     last_absolute: Option<Pos2>,
     capture_anchor: Option<Pos2>,
     restored_position: Option<Pos2>,
+    drag_candidate: Option<Pos2>,
+    transferred: bool,
 }
 impl DesktopInput {
     pub fn keyboard(&self) -> std::sync::Arc<crate::native_loop::KeyboardBridge> {
@@ -56,6 +58,8 @@ impl DesktopInput {
         self.unlock_after_present = false;
         self.capture_anchor = None;
         self.restored_position = None;
+        self.drag_candidate = None;
+        self.transferred = false;
         playback.deactivate_input();
         self.controls = None;
         self.badge = None;
@@ -74,47 +78,15 @@ impl DesktopInput {
         }
     }
     pub fn cursor(&mut self, ctx: &egui::Context, playback: &Playback) {
-        if self.enabled
-            && playback
-                .peer_cursor()
-                .is_some_and(|(stream, x, y)| playback.cursor_endpoint(stream, x, y).is_none())
-        {
-            // A closed peer must not leave an invisible captured pointer.
-            self.release(ctx, playback);
-        }
-        if let Some(position) = playback.peer_cursor_position() {
-            let painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Tooltip,
-                egui::Id::new("peer-drag-cursor"),
-            ));
-            let painter = if let Some(rect) = self.video {
-                painter.with_clip_rect(rect)
-            } else {
-                painter
-            };
-            let points = [
-                egui::vec2(0., 0.),
-                egui::vec2(0., 18.),
-                egui::vec2(5., 13.),
-                egui::vec2(9., 21.),
-                egui::vec2(12., 19.),
-                egui::vec2(8., 12.),
-                egui::vec2(15., 12.),
-            ];
-            let mut mesh = egui::Mesh::default();
-            for p in points {
-                mesh.colored_vertex(position + p, egui::Color32::WHITE);
-            }
-            for [a, b, c] in [[0, 1, 2], [0, 2, 5], [0, 5, 6], [2, 3, 4], [2, 4, 5]] {
-                mesh.add_triangle(a, b, c);
-            }
-            painter.add(egui::Shape::mesh(mesh));
-            painter.add(egui::Shape::closed_line(
-                points.into_iter().map(|p| position + p).collect(),
-                egui::Stroke::new(1., egui::Color32::BLACK),
-            ));
-        }
-        let grab = self.enabled && playback.capture() && ctx.input(|i| i.focused);
+        let grab = self.enabled
+            && playback.input_active()
+            && playback.capture()
+            && !playback
+                .native_drag
+                .load(std::sync::atomic::Ordering::Acquire)
+            && self.drag_candidate.is_none()
+            && !self.transferred
+            && ctx.input(|i| i.focused);
         if grab && self.unlock_after_present {
             self.unlock_after_present = false;
             self.restored_position = None;
@@ -229,10 +201,40 @@ impl DesktopInput {
         if self.keyboard.take_release() {
             self.release(ctx, playback);
         }
-        if !raw.focused || !playback.input_ready() || playback.stopped() {
+        if playback
+            .drag_activation
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            self.buttons = 0;
+            self.drag_candidate = None;
+            self.transferred = true;
+            self.enabled = true;
+            self.keyboard.bind(Some(playback.clone()));
+            playback.push_input(Input::Focus(true));
+        }
+        if (!raw.focused && !self.transferred)
+            || !playback.input_ready()
+            || playback.stopped()
+            || (self.enabled && !playback.input_active())
+        {
             if self.enabled {
                 self.release(ctx, playback);
             }
+            return;
+        }
+        if playback
+            .native_drag
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            raw.events.retain(|e| {
+                !matches!(
+                    e,
+                    Event::PointerMoved(_)
+                        | Event::MouseMoved(_)
+                        | Event::PointerButton { .. }
+                        | Event::MouseWheel { .. }
+                )
+            });
             return;
         }
         let paste = raw
@@ -274,6 +276,13 @@ impl DesktopInput {
                     self.capture_anchor = None;
                     self.restored_position = None;
                     self.last_absolute = Some(*pos);
+                    if let Some(start)=self.drag_candidate {
+                        if playback.host_relative.load(std::sync::atomic::Ordering::Acquire) { self.drag_candidate=None; }
+                        else if start.distance(*pos)>=4. {
+                            self.drag_candidate=None;
+                            if crate::wayland_drag::begin(ctx,playback,*pos) { return false; }
+                        }
+                    }
                     let local = *pos - self.video.unwrap().min;
                     self.pointer(playback, local, false, true, (0, 0));
                     // Keep egui's hover/leave bookkeeping current as well.
@@ -297,9 +306,14 @@ impl DesktopInput {
                         egui::PointerButton::Extra2 => 16,
                     };
                     if *pressed {
+                        self.transferred=false;
+                        if bit==1 && self.buttons==0 && !self.grabbed && !playback.capture() {
+                            self.drag_candidate=Some(*pos);
+                        }
                         self.buttons |= bit;
                     } else {
                         self.buttons &= !bit;
+                        if self.buttons==0 { self.drag_candidate=None; }
                     }
                     self.pointer(
                         playback,
@@ -570,176 +584,60 @@ mod immersive_tests {
 }
 
 #[cfg(test)]
-mod peer_cursor_tests {
+mod native_drag_tests {
     use super::*;
     #[test]
-    fn linux_drag_endpoint_uses_destination_geometry_without_releasing_host_buttons() {
+    fn linux_native_drag_never_locks_and_drop_hover_survives_keyboard_focus_on_origin() {
         let ctx = egui::Context::default();
-        ctx.set_embed_viewports(false);
-        let displays = std::sync::Arc::new(crate::display_routes::Displays::default());
-        let primary = Playback::new(ctx.clone());
-        primary.attach_displays(&displays, 0);
-        *displays.primary.lock().unwrap() = std::sync::Arc::downgrade(&primary);
-        displays.open(1, &ctx).unwrap();
-        let peer = displays.get(1).unwrap().playback.clone();
-        for target in [&primary, &peer] {
-            target.set_input_ready(true);
-            target.set_input_geometry((1920, 1080));
-        }
-        primary.set_video_rect(Some(Rect::from_min_size(
-            egui::pos2(0., 24.),
-            egui::vec2(1920., 1080.),
-        )));
-        peer.set_video_rect(Some(Rect::from_min_size(
-            egui::pos2(10., 24.),
-            egui::vec2(960., 540.),
-        )));
+        let playback = Playback::new(ctx.clone());
+        playback.set_input_ready(true);
+        playback.activate_input();
+        playback.host_cursor(true, 20, 30);
+        playback
+            .native_drag
+            .store(true, std::sync::atomic::Ordering::Release);
         let mut adapter = DesktopInput {
             enabled: true,
-            buttons: 1,
-            video: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1920., 1080.))),
+            video: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.))),
             ..Default::default()
         };
-        primary.activate_input();
-        primary.host_cursor(true, 20, 30);
-        let _ = ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &primary));
-        primary.show_peer_cursor(1, 1440, 810);
-        let held = ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &primary));
-        assert!(primary.capture());
-        assert!(adapter.grabbed);
+        let out = ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &playback));
+        assert!(!adapter.grabbed);
         assert!(
-            !held.viewport_output[&egui::ViewportId::ROOT]
+            !out.viewport_output[&egui::ViewportId::ROOT]
                 .commands
                 .iter()
-                .any(|cmd| matches!(
-                    cmd,
-                    egui::ViewportCommand::CursorGrab(egui::CursorGrab::None)
+                .any(|c| matches!(
+                    c,
+                    egui::ViewportCommand::CursorGrab(egui::CursorGrab::Locked)
                 ))
         );
-        assert_eq!(peer.peer_cursor_position(), Some(egui::pos2(730., 429.)));
+        playback
+            .native_drag
+            .store(false, std::sync::atomic::Ordering::Release);
+        playback
+            .drag_activation
+            .store(true, std::sync::atomic::Ordering::Release);
         let mut raw = egui::RawInput::default();
-        raw.events = vec![Event::MouseMoved(egui::vec2(3., -2.))];
-        adapter.events(&ctx, &mut raw, &primary);
-        let mut input = std::collections::VecDeque::new();
-        primary.input.take(&mut input).unwrap();
-        assert!(matches!(
-            input.pop_front(),
-            Some(crate::input_handoff::Event::Desktop(Input::Pointer(
-                Pointer {
-                    relative: true,
-                    moved: true,
-                    buttons: 1,
-                    ..
-                }
-            )))
-        ));
-        assert!(input.is_empty());
-        // Button-up is forwarded without an absolute move in the source frame.
-        raw.events = vec![Event::PointerButton {
-            pos: egui::pos2(20., 30.),
-            button: egui::PointerButton::Primary,
-            pressed: false,
-            modifiers: Default::default(),
-        }];
-        adapter.events(&ctx, &mut raw, &primary);
-        primary.input.take(&mut input).unwrap();
-        assert!(matches!(
-            input.pop_front(),
-            Some(crate::input_handoff::Event::Desktop(Input::Pointer(
-                Pointer {
-                    moved: false,
-                    buttons: 0,
-                    ..
-                }
-            )))
-        ));
-        assert!(input.is_empty());
-        assert!(primary.capture());
-        assert_eq!(peer.peer_cursor_position(), Some(egui::pos2(730., 429.)));
-        let held = ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &primary));
-        assert!(adapter.grabbed);
-        assert!(
-            !held.viewport_output[&egui::ViewportId::ROOT]
-                .commands
-                .iter()
-                .any(|cmd| matches!(
-                    cmd,
-                    egui::ViewportCommand::CursorPosition(_)
-                        | egui::ViewportCommand::CursorGrab(egui::CursorGrab::None)
-                ))
-        );
-        // After the drop, a raw move and a new click still act at the peer.
-        // A stale source absolute position must never move the host back.
-        raw.events = vec![
-            Event::PointerMoved(egui::pos2(20., 30.)),
-            Event::MouseMoved(egui::vec2(4., 2.)),
-            Event::PointerButton {
-                pos: egui::pos2(20., 30.),
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: Default::default(),
-            },
-        ];
-        adapter.events(&ctx, &mut raw, &primary);
-        primary.input.take(&mut input).unwrap();
-        assert_eq!(input.len(), 2);
-        assert!(matches!(
-            input.pop_front(),
-            Some(crate::input_handoff::Event::Desktop(Input::Pointer(
-                Pointer {
-                    relative: true,
-                    moved: true,
-                    buttons: 0,
-                    ..
-                }
-            )))
-        ));
-        assert!(matches!(
-            input.pop_front(),
-            Some(crate::input_handoff::Event::Desktop(Input::Pointer(
-                Pointer {
-                    moved: false,
-                    buttons: 1,
-                    ..
-                }
-            )))
-        ));
         raw.focused = false;
+        raw.events.push(Event::PointerMoved(egui::pos2(100., 80.)));
+        adapter.events(&ctx, &mut raw, &playback);
+        assert!(adapter.enabled && adapter.transferred);
+        let mut events = std::collections::VecDeque::new();
+        playback.input.take(&mut events).unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            crate::input_handoff::Event::Desktop(Input::Pointer(Pointer {
+                relative: false,
+                moved: true,
+                buttons: 0,
+                ..
+            }))
+        )));
+        adapter.keyboard.bind(Some(playback.clone()));
+        adapter.keyboard.release();
         raw.events.clear();
-        adapter.events(&ctx, &mut raw, &primary);
-        assert!(!adapter.enabled);
-        primary.show_peer_cursor(1, 1400, 800);
-        assert!(peer.peer_cursor_position().is_none());
-        primary.input.take(&mut input).unwrap();
-        assert!(matches!(
-            input.pop_front(),
-            Some(crate::input_handoff::Event::Desktop(Input::Focus(false)))
-        ));
-        // Returning to the source uses its existing same-surface position hint.
-        primary.host_cursor(false, 100, 100);
-        assert!(primary.peer_cursor().is_none());
-        peer.host_cursor(true, 20, 30);
-        peer.show_peer_cursor(0, 1440, 810);
-        assert_eq!(
-            peer.cursor_endpoint(0, 1440, 810),
-            Some(egui::pos2(1440., 834.))
-        );
-        displays.close(1);
-        assert!(primary.cursor_endpoint(1, 20, 30).is_none());
-        primary.activate_input();
-        primary.host_cursor(true, 20, 30);
-        primary.show_peer_cursor(1, 20, 30);
-        adapter.enabled = true;
-        let closed = ctx.run(Default::default(), |ctx| adapter.cursor(ctx, &primary));
-        assert!(!adapter.enabled);
-        assert!(
-            closed.viewport_output[&egui::ViewportId::ROOT]
-                .commands
-                .iter()
-                .any(|cmd| matches!(
-                    cmd,
-                    egui::ViewportCommand::CursorGrab(egui::CursorGrab::None)
-                ))
-        );
+        adapter.events(&ctx, &mut raw, &playback);
+        assert!(!adapter.enabled && !playback.input_active());
     }
 }

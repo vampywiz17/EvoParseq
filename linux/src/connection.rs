@@ -647,6 +647,7 @@ fn observe(
 struct Input {
     engine: crate::desktop_input::Engine,
     owner: usize,
+    drag_origin: Option<usize>,
     pads: crate::gamepad::Manager,
     clipboard: crate::clipboard_sync::State,
     poller: crate::gamepad::polling::Poller,
@@ -670,6 +671,7 @@ impl Default for Input {
         Self {
             engine: Default::default(),
             owner: 1,
+            drag_origin: None,
             pads: Default::default(),
             clipboard: Default::default(),
             poller: Default::default(),
@@ -748,40 +750,11 @@ impl Input {
         }
         let capture = crate::desktop_input::relative_capture(update.relative, update.hidden);
         target.host_cursor(capture, i32::from(update.x), i32::from(update.y));
-        if capture || update.suppressed {
-            primary.hide_peer_cursor(usize::from(update.stream));
-            if let Some(displays) = &displays {
-                for stream in 1..crate::display_stream::STREAMS {
-                    if let Some(channel) = displays.get(stream) {
-                        channel
-                            .playback
-                            .hide_peer_cursor(usize::from(update.stream));
-                    }
-                }
-            }
-        } else {
-            if update.stream != 0 {
-                primary.show_peer_cursor(
-                    usize::from(update.stream),
-                    i32::from(update.x),
-                    i32::from(update.y),
-                );
-            }
-            if let Some(displays) = displays {
-                for stream in 1..crate::display_stream::STREAMS {
-                    if stream != usize::from(update.stream) {
-                        if let Some(channel) = displays.get(stream) {
-                            channel.playback.show_peer_cursor(
-                                usize::from(update.stream),
-                                i32::from(update.x),
-                                i32::from(update.y),
-                            );
-                        }
-                    }
-                }
-            }
-        }
+        target
+            .host_relative
+            .store(update.relative, std::sync::atomic::Ordering::Release);
     }
+
     fn pump(
         &mut self,
         playback: &crate::playback::Playback,
@@ -794,18 +767,7 @@ impl Input {
             for stream in 1..crate::display_stream::STREAMS {
                 if let Some(channel) = displays.get(stream) {
                     if self
-                        .pump_one(
-                            &channel.playback,
-                            ready,
-                            |bytes| {
-                                if bytes.len() == 13 && bytes[12] == 3 {
-                                    send(&crate::display_stream::motion(stream, bytes)?)
-                                } else {
-                                    send(bytes)
-                                }
-                            },
-                            &mut command,
-                        )
+                        .pump_one(&channel.playback, ready, &mut send, &mut command)
                         .is_err()
                     {
                         channel.playback.stop();
@@ -816,6 +778,126 @@ impl Input {
                         );
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+    fn desktop_event(
+        &mut self,
+        root: &crate::playback::Playback,
+        stream: usize,
+        event: crate::desktop_input::Event,
+        send: &mut impl FnMut(&[u8]) -> Result<()>,
+    ) -> Result<()> {
+        use crate::desktop_input::Event;
+        let other = (stream != root.stream())
+            .then(|| root.display(stream))
+            .flatten();
+        let target = if stream == root.stream() {
+            root
+        } else if let Some(p) = &other {
+            p.as_ref()
+        } else {
+            return Ok(());
+        };
+        if matches!(event, Event::Focus(true)) {
+            if self.owner != stream + 1 {
+                self.engine
+                    .event(Event::Release, Instant::now(), &mut *send)?;
+                self.owner = stream + 1;
+            }
+        } else if self.owner != stream + 1 {
+            return Ok(());
+        }
+        if self.drag_origin.is_some() && matches!(event, Event::Pointer(_)) {
+            return Ok(());
+        }
+        self.engine.geometry(target.input_geometry());
+        if let Some((capture, x, y)) = target.cursor_state() {
+            self.engine.host_cursor(capture, false, x, y);
+        }
+        if matches!(event, Event::Focus(false) | Event::Release) {
+            self.clipboard.revoke();
+        }
+        self.engine.event(event, Instant::now(), |b| {
+            Self::send_pointer(stream, b, send)
+        })
+    }
+    fn send_pointer(
+        stream: usize,
+        bytes: &[u8],
+        send: &mut impl FnMut(&[u8]) -> Result<()>,
+    ) -> Result<()> {
+        if stream != 0 && bytes.len() == 13 && bytes[12] == 3 {
+            send(&crate::display_stream::motion(stream, bytes)?)
+        } else {
+            send(bytes)
+        }
+    }
+    fn drag_event(
+        &mut self,
+        root: &crate::playback::Playback,
+        stream: usize,
+        mut pointer: crate::desktop_input::Pointer,
+        phase: crate::input_handoff::DragPhase,
+        send: &mut impl FnMut(&[u8]) -> Result<()>,
+    ) -> Result<()> {
+        use crate::{desktop_input::Event, input_handoff::DragPhase};
+        if phase == DragPhase::Begin {
+            if self.drag_origin.is_some() || self.owner != stream + 1 {
+                return Ok(());
+            }
+            self.drag_origin = Some(stream);
+        }
+        let Some(origin) = self.drag_origin else {
+            return Ok(());
+        };
+        let other = (stream != root.stream())
+            .then(|| root.display(stream))
+            .flatten();
+        let target = if stream == root.stream() {
+            Some(root)
+        } else {
+            other.as_deref()
+        };
+        let cancelled = phase == DragPhase::Cancel || target.is_none_or(|p| p.stopped());
+        if cancelled {
+            self.engine
+                .event(Event::Release, Instant::now(), &mut *send)?;
+        } else if let Some(target) = target {
+            self.engine.geometry(target.input_geometry());
+            pointer.buttons = if phase == DragPhase::Drop { 0 } else { 1 };
+            pointer.relative = false;
+            self.engine
+                .event(Event::Pointer(pointer), Instant::now(), |b| {
+                    Self::send_pointer(stream, b, send)
+                })?;
+        }
+        if cancelled || phase == DragPhase::Drop {
+            self.drag_origin = None;
+            let source = if origin == root.stream() {
+                None
+            } else {
+                root.display(origin)
+            };
+            let source = if origin == root.stream() {
+                Some(root)
+            } else {
+                source.as_deref()
+            };
+            if let Some(source) = source {
+                source.deactivate_input();
+                source
+                    .native_drag
+                    .store(false, std::sync::atomic::Ordering::Release);
+            }
+            if !cancelled && let Some(target) = target {
+                self.owner = stream + 1;
+                target.activate_input();
+                target
+                    .drag_activation
+                    .store(true, std::sync::atomic::Ordering::Release);
+                target.repaint();
             }
         }
         Ok(())
@@ -832,7 +914,7 @@ impl Input {
             return Ok(());
         }
         if let Err(error) = playback.input.take(&mut self.events) {
-            if playback.owns_input() {
+            if playback.stream() == 0 || playback.owns_input() {
                 let _ = self.engine.event(
                     crate::desktop_input::Event::Release,
                     Instant::now(),
@@ -844,29 +926,17 @@ impl Input {
         while let Some(event) = self.events.pop_front() {
             match event {
                 crate::input_handoff::Event::Desktop(event) => {
-                    if !playback.owns_input() {
-                        continue;
-                    }
-                    self.engine.geometry(playback.input_geometry());
-                    if let Some((capture, x, y)) = playback.cursor_state() {
-                        self.engine.host_cursor(capture, false, x, y);
-                    }
-                    if self.owner != playback.stream() + 1 {
-                        self.engine.event(
-                            crate::desktop_input::Event::Release,
-                            Instant::now(),
-                            &mut send,
-                        )?;
-                        self.owner = playback.stream() + 1;
-                    }
-                    if matches!(
-                        event,
-                        crate::desktop_input::Event::Focus(false)
-                            | crate::desktop_input::Event::Release
-                    ) {
-                        self.clipboard.revoke();
-                    }
-                    self.engine.event(event, Instant::now(), &mut send)?
+                    self.desktop_event(playback, playback.stream(), event, &mut send)?;
+                }
+                crate::input_handoff::Event::DisplayDesktop { stream, event } => {
+                    self.desktop_event(playback, stream, event, &mut send)?;
+                }
+                crate::input_handoff::Event::DisplayDrag {
+                    stream,
+                    pointer,
+                    phase,
+                } => {
+                    self.drag_event(playback, stream, pointer, phase, &mut send)?;
                 }
                 crate::input_handoff::Event::Session(
                     crate::session_controls::Command::Clipboard { text, paste },
@@ -1179,40 +1249,109 @@ mod clipboard_tests {
 }
 
 #[cfg(test)]
-mod peer_drag_wire_tests {
+mod native_drag_wire_tests {
     use super::*;
-    use crate::desktop_input::{Event, Pointer};
+    use crate::{
+        desktop_input::{Event, Pointer},
+        input_handoff::{DragPhase, Event as Handoff},
+    };
     #[test]
-    fn linux_peer_drag_stays_relative_and_buttonup_cannot_send_source_position() {
+    fn linux_native_drag_retains_button_across_streams_and_orders_drop_before_next_click() {
         let ctx = eframe::egui::Context::default();
-        let primary = crate::playback::Playback::new(ctx.clone());
+        let root = crate::playback::Playback::new(ctx.clone());
         let displays = std::sync::Arc::new(crate::display_routes::Displays::default());
-        primary.attach_displays(&displays, 0);
+        root.attach_displays(&displays, 0);
+        *displays.primary.lock().unwrap() = std::sync::Arc::downgrade(&root);
         displays.open(1, &ctx).unwrap();
-        primary.activate_input();
-        primary.set_input_geometry((1920, 1080));
-        let mut input = Input::default();
-        let mut cursor = vec![0; 34];
-        cursor[12] = 9;
-        cursor[32..34].copy_from_slice(&256u16.to_be_bytes());
-        input.cursor_frame(&cursor, &primary);
-        primary.push_input(Event::Focus(true));
-        let motion = |moved, relative, buttons| {
-            Event::Pointer(Pointer {
-                x: 3.,
-                y: -2.,
-                relative,
-                moved,
-                viewport: (960, 540),
-                buttons,
-                wheel: (0, 0),
-            })
+        let peer = displays.get(1).unwrap().playback.clone();
+        root.set_input_geometry((1920, 1080));
+        peer.set_input_geometry((1280, 720));
+        root.activate_input();
+        root.push_input(Event::Focus(true));
+        let pointer = |x, y, buttons| Pointer {
+            x,
+            y,
+            relative: false,
+            moved: true,
+            viewport: (640, 360),
+            buttons,
+            wheel: (0, 0),
         };
-        primary.push_input(motion(true, true, 1));
+        root.push_routed(Handoff::DisplayDrag {
+            stream: 0,
+            pointer: pointer(100., 80., 1),
+            phase: DragPhase::Begin,
+        });
+        root.push_routed(Handoff::DisplayDrag {
+            stream: 1,
+            pointer: pointer(320., 180., 1),
+            phase: DragPhase::Motion,
+        });
+        root.push_routed(Handoff::DisplayDrag {
+            stream: 1,
+            pointer: pointer(350., 200., 0),
+            phase: DragPhase::Drop,
+        });
         let mut frames = Vec::new();
+        let mut input = Input::default();
         input
             .pump(
-                &primary,
+                &root,
+                true,
+                |b| {
+                    frames.push(b.to_vec());
+                    Ok(())
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        let downs = frames
+            .iter()
+            .filter(|b| b.as_slice() == control::header(1, 1, 1, 0).as_ref())
+            .count();
+        let ups = frames
+            .iter()
+            .filter(|b| b.as_slice() == control::header(1, 1, 0, 0).as_ref())
+            .count();
+        assert_eq!((downs, ups), (1, 1));
+        let cross = frames.iter().position(|b| b[12] == 26).unwrap();
+        let up = frames
+            .iter()
+            .position(|b| b.as_slice() == control::header(1, 1, 0, 0).as_ref())
+            .unwrap();
+        assert!(cross < up);
+        assert!(peer.input_active() && !root.input_active());
+        assert!(
+            peer.drag_activation
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
+        frames.clear();
+        peer.push_input(Event::Focus(true));
+        peer.push_input(Event::Pointer(pointer(360., 210., 1)));
+        // A late source focus-loss must not release the peer's new click.
+        root.push_input(Event::Focus(false));
+        input
+            .pump(
+                &root,
+                true,
+                |b| {
+                    frames.push(b.to_vec());
+                    Ok(())
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(frames.iter().filter(|b| b[12] == 1).count(), 1);
+        assert_eq!(
+            frames.last().unwrap().as_slice(),
+            control::header(1, 1, 1, 0).as_ref()
+        );
+        frames.clear();
+        peer.push_input(Event::Pointer(pointer(360., 210., 0)));
+        peer.push_input(Event::Focus(false));
+        input
+            .pump(
+                &root,
                 true,
                 |b| {
                     frames.push(b.to_vec());
@@ -1224,77 +1363,63 @@ mod peer_drag_wire_tests {
         assert!(
             frames
                 .iter()
-                .any(|b| b.as_slice() == control::header(3, 1, 3, -2).as_ref())
+                .any(|b| b.as_slice() == control::header(1, 1, 0, 0).as_ref())
         );
-        frames.clear();
-        cursor[8..12].copy_from_slice(&1i32.to_be_bytes());
-        cursor[24..26].copy_from_slice(&1440u16.to_be_bytes());
-        cursor[26..28].copy_from_slice(&810u16.to_be_bytes());
-        cursor[32..34].copy_from_slice(&0u16.to_be_bytes());
-        input.cursor_frame(&cursor, &primary);
-        assert!(primary.capture());
-        primary.push_input(motion(true, true, 1));
-        input
-            .pump(
-                &primary,
-                true,
-                |b| {
-                    frames.push(b.to_vec());
-                    Ok(())
+    }
+    #[test]
+    fn linux_native_drag_cancel_and_closed_target_release_held_buttons() {
+        for closed in [false, true] {
+            let ctx = eframe::egui::Context::default();
+            let root = crate::playback::Playback::new(ctx.clone());
+            let displays = std::sync::Arc::new(crate::display_routes::Displays::default());
+            root.attach_displays(&displays, 0);
+            *displays.primary.lock().unwrap() = std::sync::Arc::downgrade(&root);
+            displays.open(1, &ctx).unwrap();
+            root.set_input_geometry((800, 600));
+            root.activate_input();
+            root.push_input(Event::Focus(true));
+            let pointer = Pointer {
+                x: 100.,
+                y: 100.,
+                relative: false,
+                moved: true,
+                viewport: (800, 600),
+                buttons: 1,
+                wheel: (0, 0),
+            };
+            root.push_routed(Handoff::DisplayDrag {
+                stream: 0,
+                pointer,
+                phase: DragPhase::Begin,
+            });
+            root.push_routed(Handoff::DisplayDrag {
+                stream: if closed { 2 } else { 0 },
+                pointer,
+                phase: if closed {
+                    DragPhase::Drop
+                } else {
+                    DragPhase::Cancel
                 },
-                |_| Ok(()),
-            )
-            .unwrap();
-        assert_eq!(frames, [control::header(3, 1, 3, -2).to_vec()]);
-        frames.clear();
-        // Explicit hidden/relative host modes cancel the peer drawing/warp
-        // without inferring capture from mouse-button state.
-        cursor[32..34].copy_from_slice(&512u16.to_be_bytes());
-        input.cursor_frame(&cursor, &primary);
-        assert!(primary.capture());
-        assert!(primary.peer_cursor().is_none());
-        cursor[32..34].copy_from_slice(&0u16.to_be_bytes());
-        input.cursor_frame(&cursor, &primary);
-        primary.push_input(motion(false, false, 0));
-        assert!(primary.capture());
-        input
-            .pump(
-                &primary,
-                true,
-                |b| {
-                    frames.push(b.to_vec());
-                    Ok(())
-                },
-                |_| Ok(()),
-            )
-            .unwrap();
-        assert_eq!(frames, [control::header(1, 1, 0, 0).to_vec()]);
-        frames.clear();
-        primary.push_input(motion(true, true, 0));
-        primary.push_input(motion(false, false, 1));
-        primary.push_input(motion(false, false, 0));
-        input
-            .pump(
-                &primary,
-                true,
-                |b| {
-                    frames.push(b.to_vec());
-                    Ok(())
-                },
-                |_| Ok(()),
-            )
-            .unwrap();
-        assert_eq!(
-            frames,
-            [
-                control::header(3, 1, 3, -2).to_vec(),
-                control::header(1, 1, 1, 0).to_vec(),
-                control::header(1, 1, 0, 0).to_vec(),
-            ]
-        );
-        cursor[8..12].copy_from_slice(&0i32.to_be_bytes());
-        input.cursor_frame(&cursor, &primary);
-        assert!(!primary.capture());
-        assert!(primary.peer_cursor().is_none());
+            });
+            let mut input = Input::default();
+            let mut frames = Vec::new();
+            input
+                .pump(
+                    &root,
+                    true,
+                    |b| {
+                        frames.push(b.to_vec());
+                        Ok(())
+                    },
+                    |_| Ok(()),
+                )
+                .unwrap();
+            assert!(
+                frames
+                    .iter()
+                    .any(|b| b.as_slice() == control::header(1, 1, 0, 0).as_ref())
+            );
+            assert!(!root.input_active() && input.drag_origin.is_none());
+        }
     }
 }

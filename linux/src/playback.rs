@@ -59,6 +59,9 @@ pub struct Playback {
     video_rect: Mutex<Option<eframe::egui::Rect>>,
     cursor_state: AtomicU64,
     input_active: AtomicBool,
+    pub(crate) native_drag: AtomicBool,
+    pub(crate) drag_activation: AtomicBool,
+    pub(crate) host_relative: AtomicBool,
 }
 
 impl Playback {
@@ -110,6 +113,9 @@ impl Playback {
             video_rect: Mutex::new(None),
             cursor_state: AtomicU64::new(0),
             input_active: AtomicBool::new(false),
+            native_drag: AtomicBool::new(false),
+            drag_activation: AtomicBool::new(false),
+            host_relative: AtomicBool::new(false),
         })
     }
     pub fn set_hevc(&self, enabled: bool) {
@@ -158,6 +164,42 @@ impl Playback {
         self.input_active.store(false, Ordering::Release);
         self.take_cursor_restore();
         self.repaint();
+    }
+    pub fn input_active(&self) -> bool {
+        self.input_active.load(Ordering::Acquire)
+    }
+    pub fn primary(&self) -> Option<Arc<Playback>> {
+        self.displays()?
+            .primary
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .upgrade()
+    }
+    pub fn display(&self, stream: usize) -> Option<Arc<Playback>> {
+        if stream == 0 {
+            self.primary()
+        } else {
+            self.displays()?.get(stream).map(|c| c.playback.clone())
+        }
+    }
+    pub fn desktop_pointer(
+        &self,
+        pos: eframe::egui::Pos2,
+        buttons: u32,
+    ) -> Option<crate::desktop_input::Pointer> {
+        let rect = (*self.video_rect.lock().unwrap_or_else(|e| e.into_inner()))?;
+        if !rect.contains(pos) {
+            return None;
+        }
+        Some(crate::desktop_input::Pointer {
+            x: f64::from(pos.x - rect.min.x),
+            y: f64::from(pos.y - rect.min.y),
+            relative: false,
+            moved: true,
+            viewport: (rect.width().round() as u32, rect.height().round() as u32),
+            buttons,
+            wheel: (0, 0),
+        })
     }
     pub fn owns_input(&self) -> bool {
         self.displays()
@@ -221,6 +263,18 @@ impl Playback {
         }
     }
     pub fn push_input(&self, event: crate::desktop_input::Event) {
+        if self.stream() != 0
+            && let Some(primary) = self.primary()
+        {
+            primary.push_routed(crate::input_handoff::Event::DisplayDesktop {
+                stream: self.stream(),
+                event,
+            });
+            return;
+        }
+        self.push_routed(crate::input_handoff::Event::Desktop(event));
+    }
+    pub fn push_routed(&self, event: crate::input_handoff::Event) {
         self.input.push(event);
         if let Some(consumer) = self.consumer.get() {
             consumer.unpark();
@@ -285,101 +339,6 @@ impl Playback {
     }
     pub fn set_video_rect(&self, rect: Option<eframe::egui::Rect>) {
         *self.video_rect.lock().unwrap_or_else(|e| e.into_inner()) = rect;
-    }
-    pub fn cursor_endpoint(&self, stream: usize, x: i32, y: i32) -> Option<eframe::egui::Pos2> {
-        if stream != self.stream() {
-            let displays = self.displays()?;
-            let target = if stream == 0 {
-                displays
-                    .primary
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .upgrade()?
-            } else {
-                displays.get(stream)?.playback.clone()
-            };
-            return target.cursor_endpoint(stream, x, y);
-        }
-        let rect = (*self.video_rect.lock().unwrap_or_else(|e| e.into_inner()))?;
-        let (x, y) = crate::viewport::Viewport {
-            source: self.input_geometry(),
-            client: (rect.width().round() as u32, rect.height().round() as u32),
-        }
-        .unmap(x, y)?;
-        Some(rect.min + eframe::egui::vec2(x as f32, y as f32))
-    }
-    pub fn peer_cursor(&self) -> Option<(usize, i32, i32)> {
-        (*self
-            .cursor_restore
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()))
-        .filter(|(stream, _, _)| *stream != self.stream())
-    }
-    pub fn hide_peer_cursor(&self, stream: usize) {
-        let mut restore = self
-            .cursor_restore
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if restore.is_some_and(|(target, _, _)| target == stream && target != self.stream()) {
-            *restore = None;
-            drop(restore);
-            self.repaint();
-        }
-    }
-    pub fn show_peer_cursor(&self, stream: usize, x: i32, y: i32) {
-        if stream == self.stream() || !self.capture() || !self.input_active.load(Ordering::Acquire)
-        {
-            return;
-        }
-        let previous = self
-            .cursor_restore
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .replace((stream, x, y));
-        if previous.is_none_or(|(target, _, _)| target != stream) {
-            crate::event_log::record(
-                "INFO",
-                "cursor_peer_relative_active",
-                serde_json::json!({"stream":self.stream(),"visible_stream":stream}),
-            );
-        }
-        self.repaint();
-        if let Some(displays) = self.displays() {
-            let target = if stream == 0 {
-                displays
-                    .primary
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .upgrade()
-            } else {
-                displays.get(stream).map(|c| c.playback.clone())
-            };
-            if let Some(target) = target {
-                target.repaint();
-            }
-        }
-    }
-    /// Keep the source's genuine host capture while a peer owns the visible
-    /// cursor, including after button-up. No cross-window native warp is needed.
-    pub fn peer_cursor_position(&self) -> Option<eframe::egui::Pos2> {
-        let displays = self.displays()?;
-        let source = displays.owner.load(Ordering::Acquire).checked_sub(1)?;
-        let source = if source == 0 {
-            displays
-                .primary
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .upgrade()?
-        } else {
-            displays.get(source)?.playback.clone()
-        };
-        if !source.capture() || source.stopped() || !source.input_active.load(Ordering::Acquire) {
-            return None;
-        }
-        let (stream, x, y) = source.peer_cursor()?;
-        (stream == self.stream())
-            .then(|| self.cursor_endpoint(stream, x, y))
-            .flatten()
     }
     pub fn capture(&self) -> bool {
         self.capture.load(Ordering::Acquire)

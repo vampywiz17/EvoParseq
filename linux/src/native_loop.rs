@@ -101,6 +101,7 @@ impl KeyboardBridge {
             playback.clipboard_allowed.store(false, Ordering::Release);
         }
         if let Some(playback) = self.target() {
+            playback.deactivate_input();
             playback.clipboard_allowed.store(false, Ordering::Release);
             playback.controller_focus(false);
             playback.push_input(Input::Focus(false));
