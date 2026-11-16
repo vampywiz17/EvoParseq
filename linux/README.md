@@ -507,10 +507,16 @@ Outside stream video, a compositor-moved native drag icon keeps the real local
 pointer visible between windows. It is hidden again over video to avoid a double
 cursor. This reuses the existing Wayland cursor library/theme and has no video
 surface copy, input warp, extra worker or recurring timer.
-Stream windows share one native clipboard service. The drag data device is
-bound only for an active gesture, preventing a later clipboard device from
-swallowing the first drag on Mutter. CI also checks clipboard selection updates
-after dragging; it never reads the user's clipboard.
+Stream windows and native dragging share the existing clipboard service's
+single data device. Separate gesture/clipboard devices could receive different
+destination events after keyboard focus changes on Mutter 46, leaving the remote
+pointer at the source display edge. The small smithay-clipboard extension routes
+only the private drag MIME type through its existing worker directly to the
+bounded input inbox. UI pointer reset remains on the UI thread; the worker never
+locks egui or waits on a synchronous clipboard request. No additional queue,
+worker or timer is introduced. CI exercises real keyboard focus, both drag
+directions and the real clipboard service, including a synthetic text roundtrip
+after each drag. It never reads the user's clipboard.
 Native desktop drags release both relative locks and immersive pointer
 confinement, including the held-press candidate and post-drop destination hover.
 `pointer_constraint_requested` logs constraint changes as requests, not proof of

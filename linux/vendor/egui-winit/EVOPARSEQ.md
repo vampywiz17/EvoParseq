@@ -14,3 +14,10 @@ RequestPaste also requests repaint after enqueuing the deferred eframe action.
 This delivers its resulting Paste input without depending on a new video frame
 or unrelated pointer event. It uses the existing clipboard backend/event queue;
 no clipboard monitor, polling loop, new worker or media render pass is added.
+
+All viewports share one clipboard service, owned by their native states. Its
+public DragContext is published in egui Context for the Linux input adapter.
+The vendored smithay-clipboard extension dispatches native DnD destinations on
+the same wl_data_device as selections; no competing per-gesture device is bound.
+The native window observer only registers surfaces and dispatches pending input
+on the existing UI loop. Clipboard content/permission policy stays unchanged.

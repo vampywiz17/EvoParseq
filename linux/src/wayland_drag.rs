@@ -1,6 +1,6 @@
 //! Native Wayland DnD for a held desktop mouse button across our own surfaces.
-//! Uses the existing display/UI loop and shared bounded input inbox. No file
-//! transfers, clipboard contents, pointer warps, worker or recurring timer.
+//! Reuses the clipboard data device/worker and the existing UI loop/input inbox.
+//! No file transfers, clipboard contents, pointer warps, new worker or timer.
 use crate::{
     input_handoff::{DragPhase, Event},
     playback::Playback,
@@ -49,7 +49,6 @@ struct State {
     focus: Option<wayland_client::backend::ObjectId>,
     enter_serial: Option<u32>,
     press: Option<(u32, wayland_client::backend::ObjectId)>,
-
     compositor: Option<wl_compositor::WlCompositor>,
     shm: Option<wl_shm::WlShm>,
     icon: Option<DragIcon>,
@@ -545,6 +544,11 @@ impl Drag {
             .context("Native surface unavailable")?;
         let (serial, id) = self.state.press.clone().context("No held button")?;
         anyhow::ensure!(id == surface.id(), "Button belongs to another surface");
+        let device = self
+            .state
+            .drag
+            .device()
+            .context("Shared clipboard seat unavailable")?;
         // Hide the local duplicate while pointer focus still belongs to us.
         // set_cursor requires the enter serial, not the button's drag serial.
         self.state
@@ -563,11 +567,6 @@ impl Drag {
             .as_ref()
             .unwrap()
             .create_data_source(&self.queue.handle(), ());
-        let device = self
-            .state
-            .drag
-            .device()
-            .context("Shared clipboard seat unavailable")?;
         source.offer(MIME.to_owned());
         source.set_actions(wl_data_device_manager::DndAction::Move);
         origin.native_drag.store(true, Ordering::Release);
