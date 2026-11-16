@@ -172,9 +172,6 @@ impl State {
             if let Some(icon) = g.icon {
                 icon.destroy();
             }
-            if let Some(icon) = g.icon {
-                icon.destroy();
-            }
         }
         if let Some(device) = self.device.take() {
             device.release();
