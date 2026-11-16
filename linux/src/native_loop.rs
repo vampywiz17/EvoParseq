@@ -215,15 +215,29 @@ impl ApplicationHandler<eframe::UserEvent> for Application<'_> {
         }
         match &event {
             WindowEvent::Focused(true) => {
-                if self.focused != Some(window) {
+                if self.focused != Some(window)
+                    && !self
+                        .keyboard
+                        .target()
+                        .is_some_and(|p| p.native_drag.load(Ordering::Acquire))
+                {
                     self.keyboard.release();
                 }
                 self.focused = Some(window);
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
-            WindowEvent::Focused(false) | WindowEvent::CloseRequested
-                if self.focused == Some(window) =>
-            {
+            WindowEvent::Focused(false) if self.focused == Some(window) => {
+                self.focused = None;
+                // The compositor owns an active DnD grab until drop/cancel.
+                if !self
+                    .keyboard
+                    .target()
+                    .is_some_and(|p| p.native_drag.load(Ordering::Acquire))
+                {
+                    self.keyboard.release();
+                }
+            }
+            WindowEvent::CloseRequested if self.focused == Some(window) => {
                 self.focused = None;
                 self.keyboard.release();
             }

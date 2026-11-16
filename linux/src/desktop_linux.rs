@@ -212,7 +212,11 @@ impl DesktopInput {
             self.keyboard.bind(Some(playback.clone()));
             playback.push_input(Input::Focus(true));
         }
-        if (!raw.focused && !self.transferred)
+        if (!raw.focused
+            && !self.transferred
+            && !playback
+                .native_drag
+                .load(std::sync::atomic::Ordering::Acquire))
             || !playback.input_ready()
             || playback.stopped()
             || (self.enabled && !playback.input_active())

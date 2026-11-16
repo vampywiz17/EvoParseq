@@ -892,6 +892,12 @@ impl Input {
                     .store(false, std::sync::atomic::Ordering::Release);
             }
             if !cancelled && let Some(target) = target {
+                // DnD can consume modifier releases. Retire them before the
+                // target resumes ordinary input; the mouse is already up.
+                self.engine
+                    .event(Event::Release, Instant::now(), &mut *send)?;
+                self.engine
+                    .event(Event::Focus(true), Instant::now(), &mut *send)?;
                 self.owner = stream + 1;
                 target.activate_input();
                 target

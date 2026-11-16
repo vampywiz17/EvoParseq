@@ -28,6 +28,7 @@ struct Gesture {
     root: Arc<Playback>,
     source: wl_data_source::WlDataSource,
     target: Option<usize>,
+    inside_video: bool,
     last: (usize, crate::desktop_input::Pointer),
     ended: bool,
 }
@@ -58,12 +59,15 @@ impl State {
         if let Some(pointer) =
             target.desktop_pointer(egui::pos2((x / zoom) as f32, (y / zoom) as f32), 1)
         {
+            g.inside_video = true;
             g.last = (stream, pointer);
             g.root.push_routed(Event::DisplayDrag {
                 stream,
                 pointer,
                 phase: DragPhase::Motion,
             });
+        } else {
+            g.inside_video = false;
         }
     }
     fn end(&mut self, cancelled: bool) {
@@ -72,13 +76,14 @@ impl State {
             return;
         }
         g.ended = true;
+        let cancelled = cancelled || g.target.is_none() || !g.inside_video;
         let (stream, mut pointer) = g.last;
         pointer.buttons = 0;
-        pointer.moved = !cancelled && g.target.is_some();
+        pointer.moved = !cancelled;
         g.root.push_routed(Event::DisplayDrag {
             stream,
             pointer,
-            phase: if cancelled || g.target.is_none() {
+            phase: if cancelled {
                 DragPhase::Cancel
             } else {
                 DragPhase::Drop
@@ -94,7 +99,7 @@ impl State {
         crate::event_log::record(
             "INFO",
             "wayland_display_drag_ended",
-            serde_json::json!({"cancelled":cancelled || g.target.is_none(),"stream":stream}),
+            serde_json::json!({"cancelled":cancelled,"stream":stream}),
         );
     }
     fn clear(&mut self) {
@@ -242,6 +247,7 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for State {
             wl_data_device::Event::Leave => {
                 if let Some(g) = &mut s.gesture {
                     g.target = None;
+                    g.inside_video = false;
                 }
                 if let Some(offer) = s.offer.take() {
                     offer.destroy();
@@ -448,10 +454,15 @@ impl Drag {
             root,
             source,
             target: Some(origin.stream()),
+            inside_video: true,
             last: (origin.stream(), pointer),
             ended: false,
         });
-        self.connection.flush()?;
+        if let Err(error) = self.connection.flush() {
+            self.state.end(true);
+            self.state.clear();
+            return Err(error.into());
+        }
         crate::event_log::record(
             "INFO",
             "wayland_display_drag_started",

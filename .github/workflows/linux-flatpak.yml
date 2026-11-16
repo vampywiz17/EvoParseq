@@ -28,9 +28,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends mutter python3-gi dbus-daemon libwayland-dev libxkbcommon-dev libgl1-mesa-dri
       - name: Compile production Wayland adapter in isolated fixture
-        run: cargo build --manifest-path ci-tests/wayland-input/Cargo.toml --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
+        run: |
+          cargo build --manifest-path ci-tests/wayland-input/Cargo.toml --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
       - name: Exercise native cross-window drag without pointer warping or capture
-        run: timeout 90s dbus-run-session -- bash ci-tests/wayland-input/run.sh "$PWD/ci-tests/wayland-input/target/$(rustc -vV | sed -n 's/^host: //p')/debug/evoparseq-wayland-input-fixture"
+        run: |
+          timeout 90s dbus-run-session -- bash ci-tests/wayland-input/run.sh "$PWD/ci-tests/wayland-input/target/$(rustc -vV | sed -n 's/^host: //p')/debug/evoparseq-wayland-input-fixture"
   flatpak:
     needs: native-wayland-input
     runs-on: ubuntu-24.04
