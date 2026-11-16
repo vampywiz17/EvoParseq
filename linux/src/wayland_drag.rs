@@ -60,6 +60,13 @@ impl State {
         if let Some(pointer) =
             target.desktop_pointer(egui::pos2((x / zoom) as f32, (y / zoom) as f32), 1)
         {
+            if !g.inside_video {
+                crate::event_log::record(
+                    "INFO",
+                    "wayland_display_drag_video_boundary",
+                    serde_json::json!({"stream":stream,"inside_video":true}),
+                );
+            }
             g.inside_video = true;
             g.last = (stream, pointer);
             g.root.push_routed(Event::DisplayDrag {
@@ -68,6 +75,13 @@ impl State {
                 phase: DragPhase::Motion,
             });
         } else {
+            if g.inside_video {
+                crate::event_log::record(
+                    "INFO",
+                    "wayland_display_drag_video_boundary",
+                    serde_json::json!({"stream":stream,"inside_video":false}),
+                );
+            }
             g.inside_video = false;
         }
     }
@@ -255,6 +269,11 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for State {
             wl_data_device::Event::Motion { x, y, .. } => s.position(x, y),
             wl_data_device::Event::Leave => {
                 if let Some(g) = &mut s.gesture {
+                    crate::event_log::record(
+                        "INFO",
+                        "wayland_display_drag_left",
+                        serde_json::json!({"stream":g.target,"ended":g.ended}),
+                    );
                     g.target = None;
                     g.inside_video = false;
                 }
