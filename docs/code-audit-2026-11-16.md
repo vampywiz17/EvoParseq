@@ -21,6 +21,9 @@ consumers; unused upstream APIs/tests are not fork-pruned.
   session preference module; its Surface API call stays in Android.
 - Removed the test-only original_nv12 helper. Both live Vulkan format validation
   and the offline NV12/P010 checks use the same compatibility predicate.
+- Removed the temporary forced-CPU Vulkan synchronization environment switch.
+  The capability-selected synchronous fallback remains for devices without
+  timeline semaphores; normal playback selection is unchanged.
 - The preceding Wayland cleanup removed obsolete peer-restore stream tags,
   diagnostic cursor/confinement traces and unused fixture fields. Native DnD,
   the shared clipboard device and local gap pointer feedback remain necessary.

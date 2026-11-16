@@ -374,9 +374,7 @@ unsafe fn create_on(instance: &wgpu::Instance, adapter: &wgpu::Adapter) -> Resul
     let timeline_sync = unsafe { raw_instance.get_physical_device_properties(physical) }
         .api_version
         >= vk::API_VERSION_1_2
-        && timeline.timeline_semaphore != 0
-        && std::env::var_os("EVOPARSEQ_VULKAN_CPU_SYNC").as_deref()
-            != Some(std::ffi::OsStr::new("1"));
+        && timeline.timeline_semaphore != 0;
     let mut physical_features = hal_adapter.physical_device_features(&required, features);
     let info = physical_features.add_to_device_create(
         vk::DeviceCreateInfo::default()

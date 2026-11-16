@@ -37,7 +37,8 @@ x86_64 Flatpak. All three application versions are **0.9.8-dev.3**.
   statistics tab definitions, and move Android's host frame-rate hint policy into
   shared Rust. Remove unused statistics scaffolding, the unconsumed Windows
   character-event/UTF-16 path, redundant resize-event payloads, obsolete cursor
-  state and temporary debugging traces. Vulkan format tests now exercise the
+  state, temporary debugging traces and the forced-CPU diagnostic switch. Vulkan
+  format tests now exercise the
   production NV12/P010 compatibility predicate.
 - **Virtual-display guidance:** document parsec-vdd as the recommended host-side
   display manager. It uses Parsec's own VDD; an existing Parsec-installed driver
