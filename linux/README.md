@@ -503,6 +503,10 @@ display. Drop transfers input ownership; cancellation releases held input.
 The previous persistent-capture/software-pointer workaround has been removed.
 The local pointer is hidden during native dragging to avoid duplicating the
 host-rendered cursor; normal pointer visibility returns after drop/cancel.
+Stream windows share one native clipboard service. The drag data device is
+bound only for an active gesture, preventing a later clipboard device from
+swallowing the first drag on Mutter. CI also checks clipboard selection updates
+after dragging; it never reads the user's clipboard.
 An isolated GNOME 46 CI fixture exercises the production adapter in both
 directions, post-drop pointer motion and cancellation before building Flatpak.
 Live validation of this implementation on Zorin OS 18 remains pending.

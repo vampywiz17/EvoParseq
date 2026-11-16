@@ -129,11 +129,17 @@ impl State {
         // viewports. New per-window data devices compete with native DnD on
         // Mutter and needlessly duplicate clipboard workers.
         let clipboard = egui_ctx.data_mut(|d| {
-            d.get_temp_mut_or_insert_with(egui::Id::new("native-shared-clipboard"), || {
-                std::sync::Arc::new(std::sync::Mutex::new(clipboard::Clipboard::new(
-                    display_target.display_handle().ok().map(|h| h.as_raw()),
-                )))
-            }).clone()
+            let key = egui::Id::new("native-shared-clipboard");
+            if let Some(clipboard) = d.get_temp::<std::sync::Weak<std::sync::Mutex<clipboard::Clipboard>>>(key)
+                .and_then(|c| c.upgrade()) {
+                return clipboard;
+            }
+            let clipboard = std::sync::Arc::new(std::sync::Mutex::new(clipboard::Clipboard::new(
+                display_target.display_handle().ok().map(|h| h.as_raw()),
+            )));
+            // Native window states own its lifetime, not arbitrary Context clones.
+            d.insert_temp(key, std::sync::Arc::downgrade(&clipboard));
+            clipboard
         });
 
         let mut slf = Self {
