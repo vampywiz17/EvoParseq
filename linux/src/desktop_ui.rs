@@ -21,10 +21,22 @@ pub struct State {
     pub(super) gpu_changed: bool,
 }
 impl Desktop {
+    pub(super) fn open_settings(&mut self, ctx: &egui::Context) {
+        if let Some(playback) = &self.playback {
+            self.desktop_input.release(ctx, playback);
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+        }
+        self.badge.open = false;
+        self.show_video = true;
+    }
     pub(super) fn settings(&mut self, ui: &mut egui::Ui) {
         if let Some(receiver) = &self.ui_state.saving {
             match receiver.try_recv() {
                 Ok((draft, result)) => {
+                    if result.is_ok() {
+                        self.badge
+                            .set_hidden(self.settings.native_session_button_hidden());
+                    }
                     self.ui_state.network = Some(draft);
                     self.ui_state.saving = None;
                     self.ui_state.feedback = match result {
@@ -531,16 +543,7 @@ impl Desktop {
                     // Windows launcher has Help; the stream window also has Settings/Stats.
                     if self.playback.is_some() {
                         if ui.button(f::MENU_SETTINGS).clicked() {
-                            if let Some(p) = &self.playback {
-                                self.desktop_input.release(ctx, p);
-                            }
-                            self.badge.restore();
-                            if let Err(error) = self
-                                .settings
-                                .update_native(|p| p.hide_session_button = false)
-                            {
-                                self.error = Some(error.to_string());
-                            }
+                            self.open_settings(ctx);
                         }
                         if ui.button(f::MENU_STATS).clicked() {
                             if let Some(p) = &self.playback {

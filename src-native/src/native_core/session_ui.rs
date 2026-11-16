@@ -1000,7 +1000,7 @@ pub unsafe fn toggle(
         "",
         VOLUME,
         WS_TABSTOP | TBS_HORZ,
-        [24, 590, 368, 32],
+        crate::app_style::forms::SESSION_VOLUME,
     );
     SendMessageW(volume, TBM_SETRANGE, 0, 100 << 16);
     SendMessageW(volume, TBM_SETPAGESIZE, 0, 10);

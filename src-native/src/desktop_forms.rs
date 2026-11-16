@@ -764,6 +764,8 @@ pub const MENU_STATS: &str = "Connection stats";
 pub const MENU_HELP: &str = "Help";
 pub const MENU_ABOUT: &str = "About EvoParseq";
 pub const MENU_UPDATES: &str = "Check for updates";
+/// Canonical desktop volume track bounds, shared by native UI adapters.
+pub const SESSION_VOLUME: [i32; 4] = [24, 590, 368, 32];
 pub const SESSION_LABELS: [&str; 6] = [
     "Resolution",
     "Bandwidth (Mbps)",

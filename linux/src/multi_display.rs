@@ -66,6 +66,7 @@ impl crate::Desktop {
         let Some(context) = self.video_context.clone() else {
             return;
         };
+        let mut open_settings = false;
         for stream in 1..crate::display_stream::STREAMS {
             let slot = &mut self.screens[stream - 1];
             let Some(channel) = telemetry.displays.get(stream) else {
@@ -120,7 +121,8 @@ impl crate::Desktop {
                             ui.horizontal(|ui| {
                                 if ui.button(crate::app_style::forms::MENU_SETTINGS).clicked() {
                                     surface.input.release(child, &channel.playback);
-                                    surface.badge.restore();
+                                    surface.badge.open = false;
+                                    open_settings = true;
                                 }
                                 ui.add_enabled(
                                     false,
@@ -156,6 +158,9 @@ impl crate::Desktop {
                     );
                 },
             );
+        }
+        if open_settings {
+            self.open_settings(ctx);
         }
     }
 }

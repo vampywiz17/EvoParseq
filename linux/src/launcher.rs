@@ -147,7 +147,7 @@ impl Desktop {
                     .clicked()
                     && !self.busy
                 {
-                    self.show_video = true;
+                    self.open_settings(ctx);
                 }
                 label(
                     ui,

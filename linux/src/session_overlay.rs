@@ -112,12 +112,6 @@ impl Badge {
     pub fn set_hidden(&mut self, hidden: bool) {
         self.hidden = hidden;
     }
-    pub fn restore(&mut self) {
-        self.hidden = false;
-        self.open = true;
-        self.draft = None;
-        self.draft_dirty = false;
-    }
 }
 impl Desktop {
     pub(super) fn session_overlay(&mut self, ctx: &egui::Context, playback: &Arc<Playback>) {
@@ -245,7 +239,7 @@ impl Desktop {
                                     let volume=self.metrics.audio.volume.map_or_else(||"Volume: not reported by PipeWire".into(),|v|format!("Volume: {:.0}%",v*100.));
                                     label(ui,r([194,558,198,26]),&volume,16.,fg);
                                     let mut level=self.metrics.audio.volume.unwrap_or(0.)*100.;
-                                    let slider=ui.add_enabled_ui(audio_commands.is_some()&&self.metrics.audio.ready&&self.metrics.audio.volume.is_some(),|ui|ui.put(r([24,590,368,32]),egui::Slider::new(&mut level,0. ..=100.).show_value(false))).inner;
+                                    let slider=ui.add_enabled_ui(audio_commands.is_some()&&self.metrics.audio.ready&&self.metrics.audio.volume.is_some(),|ui|{ui.spacing_mut().slider_width=f::SESSION_VOLUME[2] as f32;ui.put(r(f::SESSION_VOLUME),egui::Slider::new(&mut level,0. ..=100.).show_value(false))}).inner;
                                     if slider.changed(){if let Some(commands)=&audio_commands{let _=commands.send(crate::audio_pipewire::Command::Volume(level.round()as u8));}}
                                     label(
                                         ui,
@@ -268,9 +262,7 @@ impl Desktop {
                                         if response.clicked() {
                                             match i {
                                                 0 => {
-                                                    self.desktop_input.release(ctx, playback);
-                                                    self.show_video = true;
-                                                    self.badge.open = false;
+                                                    self.open_settings(ctx);
                                                 }
                                                 1 => {
                                                     if let Some(mut video)=self.badge.draft.clone(){
@@ -321,8 +313,5 @@ mod tests {
         host.fps = Some(60);
         badge.synchronize_draft(host.clone(), 2);
         assert_eq!(badge.draft.as_ref().unwrap().fps, Some(45));
-        badge.restore();
-        badge.synchronize_draft(host, 2);
-        assert_eq!(badge.draft.as_ref().unwrap().fps, Some(60));
     }
 }
