@@ -507,6 +507,10 @@ Stream windows share one native clipboard service. The drag data device is
 bound only for an active gesture, preventing a later clipboard device from
 swallowing the first drag on Mutter. CI also checks clipboard selection updates
 after dragging; it never reads the user's clipboard.
+With event logging enabled, `cursor_mode_changed` records each display's
+relative/hidden/suppressed transitions, without cursor images or coordinates.
+The stock Windows host can composite its pointer into the video while dragging
+windows (`hidden`); a local pointer cannot replace those pixels independently.
 An isolated GNOME 46 CI fixture exercises the production adapter in both
 directions, post-drop pointer motion and cancellation before building Flatpak.
 Live validation of this implementation on Zorin OS 18 remains pending.

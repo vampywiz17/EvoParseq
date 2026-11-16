@@ -648,6 +648,7 @@ struct Input {
     engine: crate::desktop_input::Engine,
     owner: usize,
     drag_origin: Option<usize>,
+    cursor_modes: [Option<(bool, bool, bool)>; crate::display_stream::STREAMS],
     pads: crate::gamepad::Manager,
     clipboard: crate::clipboard_sync::State,
     poller: crate::gamepad::polling::Poller,
@@ -672,6 +673,7 @@ impl Default for Input {
             engine: Default::default(),
             owner: 1,
             drag_origin: None,
+            cursor_modes: Default::default(),
             pads: Default::default(),
             clipboard: Default::default(),
             poller: Default::default(),
@@ -729,6 +731,19 @@ impl Input {
             return;
         };
         let update = cursor.update;
+        if crate::event_log::enabled()
+            && let Some(previous) = self.cursor_modes.get_mut(usize::from(update.stream))
+        {
+            let mode = (update.relative, update.hidden, update.suppressed);
+            if *previous != Some(mode) {
+                *previous = Some(mode);
+                crate::event_log::record(
+                    "INFO",
+                    "cursor_mode_changed",
+                    serde_json::json!({"stream":update.stream,"relative":mode.0,"hidden":mode.1,"suppressed":mode.2}),
+                );
+            }
+        }
         let displays = primary.displays();
         let secondary = displays
             .as_ref()
