@@ -168,7 +168,7 @@ impl Warp {
         window: &winit::window::Window,
         position: winit::dpi::PhysicalPosition<f64>,
     ) -> bool {
-        let result = (|| -> Result<()> {
+        let result = (|| -> Result<bool> {
             self.queue.dispatch_pending(&mut self.state)?;
             let RawWindowHandle::Wayland(handle) = window.window_handle()?.as_raw() else {
                 anyhow::bail!("Not Wayland")
@@ -182,15 +182,42 @@ impl Warp {
             }
             .context("Surface ID unavailable")?;
             let surface = wl_surface::WlSurface::from_id(&self.connection, id)?;
-            let position = position.to_logical::<f64>(window.scale_factor());
-            self.warp_to(&surface, position.x, position.y)
+            let logical = position.to_logical::<f64>(window.scale_factor());
+            self.restore_to(&surface, logical.x, logical.y, || {
+                window.set_cursor_position(position).is_ok()
+            })
         })();
         crate::event_log::record(
             "INFO",
-            "cursor_endpoint_warp_requested",
+            if matches!(result, Ok(false)) {
+                "cursor_locked_hint_requested"
+            } else {
+                "cursor_endpoint_warp_requested"
+            },
             serde_json::json!({"requested":result.is_ok(),"compositor_acknowledgement":false}),
         );
         result.is_ok()
+    }
+    fn restore_to(
+        &mut self,
+        surface: &wl_surface::WlSurface,
+        x: f64,
+        y: f64,
+        native_hint: impl FnOnce() -> bool,
+    ) -> Result<bool> {
+        // Only the pointer-focused surface may use a locked-pointer hint.
+        // A background winit window can report success with no pointer attached;
+        // this must not suppress the cross-surface Wayland warp request.
+        if self
+            .state
+            .focus
+            .as_ref()
+            .is_some_and(|s| s.id() == surface.id())
+            && native_hint()
+        {
+            return Ok(false);
+        }
+        self.warp_to(surface, x, y).map(|()| true)
     }
     fn warp_to(&mut self, surface: &wl_surface::WlSurface, x: f64, y: f64) -> Result<()> {
         self.commit_source_unlock(surface)?;
@@ -339,9 +366,21 @@ mod tests {
                 ..Default::default()
             },
         };
-        adapter.warp_to(&target, 730., 429.).unwrap();
+        let focused = adapter.state.focus.as_ref().unwrap().clone();
+        assert!(!adapter.restore_to(&focused, 20., 30., || true).unwrap());
+        assert!(
+            adapter.state.pending.is_none(),
+            "same-window hints do not warp"
+        );
+        adapter
+            .restore_to(&target, 730., 429., || {
+                panic!("a background native success must not bypass the peer warp")
+            })
+            .unwrap();
         worker.join().unwrap();
         assert_eq!(adapter.state.serial, Some(11));
         assert_eq!(adapter.state.pending, Some((target.id(), 730., 429.)));
+        adapter.state.focus = None;
+        assert!(adapter.restore_to(&target, 730., 429., || true).is_err());
     }
 }

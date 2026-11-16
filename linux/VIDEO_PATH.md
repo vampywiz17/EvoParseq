@@ -454,3 +454,16 @@ Request processing still does not prove compositor acceptance; live validation
 of this repair remains required.
 
 Reference: [KWin buffered unlock/warp bug 524804](https://bugs.kde.org/show_bug.cgi?id=524804).
+
+### Background-window cursor dispatch (2026-11-16)
+
+The maintainer still reports a visual cursor snap-back while clicks reach the
+correct display. A second dispatch issue exists independently of compositor
+acceptance: winit can return success for a locked-pointer position hint on a
+background window without an attached pointer. Previously that success bypassed
+the Wayland adapter entirely. The adapter now handles restoration first, using
+native locked-pointer hints only on the pointer-focused surface; a different
+surface always takes the explicit peer-warp path. The wire regression verifies
+that a background native success cannot suppress the peer request and that
+same-window hints remain available. This does not establish that the compositor
+accepts a cross-window warp; a new session log and live verification are required.

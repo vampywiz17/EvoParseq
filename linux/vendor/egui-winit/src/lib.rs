@@ -1567,13 +1567,16 @@ fn process_viewport_command(
         ViewportCommand::ContentProtected(v) => window.set_content_protected(v),
         ViewportCommand::CursorPosition(pos) => {
             let position = PhysicalPosition::new(f64::from(pixels_per_point * pos.x), f64::from(pixels_per_point * pos.y));
-            // Preserve winit's locked-pointer hints; use the optional protocol
-            // only for positions which the native backend cannot restore.
-            if let Err(err) = window.set_cursor_position(position) {
-                let handler = egui_ctx.data(|d| d.get_temp::<CursorPositionHandler>(egui::Id::new("cursor-position-handler")));
-                if !handler.is_some_and(|h| h(window, position)) {
-                    log::warn!("{command:?}: {err}");
+            // The adapter distinguishes the pointer-focused surface from a
+            // background viewport. A successful native call alone need not mean
+            // that a background window actually repositioned the pointer.
+            let handler = egui_ctx.data(|d| d.get_temp::<CursorPositionHandler>(egui::Id::new("cursor-position-handler")));
+            if let Some(handler) = handler {
+                if !handler(window, position) {
+                    log::warn!("{command:?}: cursor restoration request failed");
                 }
+            } else if let Err(err) = window.set_cursor_position(position) {
+                log::warn!("{command:?}: {err}");
             }
         }
         ViewportCommand::CursorGrab(o) => {
