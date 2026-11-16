@@ -58,7 +58,6 @@ pub struct Playback {
     cursor_restore: Mutex<Option<(usize, i32, i32)>>,
     video_rect: Mutex<Option<eframe::egui::Rect>>,
     cursor_state: AtomicU64,
-    pointer_buttons: std::sync::atomic::AtomicU32,
 }
 
 impl Playback {
@@ -109,7 +108,6 @@ impl Playback {
             cursor_restore: Mutex::new(None),
             video_rect: Mutex::new(None),
             cursor_state: AtomicU64::new(0),
-            pointer_buttons: std::sync::atomic::AtomicU32::new(0),
         })
     }
     pub fn set_hevc(&self, enabled: bool) {
@@ -302,20 +300,6 @@ impl Playback {
         .unmap(x, y)?;
         Some(rect.min + eframe::egui::vec2(x as f32, y as f32))
     }
-    pub fn pointer_buttons(&self, buttons: u32) {
-        let buttons = buttons & 31;
-        let previous = self.pointer_buttons.swap(buttons, Ordering::AcqRel);
-        if previous != 0 && buttons == 0 {
-            let restore = *self
-                .cursor_restore
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if let Some((stream, x, y)) = restore.filter(|(stream, _, _)| *stream != self.stream())
-            {
-                self.finish_peer_cursor(stream, x, y);
-            }
-        }
-    }
     pub fn peer_cursor(&self) -> Option<(usize, i32, i32)> {
         (*self
             .cursor_restore
@@ -334,29 +318,21 @@ impl Playback {
             self.repaint();
         }
     }
-    fn finish_peer_cursor(&self, stream: usize, x: i32, y: i32) {
-        self.cursor_state.store(
-            (1 << 33) | (u64::from(x as u16) << 16) | u64::from(y as u16),
-            Ordering::Release,
-        );
-        self.set_capture(false);
-        crate::event_log::record(
-            "INFO",
-            "cursor_peer_drag_released",
-            serde_json::json!({"stream":self.stream(),"visible_stream":stream}),
-        );
-        self.repaint();
-    }
-    pub fn release_peer_cursor(&self, stream: usize, x: i32, y: i32) {
+    pub fn show_peer_cursor(&self, stream: usize, x: i32, y: i32) {
         if stream == self.stream() || !self.capture() {
             return;
         }
-        *self
+        let previous = self
             .cursor_restore
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some((stream, x, y));
-        if self.pointer_buttons.load(Ordering::Acquire) == 0 {
-            self.finish_peer_cursor(stream, x, y);
+            .unwrap_or_else(|e| e.into_inner())
+            .replace((stream, x, y));
+        if previous.is_none_or(|(target, _, _)| target != stream) {
+            crate::event_log::record(
+                "INFO",
+                "cursor_peer_relative_active",
+                serde_json::json!({"stream":self.stream(),"visible_stream":stream}),
+            );
         }
         self.repaint();
         if let Some(displays) = self.displays() {
@@ -374,9 +350,9 @@ impl Playback {
             }
         }
     }
-    /// Only a host-reported visible peer of the active captured drag is drawn.
-    /// The source retains raw motion until button-up; no early native warp.
-    pub fn peer_drag_position(&self) -> Option<eframe::egui::Pos2> {
+    /// Keep the source's genuine host capture while a peer owns the visible
+    /// cursor, including after button-up. No cross-window native warp is needed.
+    pub fn peer_cursor_position(&self) -> Option<eframe::egui::Pos2> {
         let displays = self.displays()?;
         let source = displays.owner.load(Ordering::Acquire).checked_sub(1)?;
         let source = if source == 0 {
@@ -388,7 +364,7 @@ impl Playback {
         } else {
             displays.get(source)?.playback.clone()
         };
-        if !source.capture() || source.pointer_buttons.load(Ordering::Acquire) == 0 {
+        if !source.capture() || source.stopped() {
             return None;
         }
         let (stream, x, y) = source.peer_cursor()?;

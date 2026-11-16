@@ -761,7 +761,7 @@ impl Input {
             }
         } else {
             if update.stream != 0 {
-                primary.release_peer_cursor(
+                primary.show_peer_cursor(
                     usize::from(update.stream),
                     i32::from(update.x),
                     i32::from(update.y),
@@ -771,7 +771,7 @@ impl Input {
                 for stream in 1..crate::display_stream::STREAMS {
                     if stream != usize::from(update.stream) {
                         if let Some(channel) = displays.get(stream) {
-                            channel.playback.release_peer_cursor(
+                            channel.playback.show_peer_cursor(
                                 usize::from(update.stream),
                                 i32::from(update.x),
                                 i32::from(update.y),
@@ -1196,7 +1196,6 @@ mod peer_drag_wire_tests {
         cursor[12] = 9;
         cursor[32..34].copy_from_slice(&256u16.to_be_bytes());
         input.cursor_frame(&cursor, &primary);
-        primary.pointer_buttons(1);
         primary.push_input(Event::Focus(true));
         let motion = |moved, relative, buttons| {
             Event::Pointer(Pointer {
@@ -1257,8 +1256,7 @@ mod peer_drag_wire_tests {
         cursor[32..34].copy_from_slice(&0u16.to_be_bytes());
         input.cursor_frame(&cursor, &primary);
         primary.push_input(motion(false, false, 0));
-        primary.pointer_buttons(0);
-        assert!(!primary.capture());
+        assert!(primary.capture());
         input
             .pump(
                 &primary,
@@ -1271,5 +1269,32 @@ mod peer_drag_wire_tests {
             )
             .unwrap();
         assert_eq!(frames, [control::header(1, 1, 0, 0).to_vec()]);
+        frames.clear();
+        primary.push_input(motion(true, true, 0));
+        primary.push_input(motion(false, false, 1));
+        primary.push_input(motion(false, false, 0));
+        input
+            .pump(
+                &primary,
+                true,
+                |b| {
+                    frames.push(b.to_vec());
+                    Ok(())
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(
+            frames,
+            [
+                control::header(3, 1, 3, -2).to_vec(),
+                control::header(1, 1, 1, 0).to_vec(),
+                control::header(1, 1, 0, 0).to_vec(),
+            ]
+        );
+        cursor[8..12].copy_from_slice(&0i32.to_be_bytes());
+        input.cursor_frame(&cursor, &primary);
+        assert!(!primary.capture());
+        assert!(primary.peer_cursor().is_none());
     }
 }

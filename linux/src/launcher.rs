@@ -328,7 +328,6 @@ mod tests {
             logo,
             desktop_input: Default::default(),
             shortcuts: None,
-            pointer_warp: None,
             signed_in: false,
             busy: false,
             status_text: app_style::LOGIN_NOTICE,

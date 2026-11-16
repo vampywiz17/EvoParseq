@@ -115,7 +115,6 @@ mod video_vulkan;
 #[path = "../../src-native/src/viewport.rs"]
 pub mod viewport;
 mod wayland_keys;
-mod wayland_pointer;
 mod window_mode;
 
 use eframe::{egui, egui_wgpu};
@@ -162,7 +161,6 @@ struct Desktop {
     logo: egui::TextureHandle,
     desktop_input: desktop_linux::DesktopInput,
     shortcuts: Option<wayland_keys::Shortcuts>,
-    pointer_warp: Option<Arc<std::sync::Mutex<wayland_pointer::Warp>>>,
     signed_in: bool,
     busy: bool,
     status_text: &'static str,
@@ -287,12 +285,8 @@ impl Desktop {
 impl eframe::App for Desktop {
     fn on_exit(&mut self) {
         self.shortcuts.take();
-        self.pointer_warp.take();
     }
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
-        if let Some(warp) = &self.pointer_warp {
-            warp.lock().unwrap_or_else(|e| e.into_inner()).dispatch();
-        }
         if raw.viewport_id != egui::ViewportId::ROOT {
             return;
         }
@@ -639,7 +633,6 @@ fn main() -> anyhow::Result<()> {
                         logo,
                         desktop_input: desktop_linux::DesktopInput::new(keyboard.clone()),
                         shortcuts: wayland_keys::Shortcuts::new(cc).ok(),
-                        pointer_warp: wayland_pointer::Warp::install(&cc.egui_ctx, cc).ok(),
                         signed_in: false,
                         busy: restore,
                         status_text: if restore {

@@ -409,10 +409,11 @@ GPUs remains unverified. Display timing VRR requests
 Vulkan AutoNoVsync with the documented supported-mode fallback. Physical VRR
 remains compositor-, monitor- and driver-controlled and unverified.
 
-Cross-display cursor restoration targets the destination viewport using the
-public Wayland pointer-warp protocol when advertised. A request is not an
-acknowledgement; older compositors may lack it or decline a cross-window warp.
-Same-window locked-pointer hints remain the fallback.
+Cross-display drags retain the existing captured relative-input path while the
+host reports a visible cursor on a peer display. A software pointer follows the
+host's peer coordinates, including after button-up. Returning to the source uses
+its same-window locked-pointer hint. Ctrl+Shift+M or focus loss releases capture.
+No cross-window pointer-warp protocol or input-injection service is required.
 
 AI upscaling stays disabled on Linux, as requested. Application Zero copy stays
 disabled because the presentation pass performs YUV-to-RGB conversion. The
@@ -430,40 +431,31 @@ Windows/Android queue entry points have not been enlarged. A genuine Main10
 access unit with a filler NAL tests the >1 MiB boundary without a GPU; oversized
 native units and queue overflow remain bounded.
 
-A peer cursor message during an already captured drag no longer unlocks the
-source while physical buttons are held. Source raw motion continues unchanged;
-the default Linux pointer is drawn at the host-reported peer coordinates in the
-existing GUI pass. This is pointer geometry, not video readback or composition.
-Button-up forwards no source absolute move, then the unlock/peer-warp sequence
-runs. Source restoration echoes remain suppressed until
-an intentional click reacquires that window. Focus loss still releases input.
-Wayland may decline pointer warping; successful request submission alone is not
-proof of native relocation. The wire regression verifies continued relative
-motion and a button-up packet with no source absolute-position packet.
+### Cross-display input without native warping (2026-11-16)
 
-The follow-up test still showed native cursor restoration in the source window.
-Separating unlock and warp into two presentations did not guarantee a committed
-source surface. Before a cross-surface warp, the Wayland adapter now commits the
-pointer-focused source surface and completes one display-sync roundtrip. This
-orders buffered constraint destruction before the warp and consumes any updated
-enter serial before sending it. The roundtrip is limited to cross-window cursor
-handoffs; normal motion, same-window hints and video presentation do not wait.
-The isolated Wayland wire test models an unlock-time enter-serial change and
-requires source commit, sync completion and the new serial before the peer warp.
-Request processing still does not prove compositor acceptance; live validation
-of this repair remains required.
+The maintainer reproduced cursor and click snap-back on Zorin OS 18 / GNOME 46.
+The previous implementation unlocked at button-up and depended on an optional
+cross-surface pointer warp. It did not verify native relocation; the newest log
+contained peer-release events without warp requests. GNOME 46 predates the
+pointer-warp extension. The failed optional adapter and vendor dispatch hook
+have been removed rather than extending that dependency.
 
-Reference: [KWin buffered unlock/warp bug 524804](https://bugs.kde.org/show_bug.cgi?id=524804).
+A visible peer cursor now leaves the source's host-requested capture intact.
+Button-up sends only the release packet; later motion stays raw-relative and a
+new click cannot inject the source window's absolute anchor. The existing GUI
+pass keeps drawing the default pointer at the latest visible peer coordinates
+after the drop. This is cursor geometry, with no video readback or extra pass.
+Hidden/suppressed host cursors still remove the peer pointer. The source's own
+visible cursor message ends capture through the existing same-window hint.
+Focus loss, Ctrl+Shift+M, Release input and peer closure release local capture;
+while operating the peer, use Ctrl+Shift+M to return to local UI. Keyboard focus
+remains on the captured source window. No new thread, timer, queue, dependency
+or synthetic host capture flag is introduced. Windows/Android runtime is unchanged.
 
-### Background-window cursor dispatch (2026-11-16)
+The input-adapter regression covers drop, stale absolute motion, subsequent raw
+motion/click, focus loss and peer closure. The wire regression checks the exact
+button-up, post-drop delta and following click packets, with no source absolute
+move, then the host's genuine return-to-source transition. These tests verify
+policy and framing; live Zorin validation of this change is still required.
 
-The maintainer still reports a visual cursor snap-back while clicks reach the
-correct display. A second dispatch issue exists independently of compositor
-acceptance: winit can return success for a locked-pointer position hint on a
-background window without an attached pointer. Previously that success bypassed
-the Wayland adapter entirely. The adapter now handles restoration first, using
-native locked-pointer hints only on the pointer-focused surface; a different
-surface always takes the explicit peer-warp path. The wire regression verifies
-that a background native success cannot suppress the peer request and that
-same-window hints remain available. This does not establish that the compositor
-accepts a cross-window warp; a new session log and live verification are required.
+Reference: [GNOME Mutter source branches](https://github.com/GNOME/mutter).

@@ -17,9 +17,6 @@ use egui::accesskit;
 use egui::{Pos2, Rect, Theme, Vec2, ViewportBuilder, ViewportCommand, ViewportId, ViewportInfo};
 pub use winit;
 
-/// Optional platform cursor positioning for compositors unsupported by winit.
-pub type CursorPositionHandler = std::sync::Arc<dyn Fn(&Window, PhysicalPosition<f64>) -> bool + Send + Sync>;
-
 pub mod clipboard;
 mod safe_area;
 mod window_settings;
@@ -1567,15 +1564,7 @@ fn process_viewport_command(
         ViewportCommand::ContentProtected(v) => window.set_content_protected(v),
         ViewportCommand::CursorPosition(pos) => {
             let position = PhysicalPosition::new(f64::from(pixels_per_point * pos.x), f64::from(pixels_per_point * pos.y));
-            // The adapter distinguishes the pointer-focused surface from a
-            // background viewport. A successful native call alone need not mean
-            // that a background window actually repositioned the pointer.
-            let handler = egui_ctx.data(|d| d.get_temp::<CursorPositionHandler>(egui::Id::new("cursor-position-handler")));
-            if let Some(handler) = handler {
-                if !handler(window, position) {
-                    log::warn!("{command:?}: cursor restoration request failed");
-                }
-            } else if let Err(err) = window.set_cursor_position(position) {
+            if let Err(err) = window.set_cursor_position(position) {
                 log::warn!("{command:?}: {err}");
             }
         }
