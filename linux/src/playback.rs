@@ -55,7 +55,7 @@ pub struct Playback {
     clipboard_output: Mutex<Option<String>>,
     clipboard_pending: AtomicBool,
     pub(crate) immersive: std::sync::atomic::AtomicU8,
-    cursor_restore: Mutex<Option<(usize, i32, i32)>>,
+    cursor_restore: Mutex<Option<(i32, i32)>>,
     video_rect: Mutex<Option<eframe::egui::Rect>>,
     cursor_state: AtomicU64,
     input_active: AtomicBool,
@@ -317,13 +317,13 @@ impl Playback {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if self.capture() && !capture {
-            *restore = Some((self.stream(), x, y));
+            *restore = Some((x, y));
         } else if capture {
             *restore = None;
         }
         self.set_capture(capture);
     }
-    pub fn take_cursor_restore(&self) -> Option<(usize, i32, i32)> {
+    pub fn take_cursor_restore(&self) -> Option<(i32, i32)> {
         self.cursor_restore
             .lock()
             .unwrap_or_else(|e| e.into_inner())

@@ -99,10 +99,8 @@ impl DesktopInput {
             && ctx.input(|i| i.focused)
             && !self.unlock_after_present
         {
-            if let Some((stream, x, y)) = playback.take_cursor_restore() {
-                if stream == playback.stream()
-                    && let Some(rect) = self.video
-                {
+            if let Some((x, y)) = playback.take_cursor_restore() {
+                if let Some(rect) = self.video {
                     let viewport = crate::viewport::Viewport {
                         source: playback.input_geometry(),
                         client: (rect.width().round() as u32, rect.height().round() as u32),
