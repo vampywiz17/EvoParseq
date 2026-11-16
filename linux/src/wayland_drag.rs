@@ -1,6 +1,6 @@
 //! Native Wayland DnD for a held desktop mouse button across our own surfaces.
-//! Uses the existing display/UI loop and shared bounded input inbox. No files,
-//! clipboard contents, pointer warps, worker or recurring timer are involved.
+//! Uses the existing display/UI loop and shared bounded input inbox. No file
+//! transfers, clipboard contents, pointer warps, worker or recurring timer.
 use crate::{
     input_handoff::{DragPhase, Event},
     playback::Playback,
@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex, atomic::Ordering};
 use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle,
     protocol::{
-        wl_data_device, wl_data_device_manager, wl_data_offer, wl_data_source, wl_pointer,
-        wl_registry, wl_seat, wl_surface,
+        wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer, wl_data_source,
+        wl_pointer, wl_registry, wl_seat, wl_shm, wl_surface,
     },
 };
 use winit::raw_window_handle::{
@@ -31,6 +31,13 @@ struct Gesture {
     inside_video: bool,
     last: (usize, crate::desktop_input::Pointer),
     ended: bool,
+    icon: Option<wl_surface::WlSurface>,
+    icon_visible: bool,
+    icon_positioned: bool,
+}
+struct DragIcon {
+    _theme: wayland_cursor::CursorTheme,
+    image: wayland_cursor::CursorImageBuffer,
 }
 struct State {
     ctx: egui::Context,
@@ -44,14 +51,50 @@ struct State {
     surfaces: [Option<wl_surface::WlSurface>; crate::display_stream::STREAMS],
     gesture: Option<Gesture>,
     offer: Option<wl_data_offer::WlDataOffer>,
+    compositor: Option<wl_compositor::WlCompositor>,
+    shm: Option<wl_shm::WlShm>,
+    icon: Option<DragIcon>,
 }
 impl State {
+    fn show_icon(&mut self, visible: bool) {
+        let Some(g) = &mut self.gesture else { return };
+        let (Some(surface), Some(icon)) = (&g.icon, &self.icon) else {
+            return;
+        };
+        if g.icon_visible == visible || (g.ended && visible) {
+            return;
+        }
+        if visible {
+            let (x, y) = if g.icon_positioned {
+                (0, 0)
+            } else {
+                let (x, y) = icon.image.hotspot();
+                (-(x as i32), -(y as i32))
+            };
+            surface.attach(Some(&icon.image), x, y);
+            let (w, h) = icon.image.dimensions();
+            surface.damage(0, 0, w as i32, h as i32);
+            g.icon_positioned = true;
+        } else {
+            surface.attach(None, 0, 0);
+        }
+        surface.commit();
+        g.icon_visible = visible;
+        crate::event_log::record(
+            "INFO",
+            "wayland_display_drag_local_pointer",
+            serde_json::json!({"visible":visible}),
+        );
+    }
     fn position(&mut self, x: f64, y: f64) {
         let Some(g) = &mut self.gesture else { return };
         if g.ended {
             return;
         }
-        let Some(stream) = g.target else { return };
+        let Some(stream) = g.target else {
+            self.show_icon(true);
+            return;
+        };
         let Some(target) = g.root.display(stream).filter(|p| !p.stopped()) else {
             self.end(true);
             return;
@@ -84,8 +127,11 @@ impl State {
             }
             g.inside_video = false;
         }
+        let show = !g.inside_video;
+        self.show_icon(show);
     }
     fn end(&mut self, cancelled: bool) {
+        self.show_icon(false);
         let Some(g) = &mut self.gesture else { return };
         if g.ended {
             return;
@@ -123,6 +169,12 @@ impl State {
         }
         if let Some(g) = self.gesture.take() {
             g.source.destroy();
+            if let Some(icon) = g.icon {
+                icon.destroy();
+            }
+            if let Some(icon) = g.icon {
+                icon.destroy();
+            }
         }
         if let Some(device) = self.device.take() {
             device.release();
@@ -149,6 +201,12 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
             }
             if interface == "wl_seat" && s.seat.is_none() {
                 s.seat = Some(r.bind(name, version.min(7), q, ()));
+            }
+            if interface == "wl_compositor" {
+                s.compositor = Some(r.bind(name, version.min(4), q, ()));
+            }
+            if interface == "wl_shm" {
+                s.shm = Some(r.bind(name, 1, q, ()));
             }
         }
     }
@@ -277,6 +335,7 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for State {
                     g.target = None;
                     g.inside_video = false;
                 }
+                s.show_icon(true);
                 if let Some(offer) = s.offer.take() {
                     offer.destroy();
                 }
@@ -326,6 +385,9 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
 }
 wayland_client::delegate_noop!(State:ignore wl_data_device_manager::WlDataDeviceManager);
 wayland_client::delegate_noop!(State:ignore wl_data_offer::WlDataOffer);
+wayland_client::delegate_noop!(State:ignore wl_compositor::WlCompositor);
+wayland_client::delegate_noop!(State:ignore wl_shm::WlShm);
+wayland_client::delegate_noop!(State:ignore wl_surface::WlSurface);
 
 pub struct Drag {
     connection: Connection,
@@ -385,8 +447,35 @@ impl Drag {
             surfaces: Default::default(),
             gesture: None,
             offer: None,
+            compositor: None,
+            shm: None,
+            icon: None,
         };
         queue.roundtrip(&mut state)?;
+        // Static native cursor buffer only: the compositor moves this DnD icon
+        // between windows. It is never drawn into a decoded video surface.
+        let icon = (|| -> Result<DragIcon> {
+            let mut theme = wayland_cursor::CursorTheme::load_or(
+                &connection,
+                state.shm.clone().context("No shared memory")?,
+                "Adwaita",
+                24,
+            )?;
+            let image = theme.get_cursor("default").context("No default cursor")?[0].clone();
+            Ok(DragIcon {
+                _theme: theme,
+                image,
+            })
+        })();
+        state.icon = icon
+            .map_err(|_| {
+                crate::event_log::record(
+                    "WARN",
+                    "wayland_drag_pointer_unavailable",
+                    serde_json::json!({}),
+                )
+            })
+            .ok();
         state.manager.as_ref().context("DnD v3 unavailable")?;
         state.seat.as_ref().context("Seat unavailable")?;
         queue.roundtrip(&mut state)?;
@@ -479,16 +568,23 @@ impl Drag {
         source.offer(MIME.to_owned());
         source.set_actions(wl_data_device_manager::DndAction::Move);
         origin.native_drag.store(true, Ordering::Release);
+        let icon = self
+            .state
+            .icon
+            .as_ref()
+            .and_then(|_| self.state.compositor.as_ref())
+            .map(|c| c.create_surface(&self.queue.handle(), ()));
         root.push_routed(Event::DisplayDrag {
             stream: origin.stream(),
             pointer,
             phase: DragPhase::Begin,
         });
-        self.state
-            .device
-            .as_ref()
-            .unwrap()
-            .start_drag(Some(&source), surface, None, serial);
+        self.state.device.as_ref().unwrap().start_drag(
+            Some(&source),
+            surface,
+            icon.as_ref(),
+            serial,
+        );
         self.state.gesture = Some(Gesture {
             origin: origin.clone(),
             root,
@@ -497,6 +593,9 @@ impl Drag {
             inside_video: true,
             last: (origin.stream(), pointer),
             ended: false,
+            icon,
+            icon_visible: false,
+            icon_positioned: false,
         });
         if let Err(error) = self.connection.flush() {
             self.state.end(true);

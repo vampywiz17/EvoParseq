@@ -503,6 +503,10 @@ display. Drop transfers input ownership; cancellation releases held input.
 The previous persistent-capture/software-pointer workaround has been removed.
 The local pointer is hidden during native dragging to avoid duplicating the
 host-rendered cursor; normal pointer visibility returns after drop/cancel.
+Outside stream video, a compositor-moved native drag icon keeps the real local
+pointer visible between windows. It is hidden again over video to avoid a double
+cursor. This reuses the existing Wayland cursor library/theme and has no video
+surface copy, input warp, extra worker or recurring timer.
 Stream windows share one native clipboard service. The drag data device is
 bound only for an active gesture, preventing a later clipboard device from
 swallowing the first drag on Mutter. CI also checks clipboard selection updates

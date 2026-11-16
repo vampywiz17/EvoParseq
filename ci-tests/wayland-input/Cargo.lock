@@ -330,6 +330,7 @@ dependencies = [
  "libc",
  "serde_json",
  "wayland-client",
+ "wayland-cursor",
  "wayland-protocols",
  "winit",
 ]

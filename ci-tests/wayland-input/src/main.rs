@@ -56,7 +56,15 @@ mod input_handoff {
     }
 }
 mod event_log {
+    pub static LOCAL_POINTER: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
     pub fn record(_: &str, event: &str, details: serde_json::Value) {
+        if event == "wayland_display_drag_local_pointer" {
+            LOCAL_POINTER.store(
+                details["visible"].as_bool().unwrap(),
+                std::sync::atomic::Ordering::Release,
+            );
+        }
         println!("{event} {details}");
     }
 }
@@ -355,8 +363,8 @@ fn main() -> Result<()> {
     queue.roundtrip(&mut f)?;
     queue.roundtrip(&mut f)?;
     anyhow::ensure!(
-        f.outputs.len() == 2,
-        "two isolated virtual outputs required"
+        f.outputs.len() == 3,
+        "two streams and one neutral output required"
     );
     f.outputs.sort_by_key(|o| (o.1, o.2));
     let _toolkit_device =
@@ -367,7 +375,7 @@ fn main() -> Result<()> {
     let _pointer = f.seat.as_ref().unwrap().get_pointer(&q, ());
     f.clipboard = Some(_toolkit_device.clone());
     let mut toplevels = Vec::new();
-    for index in 0..2 {
+    for index in 0..3 {
         let surface = f.compositor.as_ref().unwrap().create_surface(&q, ());
         let xdg = f.wm.as_ref().unwrap().get_xdg_surface(&surface, &q, index);
         let top = xdg.get_toplevel(&q, ());
@@ -450,12 +458,28 @@ fn main() -> Result<()> {
             egui::pos2(f.point.0 as f32, f.point.1 as f32),
         )?;
         pump(&mut drag, &mut f)?;
+        // The real pointer can leave while the host-rendered cursor stays at
+        // its video's edge. Show native DnD feedback on a non-stream surface.
         driver.command(serde_json::json!([
             "move",
-            (f.outputs[target].1 - f.outputs[source].1) as f64,
-            (f.outputs[target].2 - f.outputs[source].2) as f64
+            (f.outputs[2].1 - f.outputs[source].1) as f64,
+            (f.outputs[2].2 - f.outputs[source].2) as f64
         ]))?;
         pump(&mut drag, &mut f)?;
+        anyhow::ensure!(
+            event_log::LOCAL_POINTER.load(Ordering::Acquire),
+            "no visible local pointer between stream windows"
+        );
+        driver.command(serde_json::json!([
+            "move",
+            (f.outputs[target].1 - f.outputs[2].1) as f64,
+            (f.outputs[target].2 - f.outputs[2].2) as f64
+        ]))?;
+        pump(&mut drag, &mut f)?;
+        anyhow::ensure!(
+            !event_log::LOCAL_POINTER.load(Ordering::Acquire),
+            "local drag pointer duplicated the host cursor inside video"
+        );
         driver.command(serde_json::json!(["button", false]))?;
         pump(&mut drag, &mut f)?;
         let events = playback[0].events.lock().unwrap();
@@ -544,7 +568,7 @@ fn main() -> Result<()> {
         "cancel must release once"
     );
     println!(
-        "PASS: real native Wayland cross-window drag in both directions, free post-drop pointer and cancellation"
+        "PASS: real native Wayland drag in both directions, local gap feedback, clipboard continuity, free post-drop pointer and cancellation"
     );
     Ok(())
 }

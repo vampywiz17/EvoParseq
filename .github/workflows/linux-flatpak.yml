@@ -26,7 +26,7 @@ jobs:
       - name: Install disposable native compositor fixture
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends mutter python3-gi dbus-daemon libwayland-dev libxkbcommon-dev libgl1-mesa-dri
+          sudo apt-get install --yes --no-install-recommends mutter adwaita-icon-theme python3-gi dbus-daemon libwayland-dev libxkbcommon-dev libgl1-mesa-dri
       - name: Compile production Wayland adapter in isolated fixture
         run: |
           cargo build --manifest-path ci-tests/wayland-input/Cargo.toml --locked --target "$(rustc -vV | sed -n 's/^host: //p')"

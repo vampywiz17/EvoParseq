@@ -14,7 +14,7 @@ export LIBGL_ALWAYS_SOFTWARE=true
 export WAYLAND_DISPLAY=wayland-0
 log="$XDG_RUNTIME_DIR/mutter.log"
 mutter --version
-mutter --headless --wayland --no-x11 --virtual-monitor=800x600 --virtual-monitor=800x600 >"$log" 2>&1 &
+mutter --headless --wayland --no-x11 --virtual-monitor=800x600 --virtual-monitor=800x600 --virtual-monitor=800x600 >"$log" 2>&1 &
 compositor=$!
 trap 'kill "$compositor" 2>/dev/null || true; cat "$log"; rm -rf "$XDG_RUNTIME_DIR"' EXIT
 for attempt in {1..80}; do
