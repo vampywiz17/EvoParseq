@@ -402,6 +402,10 @@ fn main() -> Result<()> {
     for (source, target) in [(0, 1), (1, 0)] {
         driver.command(serde_json::json!(["move", -10000., -10000.]))?;
         pump(&mut drag, &mut f)?;
+        // Edges may be outside mapped surface input regions. First move inside
+        // an output, then use its real enter coordinates to reach the source.
+        driver.command(serde_json::json!(["move", 300., 250.]))?;
+        pump(&mut drag, &mut f)?;
         let (x, y) = (f.outputs[source].1 + 300, f.outputs[source].2 + 250);
         let current = f.current.context("No pointer surface after edge reset")?;
         // Mutter clamps large relative moves to an output edge, not necessarily
