@@ -425,6 +425,7 @@ mod cursor_tests {
     fn linux_cursor_restore_clears_both_egui_icon_and_native_visibility() {
         let ctx = egui::Context::default();
         let playback = Playback::new(ctx.clone());
+        playback.activate_input();
         playback.set_capture(true);
         let mut adapter = DesktopInput {
             enabled: true,
@@ -494,6 +495,7 @@ mod drag_restore_tests {
     fn linux_drag_exit_commits_position_hint_before_unlock_and_ignores_stale_anchor() {
         let ctx = egui::Context::default();
         let playback = Playback::new(ctx.clone());
+        playback.activate_input();
         playback.set_input_ready(true);
         playback.set_input_geometry((1920, 1080));
         let mut adapter = DesktopInput {
