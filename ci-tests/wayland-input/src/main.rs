@@ -403,7 +403,14 @@ fn main() -> Result<()> {
         driver.command(serde_json::json!(["move", -10000., -10000.]))?;
         pump(&mut drag, &mut f)?;
         let (x, y) = (f.outputs[source].1 + 300, f.outputs[source].2 + 250);
-        driver.command(serde_json::json!(["move", x as f64, y as f64]))?;
+        let current = f.current.context("No pointer surface after edge reset")?;
+        // Mutter clamps large relative moves to an output edge, not necessarily
+        // desktop (0,0). Position from the actual pointer enter coordinates.
+        driver.command(serde_json::json!([
+            "move",
+            x as f64 - (f.outputs[current].1 as f64 + f.point.0),
+            y as f64 - (f.outputs[current].2 as f64 + f.point.1)
+        ]))?;
         pump(&mut drag, &mut f)?;
         anyhow::ensure!(
             f.current == Some(source),
@@ -440,13 +447,29 @@ fn main() -> Result<()> {
             f.point,
             f.outputs.iter().map(|o| (o.1, o.2)).collect::<Vec<_>>()
         );
-        driver.command(serde_json::json!(["move", 12., 8.]))?;
+        let previous = f.point;
+        driver.command(serde_json::json!([
+            "move",
+            if f.point.0 > 400. { -12. } else { 12. },
+            8.
+        ]))?;
         pump(&mut drag, &mut f)?;
         anyhow::ensure!(
             f.current == Some(target),
             "post-drop pointer left target {target}: surface={:?}, point={:?}",
             f.current,
             f.point
+        );
+        anyhow::ensure!(f.point != previous, "no ordinary pointer motion after drop");
+        driver.command(serde_json::json!([
+            "move",
+            f.outputs[source].1 as f64 + 300. - (f.outputs[target].1 as f64 + f.point.0),
+            f.outputs[source].2 as f64 + 250. - (f.outputs[target].2 as f64 + f.point.1)
+        ]))?;
+        pump(&mut drag, &mut f)?;
+        anyhow::ensure!(
+            f.current == Some(source),
+            "post-drop pointer could not freely leave destination"
         );
         playback[0].events.lock().unwrap().clear();
     }
