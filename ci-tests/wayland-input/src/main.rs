@@ -368,6 +368,11 @@ fn main() -> Result<()> {
         "two streams and one neutral output required"
     );
     f.outputs.sort_by_key(|o| (o.1, o.2));
+    // The headless seat gains a real virtual keyboard only on first input.
+    // Initialize it before binding wl_keyboard or mapping focused windows.
+    let mut driver = Driver::new()?;
+    driver.command(serde_json::json!(["escape"]))?;
+    queue.roundtrip(&mut f)?;
     let _toolkit_device =
         f.manager
             .as_ref()
@@ -412,7 +417,6 @@ fn main() -> Result<()> {
         drag.surface(i, &SurfaceHandle(f.surfaces[i].clone()))?;
     }
     let playback = playback::Playback::pair();
-    let mut driver = Driver::new()?;
     let mut selections = Vec::new();
     // All movement is generated inside the disposable headless compositor.
     let mut pump = |drag: &mut wayland_drag::Drag, f: &mut Fixture| -> Result<()> {
