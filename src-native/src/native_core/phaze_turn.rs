@@ -1,14 +1,14 @@
 //! Isolated proof of the production Rust TURN carrier; no user credentials.
 use evoparseq_phaze::{
-    turn::{Carrier, Relay},
     Datagram,
+    turn::{Carrier, Relay},
 };
 use std::{
     io,
     net::SocketAddr,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -19,11 +19,11 @@ use tokio::{
 };
 use webrtc::{
     turn::{
-        auth::{generate_auth_key, AuthHandler},
+        auth::{AuthHandler, generate_auth_key},
         relay::relay_static::RelayAddressGeneratorStatic,
         server::{
-            config::{ConnConfig, ServerConfig},
             Server,
+            config::{ConnConfig, ServerConfig},
         },
     },
     util::vnet::net::Net,
@@ -177,21 +177,23 @@ async fn production_phaze_turn_udp_tcp_tls_are_opaque_and_tls_is_verified() -> a
                 &roots,
             )
             .await?;
-            roundtriprelay.await?;
+            roundtrip(&relay).await?;
             relay.close().await;
             drop(relay);
             task.abort();
         }
         let (proxy, _, task) = stream_proxy(address, true).await?;
-        assert!(Relay::allocate(
-            "127.0.0.1",
-            proxy.port(),
-            Carrier::Tls,
-            "phaze-fixture",
-            "fixture-only-password"
-        )
-        .await
-        .is_err());
+        assert!(
+            Relay::allocate(
+                "127.0.0.1",
+                proxy.port(),
+                Carrier::Tls,
+                "phaze-fixture",
+                "fixture-only-password"
+            )
+            .await
+            .is_err()
+        );
         task.abort();
         server.close().await?;
         Ok::<_, anyhow::Error>(())
@@ -215,10 +217,10 @@ async fn production_phaze_turn_renews_allocation_and_peer_permissions() -> anyho
             }} #[allow(unreachable_code)] Ok::<(),io::Error>(())
         });
         let relay=Relay::allocate("127.0.0.1",address.port(),Carrier::Udp,"phaze-fixture","fixture-only-password").await?;
-        roundtriprelay.await?;assert_eq!(permission.load(Ordering::Relaxed),1);
+        roundtrip(&relay).await?;assert_eq!(permission.load(Ordering::Relaxed),1);
         tokio::time::timeout(Duration::from_secs(135),async { while refresh.load(Ordering::Relaxed)<1 || permission.load(Ordering::Relaxed)<2 {tokio::time::sleep(Duration::from_millis(250)).await;} }).await?;
         assert!(refresh.load(Ordering::Relaxed)>=1);assert!(permission.load(Ordering::Relaxed)>=2);
-        roundtriprelay.await?;relay.close().await;drop(relay);proxy.abort();server.close().await?;
+        roundtrip(&relay).await?;relay.close().await;drop(relay);proxy.abort();server.close().await?;
         Ok::<_,anyhow::Error>(())
     }).await??;
     Ok(())
