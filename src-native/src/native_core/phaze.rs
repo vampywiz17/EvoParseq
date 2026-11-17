@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use std::{
     collections::VecDeque,
     sync::{atomic::Ordering, Arc},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 pub(super) fn block_on<T>(future: impl std::future::Future<Output = Result<T>>) -> Result<T> {
@@ -32,7 +32,6 @@ struct View {
     authenticated: bool,
     video: crate::video_windows::Pipeline,
     generation: u64,
-    last_report: Instant,
     inspector: crate::video_stream::Inspector,
     audio: Option<Arc<crate::audio_windows::Playback>>,
     pcm: Vec<i16>,
@@ -155,10 +154,6 @@ impl evoparseq_phaze::Sink for View {
         }
         if let Some(info) = self.inspector.receive(encoded) {
             self.video.submit(encoded, info);
-        }
-        if self.last_report.elapsed() >= Duration::from_millis(500) {
-            self.publish("Connected (Phaze, experimental)");
-            self.last_report = Instant::now();
         }
         Ok(())
     }
@@ -361,7 +356,6 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         authenticated: false,
         video,
         generation,
-        last_report: Instant::now(),
         inspector,
         audio: None,
         pcm: Vec::new(),
