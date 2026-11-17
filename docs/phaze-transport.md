@@ -113,3 +113,25 @@ signaling only; the client's relayed STUN/DTLS packets retain normal routing.
 Direct local-interface candidates retain `false`. A live retry is required to
 establish whether this resolves the observed failure; symmetric NAT and relay
 reachability are not established by the synthetic carrier tests.
+
+## Post-answer synchronization
+
+The short-TTL trial was observed in the native host log, but it did not produce
+a returned peer datagram. Further static interoperability analysis identified
+the separate signaling action that starts normal-TTL host checks: `sync`.
+The native client sends it after processing `answer`; the host's `SyncData`
+handler invokes its P2P-start operation. This advances its peer-check state,
+whose scheduler sends authenticated STUN requests with the default IP TTL.
+It is distinct from the short-TTL candidate probe and from a response to an
+already received UDP request. It requires neither the company relay service
+nor an application/media packet on an established DTLS connection.
+
+The independent Rust client now sends `{"action":"sync","to":host_peer_id,
+"attempt_id":current_attempt_id}` after validating the answer, before peer
+STUN/DTLS. This uses the same authenticated signaling connection and attempt;
+it does not add credentials or change certificate verification. A successful
+write logs `host_sync_sent`, not a claim that the host has processed it.
+Existing authenticated peer-reflexive endpoint learning can then accept the
+host's actual NAT source port. Native-host TURN success still needs a live
+retry; neither a static state transition nor synthetic carrier tests prove it.
+No native implementation body is incorporated into the Rust source.

@@ -321,6 +321,16 @@ pub async fn connect_via(
             && answer.cert_hash.bytes().all(|b| b.is_ascii_hexdigit()),
         "Invalid Phaze host credentials"
     );
+    // A validated answer is not the host's start signal. This separate wire
+    // action starts its normal-TTL peer checks, allowing NAT endpoint learning.
+    ws.send(Message::Text(
+        json!({"action":"sync","to":peer,"attempt_id":attempt})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .map_err(|_| anyhow::anyhow!("Phaze host synchronization failed"))?;
+    sink.stage("host_sync_sent");
     // Both futures are owned here: cancellation drops signaling and UDP together.
     let signaling = async {
         let mut tick = tokio::time::interval(Duration::from_secs(15));
