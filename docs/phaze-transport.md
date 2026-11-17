@@ -99,3 +99,17 @@ Automated fixtures exercise the actual production carrier over UDP/TCP/TLS,
 fragmented stream reads, untrusted-certificate rejection and allocation/permission
 renewal. Test server crypto dependencies are not the production Phaze provider.
 Live native-host interoperability must still be confirmed by the user.
+
+The first live Cloudflare/UDP trial completed allocation and signaling but no
+peer datagram returned: 30 sends succeeded locally and 90 sends to the other
+three candidates were unreachable. The host advertised three private addresses
+and one public IPv4 address; its log showed no peer probe. These counters do not
+prove delivery to the host or a particular NAT behavior.
+
+Unlike a local-interface candidate, the public TURN candidate now advertises
+`short_ttl: true`, requesting the native host's outbound NAT-opening probe.
+The original `false` value did not request that probe. This changes candidate
+signaling only; the client's relayed STUN/DTLS packets retain normal routing.
+Direct local-interface candidates retain `false`. A live retry is required to
+establish whether this resolves the observed failure; symmetric NAT and relay
+reachability are not established by the synthetic carrier tests.

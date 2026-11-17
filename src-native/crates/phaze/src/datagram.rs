@@ -4,6 +4,11 @@ use std::{future::Future, io, net::SocketAddr};
 
 pub trait Datagram: Sync {
     fn candidates(&self) -> io::Result<Vec<SocketAddr>>;
+    /// Ask the native host to send its short-TTL NAT-opening probe to the
+    /// advertised address. Local-interface candidates do not need this.
+    fn candidate_short_ttl(&self) -> bool {
+        false
+    }
     /// Canonical socket-family representation; None means unsupported family.
     fn endpoint(&self, address: SocketAddr) -> Option<SocketAddr>;
     fn send_to(

@@ -221,7 +221,7 @@ pub async fn connect_via(
     );
     let candidates: Vec<_> = addresses
         .iter()
-        .map(|a| json!({"addr":a.ip().to_string(),"port":a.port(),"short_ttl":false}))
+        .map(|a| json!({"addr":a.ip().to_string(),"port":a.port(),"short_ttl":socket.candidate_short_ttl()}))
         .collect();
     let identity = transport::Identity::generate()?;
     let mut random = [0; 4];

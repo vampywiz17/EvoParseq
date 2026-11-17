@@ -487,6 +487,11 @@ impl crate::Datagram for &Relay {
     fn candidates(&self) -> io::Result<Vec<SocketAddr>> {
         Ok(vec![self.address])
     }
+    fn candidate_short_ttl(&self) -> bool {
+        // A public allocation needs an outbound host probe to open its NAT;
+        // advertising it like a local interface leaves the host passive.
+        true
+    }
     fn endpoint(&self, address: SocketAddr) -> Option<SocketAddr> {
         let address = match address {
             SocketAddr::V6(a) => SocketAddr::new(a.ip().to_ipv4_mapped()?.into(), a.port()),
