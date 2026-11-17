@@ -158,7 +158,7 @@ impl Form {
             match self.active_tab {
                 Tab::Network => "Phaze: Force TURN uses the configured relay. Other modes use direct UDP.",
                 Tab::Video => "Video changes apply on your next connection. Check Connection stats for the actual format and decoder.",
-                Tab::Audio => "Phaze uses stereo PCM audio. Playback buffer changes apply on your next connection.",
+                Tab::Audio => "This client currently uses stereo PCM. Playback buffer changes apply on your next connection.",
                 Tab::Input => "Phaze supports keyboard, mouse and scrolling. HID and USB forwarding are unavailable.",
             }
         } else {
@@ -170,6 +170,59 @@ impl Form {
             &VideoFormat::ALL[..2]
         } else {
             &VideoFormat::ALL
+        }
+    }
+    pub fn video_format_help(&self) -> &'static str {
+        if self.phaze {
+            "Request H.264 or HEVC 8-bit.\nThe host may select H.264; reconnect after changing."
+        } else {
+            crate::app_style::forms::VIDEO_FORMAT.help
+        }
+    }
+    pub fn chroma_help(&self) -> &'static str {
+        if self.phaze {
+            "HEVC 8-bit; requires compatible host and GPU.\nNormal GPU rendering; host may send 4:2:0 instead."
+        } else {
+            crate::app_style::forms::CHROMA.help
+        }
+    }
+    pub fn presentation_help(&self) -> &'static str {
+        if self.phaze {
+            "HEVC 4:2:0: original NV12 (8-bit) surfaces.\nDriver support required; reconnect after changing."
+        } else {
+            crate::app_style::forms::VIDEO_PRESENTATION.help
+        }
+    }
+    pub fn audio_buffer_help(&self) -> &'static str {
+        if self.phaze {
+            "Default: 50 / 100 ms.\nCustom limits apply only when enabled."
+        } else {
+            crate::app_style::forms::PLAYBACK_BUFFER.help
+        }
+    }
+    pub fn route_labels(&self) -> &'static [&'static str] {
+        if self.phaze {
+            &[
+                "Direct UDP (default)",
+                "Direct UDP (LAN / VPN)",
+                "Force TURN relay",
+            ]
+        } else {
+            &RouteMode::LABELS
+        }
+    }
+    pub fn route_help(&self) -> &'static str {
+        if self.phaze {
+            "Choose direct UDP or explicitly force TURN.\nThere is no automatic direct/relay fallback."
+        } else {
+            crate::app_style::forms::CONNECTION_ROUTE.help
+        }
+    }
+    pub fn provider_help(&self) -> &'static str {
+        if self.phaze {
+            "Used only with Force TURN relay.\nThe host-facing relay connection remains UDP."
+        } else {
+            crate::app_style::forms::TURN_PROVIDER.help
         }
     }
     pub fn cloudflare(&self) -> bool {

@@ -322,7 +322,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
         hwnd,
         page,
         crate::app_style::forms::CONNECTION_ROUTE.label,
-        crate::app_style::forms::CONNECTION_ROUTE.help,
+        page.model.route_help(),
         344,
         0,
         40,
@@ -332,14 +332,14 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
         page,
         ROUTE_MODE,
         344,
-        &RouteMode::LABELS,
+        page.model.route_labels(),
         RouteMode::current(&s) as usize,
     );
     row_label(
         hwnd,
         page,
         crate::app_style::forms::TURN_PROVIDER.label,
-        crate::app_style::forms::TURN_PROVIDER.help,
+        page.model.provider_help(),
         418,
         0,
         40,
@@ -568,7 +568,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
         hwnd,
         page,
         crate::app_style::forms::VIDEO_FORMAT.label,
-        crate::app_style::forms::VIDEO_FORMAT.help,
+        page.model.video_format_help(),
         344,
         0,
         48,
@@ -624,7 +624,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
             hwnd,
             page,
             crate::app_style::forms::CHROMA.label,
-            crate::app_style::forms::CHROMA.help,
+            page.model.chroma_help(),
             438,
             0,
             60,
@@ -713,7 +713,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
             hwnd,
             page,
             crate::app_style::forms::VIDEO_PRESENTATION.label,
-            crate::app_style::forms::VIDEO_PRESENTATION.help,
+            page.model.presentation_help(),
             y,
             0,
             40,
@@ -761,7 +761,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
         hwnd,
         page,
         crate::app_style::forms::PLAYBACK_BUFFER.label,
-        crate::app_style::forms::PLAYBACK_BUFFER.help,
+        page.model.audio_buffer_help(),
         242,
         0,
         48,
@@ -1235,7 +1235,7 @@ fn mode_combo(id: usize) -> bool {
     matches!(id, VIDEO_FORMAT | INPUT_MODE | ROUTE_MODE | IMMERSIVE)
         || binary_choice_kind(id).is_some()
 }
-fn mode_label(id: usize, index: u32) -> &'static str {
+fn mode_label(id: usize, index: u32, model: &Form) -> &'static str {
     let index = index as usize;
     if id == VIDEO_FORMAT {
         VideoFormat::LABELS.get(index).copied()
@@ -1244,7 +1244,7 @@ fn mode_label(id: usize, index: u32) -> &'static str {
     } else if id == IMMERSIVE {
         crate::input_state::IMMERSIVE_LABELS.get(index).copied()
     } else if id == ROUTE_MODE {
-        RouteMode::LABELS.get(index).copied()
+        model.route_labels().get(index).copied()
     } else {
         binary_choice_kind(id).and_then(|kind| kind.labels().get(index).copied())
     }
@@ -1580,7 +1580,7 @@ unsafe extern "system" fn page_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LP
                             .cloned()
                             .unwrap_or_default()
                     } else if mode_combo(draw.CtlID as usize) {
-                        mode_label(draw.CtlID as usize, draw.itemID).into()
+                        mode_label(draw.CtlID as usize, draw.itemID, &page.model).into()
                     } else if draw.CtlID == NETWORK_TAB as u32 {
                         "Network".into()
                     } else if draw.CtlID == VIDEO_TAB as u32 {
