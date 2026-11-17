@@ -16,7 +16,7 @@ futures-util = { version = "0.3", features = ["sink"] }
 sha2 = "0.10"
 getrandom = "0.3"
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
-rustls-rustcrypto = "=0.1.0-pre.0"
+rustls-rustcrypto = { path = "vendor/rustls-rustcrypto" }
 purecrypto = { version = "=0.10.4", default-features = false, features = ["std", "dtls", "p256-table"] }
 hmac = "0.12"
 sha1 = "0.10"

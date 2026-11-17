@@ -9,6 +9,9 @@ Constants and message layouts express protocol compatibility, not shared native 
 The adapter uses open-source Rust libraries: purecrypto (MIT) for DTLS 1.2/CID,
 rustls-rustcrypto (MIT OR Apache-2.0) with rustls for service HTTPS/WebSocket TLS,
 and the Rust ecosystem dependencies recorded in the application lockfile.
+The open-source RustCrypto provider is vendored with its original licenses and
+unchanged crypto source; its manifest replaces unmaintained paste with pastey.
+See vendor/rustls-rustcrypto/EVOPARSEQ-PATCH.md for provenance and the exact change.
 Both crypto backends are experimental; this is an experimental development branch,
 not a production cryptographic dependency recommendation.
 
@@ -17,6 +20,8 @@ not a production cryptographic dependency recommendation.
 - Service authentication, optional 2FA, authorized online host discovery and logout.
 - Bounded authenticated WebSocket offer/answer; host approval is preserved.
 - Direct IPv4/IPv6 UDP candidate probing with authenticated STUN.
+- Periodic authenticated Binding keepalive with bounded, one-use transaction IDs;
+  a static video image is not treated as a dead peer while keepalive replies arrive.
 - DTLS 1.2/CID with fresh ephemeral identity, mutual certificate handshake and
   mandatory signaling-fingerprint pinning before application requests.
 - Output-list reception, selection of the primary active output and H.264 request.
@@ -26,8 +31,11 @@ not a production cryptographic dependency recommendation.
   existing Windows Pipeline and shared Annex B inspector. No decoded-pixel readback.
 
 The Rust proof received the real host output list and decoded one H.264 picture.
-That proof is not validation of this GUI integration, sustained playback, remote
-routing under loss, or the full native congestion/retransmission behavior.
+A user-confirmed Windows GUI test displayed H.264 8-bit 4:2:0 through the existing
+Media Foundation pipeline. That initial GUI session subsequently timed out.
+Periodic Binding keepalive is under live validation. Sustained playback, remote
+routing under loss and the full native congestion/retransmission behavior are
+not yet validated.
 
 ## Explicit limitations
 
