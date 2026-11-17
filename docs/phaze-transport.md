@@ -127,7 +127,7 @@ already received UDP request. It requires neither the company relay service
 nor an application/media packet on an established DTLS connection.
 
 The independent Rust client now sends `{"action":"sync","to":host_peer_id,
-"attempt_id":current_attempt_id}` after validating the answer, before peer
+"attempt_id":current_attempt_id,"data":null}` after validating the answer, before peer
 STUN/DTLS. This uses the same authenticated signaling connection and attempt;
 it does not add credentials or change certificate verification. A successful
 write logs `host_sync_sent`, not a claim that the host has processed it.

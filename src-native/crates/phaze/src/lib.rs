@@ -324,7 +324,7 @@ pub async fn connect_via(
     // A validated answer is not the host's start signal. This separate wire
     // action starts its normal-TTL peer checks, allowing NAT endpoint learning.
     ws.send(Message::Text(
-        json!({"action":"sync","to":peer,"attempt_id":attempt})
+        json!({"action":"sync","to":peer,"attempt_id":attempt,"data":null})
             .to_string()
             .into(),
     ))
