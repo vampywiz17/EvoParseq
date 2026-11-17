@@ -269,16 +269,23 @@ async fn select_peer(
     let mut tick = tokio::time::interval(Duration::from_millis(500));
     let stop = tokio::time::Instant::now() + Duration::from_secs(15);
     let mut buf = [0; 2048];
+    let (
+        mut sent,
+        mut unreachable_sends,
+        mut received,
+        mut invalid_stun,
+        mut authenticated_requests,
+    ) = (0u32, 0u32, 0u32, 0u32, 0u32);
     loop {
         tokio::select! {
-        _=tokio::time::sleep_until(stop)=>bail!("No authenticated STUN response from advertised host candidates"),
-        _=tick.tick()=>{for target in &targets{match socket.send_to(&req,*target).await{Ok(_)=>{},Err(err)if unreachable(&err)=>{},Err(err)=>return Err(err).context("STUN candidate send failed")}}},
+        _=tokio::time::sleep_until(stop)=>bail!("No authenticated STUN response from advertised host candidates (candidates={}, sent={}, unreachable={}, received={}, invalid_stun={}, authenticated_requests={})", targets.len(), sent, unreachable_sends, received, invalid_stun, authenticated_requests),
+        _=tick.tick()=>{for target in &targets{match socket.send_to(&req,*target).await{Ok(_)=>{sent+=1;},Err(err)if unreachable(&err)=>{unreachable_sends+=1;},Err(err)=>return Err(err).context("STUN candidate send failed")}}},
         r=socket.recv_from(&mut buf)=>{
-        let(n,src)=match r{Ok(v)=>v,Err(err)if unreachable(&err)=>{continue},Err(err)=>return Err(err).context("STUN receive failed")};let Some(src)=socket.endpoint(src) else { continue };
-        if n<20{continue}let b=&buf[..n];if b[4..8]!=0x2112a442u32.to_be_bytes(){continue}
-        let username=match check_stun(b,&a.pwd){Ok(u)=>u,Err(_)=>{continue}};
+        let(n,src)=match r{Ok(v)=>v,Err(err)if unreachable(&err)=>{continue},Err(err)=>return Err(err).context("STUN receive failed")};received+=1;let Some(src)=socket.endpoint(src) else { continue };
+        if n<20{invalid_stun+=1;continue}let b=&buf[..n];if b[4..8]!=0x2112a442u32.to_be_bytes(){invalid_stun+=1;continue}
+        let username=match check_stun(b,&a.pwd){Ok(u)=>u,Err(_)=>{invalid_stun+=1;continue}};
         let kind=u16::from_be_bytes(b[..2].try_into().unwrap());
-        if kind==1{if username!=Some(format!("{}:{own}",a.ufrag).as_bytes()){continue}let txid=b[8..20].try_into().unwrap();socket.send_to(&reply_stun(txid,src,pwd)?,src).await?;
+        if kind==1{if username!=Some(format!("{}:{own}",a.ufrag).as_bytes()){invalid_stun+=1;continue}authenticated_requests+=1;let txid=b[8..20].try_into().unwrap();socket.send_to(&reply_stun(txid,src,pwd)?,src).await?;
             // An authenticated peer-reflexive endpoint may have a different NAT
             // port from signaling. Never learn it from an unsigned datagram.
             if !targets.contains(&src)&&targets.len()<64 {targets.push(src);socket.send_to(&req,src).await?;}
