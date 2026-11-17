@@ -36,7 +36,8 @@ not a production cryptographic dependency recommendation.
 
 A user-confirmed Windows GUI test displayed H.264 8-bit 4:2:0 through the existing
 Media Foundation pipeline and continued updating beyond one minute after the
-protected heartbeat fix. Audio/input wiring requires a new live validation.
+protected heartbeat fix. A subsequent direct/VPN test confirmed sound, mouse
+clicks and scrolling; keyboard typing still needs explicit user confirmation.
 Loss behavior and the full native congestion/retransmission behavior remain unverified.
 
 ## Explicit limitations
@@ -46,7 +47,9 @@ H.264, 8-bit, 4:2:0; initial request uses the verified 10 Mbps / 30 fps fields.
 No Phaze clipboard, USB, virtual-display management, multi-display,
 HEVC, 10-bit or 4:4:4 support is claimed.
 Explicit Force TURN routing now uses the production Rust carrier over UDP, TCP
-or TLS, with no direct fallback. A native-host relay test is still required.
+or TLS, with no direct fallback. Cloudflare TURN/UDP connectivity and H.264 video
+were confirmed against the native host on 2026-11-17 after the post-answer
+`sync` fix. Native-host TCP/TLS tests remain outstanding.
 Raw audio costs approximately 1.536 Mbit/s before transport overhead.
 Unintegrated Parsec session controls/settings are unavailable in Phaze mode.
 Existing local GPU/presentation preferences are reused.

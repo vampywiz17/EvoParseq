@@ -98,7 +98,8 @@ hostname checks remain mandatory. No peer-supplied CA is trusted.
 Automated fixtures exercise the actual production carrier over UDP/TCP/TLS,
 fragmented stream reads, untrusted-certificate rejection and allocation/permission
 renewal. Test server crypto dependencies are not the production Phaze provider.
-Live native-host interoperability must still be confirmed by the user.
+Live native-host Cloudflare/UDP validation is recorded below; TCP/TLS still
+require their own native-host tests.
 
 The first live Cloudflare/UDP trial completed allocation and signaling but no
 peer datagram returned: 30 sends succeeded locally and 90 sends to the other
@@ -135,3 +136,22 @@ Existing authenticated peer-reflexive endpoint learning can then accept the
 host's actual NAT source port. Native-host TURN success still needs a live
 retry; neither a static state transition nor synthetic carrier tests prove it.
 No native implementation body is incorporated into the Rust source.
+
+## Live Cloudflare TURN/UDP validation (2026-11-17)
+
+The user tested Windows build `33fc27c` with Cloudflare and Force TURN/UDP and
+confirmed that the connection displayed video. The credential-free client log
+records `host_sync_sent`, authenticated STUN, authenticated DTLS and
+`phaze_route_selected` with `route=TURN`, `carrier=TURN / UDP` and
+`authenticated=true`. The existing carrier advertises only the allocation in
+this mode and has no direct fallback. The log then records display discovery,
+H.264 Media Foundation decoder selection and PCM s16le audio startup.
+
+This verifies native-host TURN/UDP connection establishment and user-visible
+H.264 video after the missing sync was added. The roughly 67-second connected
+log interval contains no session-failure event, but it does not independently
+prove continuous frame updates, audible sound or input delivery over that
+whole interval. Audio playback and input were previously user-confirmed on the
+direct/VPN path; their TURN behavior needs user confirmation. Native-host
+TURN/TCP and TURN/TLS remain unverified by this trial. No private addresses,
+credentials, packet captures or proprietary implementation bodies are included.
