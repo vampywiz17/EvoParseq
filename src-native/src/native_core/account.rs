@@ -17,7 +17,7 @@ impl Service {
         match self {
             Self::Parsec => crate::app_style::LOGIN_NOTICE,
             Self::Phaze => {
-                "Use your Phaze account. Experimental video only; no audio or remote input."
+                "Use your Phaze account. Passwords and two-factor codes are never saved."
             }
         }
     }

@@ -136,14 +136,7 @@ unsafe fn collect(p: &Panel) -> Result<Video> {
         fullscreen: SendMessageW(p.fullscreen, BM_GETCHECK, 0, 0) == BST_CHECKED as isize,
     }
     .parse()
-    .map(|mut video| {
-        if (&*p.window).session.phaze.load(Ordering::Acquire) {
-            video.resolution = crate::session_preferences::Resolution::Host;
-            video.constant_fps = None;
-            video.rotated = None;
-        }
-        video
-    })
+    .map(|video| (&*p.window).session.supported_video(video))
 }
 unsafe fn close(hwnd: HWND) {
     let parent = GetParent(hwnd);

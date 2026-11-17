@@ -118,11 +118,21 @@ pub struct State {
     pub hid_primary_ready: AtomicBool,
 }
 impl State {
+    pub fn supported_video(&self, mut video: Video) -> Video {
+        if self.phaze.load(Ordering::Acquire) {
+            video.resolution = crate::session_preferences::Resolution::Host;
+            video.constant_fps = None;
+            video.rotated = None;
+        }
+        video
+    }
     pub fn panel_video(&self, saved: Video) -> Video {
-        self.host_video
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .panel_video(saved)
+        self.supported_video(
+            self.host_video
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .panel_video(saved),
+        )
     }
 }
 
@@ -130,6 +140,30 @@ impl State {
 mod tests {
     use super::*;
     use crate::native_core::profile::Resolution;
+
+    #[test]
+    fn service_switch_keeps_local_controls_without_reusing_unsupported_host_options() {
+        let state = State::default();
+        let saved = Video {
+            resolution: Resolution::Fixed(2560, 1440),
+            constant_fps: Some(true),
+            rotated: Some(true),
+            fps: Some(144),
+            bandwidth_mbps: Some(40),
+            immersive: 2,
+            fullscreen: true,
+        };
+        assert_eq!(state.supported_video(saved.clone()), saved);
+        state.phaze.store(true, Ordering::Release);
+        let panel = state.panel_video(saved.clone());
+        assert_eq!(panel.resolution, Resolution::Host);
+        assert_eq!(panel.constant_fps, None);
+        assert_eq!(panel.rotated, None);
+        assert_eq!(panel.fps, saved.fps);
+        assert_eq!(panel.bandwidth_mbps, saved.bandwidth_mbps);
+        assert_eq!(panel.immersive, saved.immersive);
+        assert_eq!(panel.fullscreen, saved.fullscreen);
+    }
 
     #[test]
     fn session_fields_keep_resolution_aliases_boundaries_and_local_preferences() {
