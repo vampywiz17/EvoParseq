@@ -342,6 +342,22 @@ fn send(c: &mut Connection, b: &[u8]) -> Result<()> {
     c.send(&app)
         .map_err(|_| anyhow::anyhow!("DTLS application write failed"))
 }
+async fn release_and_close(
+    c: &mut Connection,
+    reliable: &mut wire::Reliable,
+    socket: &impl crate::Datagram,
+    peer: SocketAddr,
+) {
+    if let Ok(packets) = reliable.frame(&crate::Input::Release.encode(0)) {
+        for packet in packets {
+            let _ = send(c, &packet);
+        }
+    }
+    // Close is outside the reliable window, so a full/lost input queue cannot
+    // prevent the host from ending this peer and releasing its pressed state.
+    let _ = c.send(&[0xcd, 1]);
+    let _ = flush(c, socket, peer).await;
+}
 async fn handle_stun(
     s: &impl crate::Datagram,
     b: &[u8],
@@ -505,13 +521,15 @@ pub async fn run(
                 input.clear();
                 let running=sink.poll(selected_output,&mut input);
                 if !matches!(running,Ok(true)) {
-                    for p in reliable.frame(&crate::Input::Release.encode(0))? { send(&mut c,&p)?; }
-                    c.send(&[0xcd,1]).map_err(|_|anyhow::anyhow!("Phaze close send failed"))?;
-                    flush(&mut c,&socket,peer).await?;
+                    release_and_close(&mut c,&mut reliable,&socket,peer).await;
                     return running.map(|_|());
                 }
                 if let Some(output)=selected_output {
                     for command in input.drain(..) {
+                        if reliable.pending().count() >= 63 {
+                            release_and_close(&mut c,&mut reliable,&socket,peer).await;
+                            bail!("Phaze input acknowledgment window exhausted; reconnect to continue");
+                        }
                         for p in reliable.frame(&command.encode(output))? { send(&mut c,&p)?; }
                     }
                 }
