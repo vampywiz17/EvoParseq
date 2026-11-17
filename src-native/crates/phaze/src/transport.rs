@@ -253,13 +253,13 @@ async fn select_peer(
     pwd: &str,
     a: &Answer,
 ) -> Result<SocketAddr> {
-    let targets: Vec<_> = probe_targets(a)
+    let mut targets: Vec<_> = probe_targets(a)
         .into_iter()
         .filter_map(|a| socket.endpoint(a))
         .collect();
     ensure!(
         !targets.is_empty(),
-        "Host answer has no numeric candidate for a direct UDP connection"
+        "Host answer has no numeric candidate for the selected carrier"
     );
     let mut id = [0; 12];
     getrandom::fill(&mut id).map_err(|_| anyhow::anyhow!("OS randomness unavailable"))?;
@@ -275,10 +275,14 @@ async fn select_peer(
         _=tick.tick()=>{for target in &targets{match socket.send_to(&req,*target).await{Ok(_)=>{},Err(err)if unreachable(&err)=>{},Err(err)=>return Err(err).context("STUN candidate send failed")}}},
         r=socket.recv_from(&mut buf)=>{
         let(n,src)=match r{Ok(v)=>v,Err(err)if unreachable(&err)=>{continue},Err(err)=>return Err(err).context("STUN receive failed")};let Some(src)=socket.endpoint(src) else { continue };
-        if !targets.contains(&src)||n<20{continue}let b=&buf[..n];if b[4..8]!=0x2112a442u32.to_be_bytes(){continue}
+        if n<20{continue}let b=&buf[..n];if b[4..8]!=0x2112a442u32.to_be_bytes(){continue}
         let username=match check_stun(b,&a.pwd){Ok(u)=>u,Err(_)=>{continue}};
         let kind=u16::from_be_bytes(b[..2].try_into().unwrap());
-        if kind==1{if username!=Some(format!("{}:{own}",a.ufrag).as_bytes()){continue}let txid=b[8..20].try_into().unwrap();socket.send_to(&reply_stun(txid,src,pwd)?,src).await?;}
+        if kind==1{if username!=Some(format!("{}:{own}",a.ufrag).as_bytes()){continue}let txid=b[8..20].try_into().unwrap();socket.send_to(&reply_stun(txid,src,pwd)?,src).await?;
+            // An authenticated peer-reflexive endpoint may have a different NAT
+            // port from signaling. Never learn it from an unsigned datagram.
+            if !targets.contains(&src)&&targets.len()<64 {targets.push(src);socket.send_to(&req,src).await?;}
+        }
         else if kind==0x101&&b[8..20]==id{return Ok(src)}
         }}
     }
@@ -416,7 +420,12 @@ pub async fn run(
     sink: &mut impl Sink,
 ) -> Result<()> {
     sink.stage("probing_authenticated_stun");
-    let peer = select_peer(&socket, ufrag, pwd, &a).await?;
+    let peer = tokio::time::timeout(
+        Duration::from_secs(30),
+        select_peer(&socket, ufrag, pwd, &a),
+    )
+    .await
+    .context("Phaze candidate probing timed out")??;
     sink.stage("stun_authenticated");
     let cid = ((own_cid as u64) << 32 | a.cid as u64)
         .to_le_bytes()
@@ -804,6 +813,55 @@ mod tests {
                 "Synthetic ServerHello must not authenticate a peer"
             );
         }
+        Ok(())
+    }
+    #[tokio::test]
+    async fn authenticated_stun_learns_a_peer_reflexive_nat_port() -> Result<()> {
+        let socket = local_socket()?;
+        let client = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), socket.local_addr()?.port());
+        let unused = UdpSocket::bind("127.0.0.1:0").await?;
+        let server = UdpSocket::bind("127.0.0.1:0").await?;
+        let actual = server.local_addr()?;
+        let answer = Answer {
+            ufrag: "host".into(),
+            pwd: zeroize::Zeroizing::new("host-fixture-secret".into()),
+            cert_hash: "0".repeat(64),
+            cid: 1,
+            candidates: vec![super::super::Candidate {
+                addr: "127.0.0.1".into(),
+                port: unused.local_addr()?.port(),
+            }],
+        };
+        let peer = async {
+            let mut request = header(1, [7; 12]);
+            attr(&mut request, 6, b"host:client");
+            finish_stun(&mut request, "host-fixture-secret")?;
+            server.send_to(&request, client).await?;
+            let mut bytes = [0; 2048];
+            loop {
+                let (n, from) = server.recv_from(&mut bytes).await?;
+                if bytes[..2] == [0, 1] {
+                    assert_eq!(
+                        check_stun(&bytes[..n], "client-fixture-secret")?,
+                        Some(b"client:host".as_slice())
+                    );
+                    let id = bytes[8..20].try_into().unwrap();
+                    server
+                        .send_to(&reply_stun(id, from, "host-fixture-secret")?, from)
+                        .await?;
+                    break;
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        };
+        let (selected, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+            tokio::try_join!(
+                select_peer(&socket, "client", "client-fixture-secret", &answer),
+                peer
+            )
+        })
+        .await??;
+        assert_eq!(selected, dual_endpoint(actual));
         Ok(())
     }
 }

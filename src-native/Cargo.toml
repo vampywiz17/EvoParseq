@@ -50,6 +50,7 @@ opt-level = "s"
 rtrb = "=0.4.1"
 
 [target.'cfg(windows)'.dependencies]
+rustls-native-certs = "0.8"
 evoparseq-phaze = { path = "crates/phaze" }
 # Required by windows::core::implement(IMMNotificationClient) macro expansion.
 windows-core = "=0.62.2"

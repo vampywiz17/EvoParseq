@@ -120,10 +120,7 @@ unsafe fn view(f: &Form) {
     }
     for id in [LOGIN, REFRESH, CONNECT, LOGOUT, SETTINGS] {
         let h = GetDlgItem(GetParent(f.status), id as i32);
-        EnableWindow(
-            h,
-            i32::from(!busy && (id != SETTINGS || f.service == account::Service::Parsec)),
-        );
+        EnableWindow(h, i32::from(!busy));
     }
 }
 unsafe fn start_hosts(hwnd: HWND, f: &mut Form, mode: Refresh) {
@@ -377,12 +374,12 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 }
                 match id {
                     SETTINGS => {
-                        if f.service == account::Service::Phaze {
-                            return 0;
-                        }
                         if f.settings_page.is_null() {
-                            f.settings_page =
-                                crate::connection_settings_ui::open(hwnd, f.manager.clone());
+                            f.settings_page = if f.service == account::Service::Phaze {
+                                crate::connection_settings_ui::open_phaze(hwnd, f.manager.clone())
+                            } else {
+                                crate::connection_settings_ui::open(hwnd, f.manager.clone())
+                            };
                         }
                         if !f.settings_page.is_null() {
                             view(f);
@@ -757,7 +754,7 @@ pub fn choose(
                 account::Service::Phaze
             );
             assert!(text(f.fields[1]).is_empty());
-            assert_eq!(IsWindowEnabled(GetDlgItem(hwnd, SETTINGS as i32)), 0);
+            assert_ne!(IsWindowEnabled(GetDlgItem(hwnd, SETTINGS as i32)), 0);
             if let Some(path) = std::env::var_os("EVOPARSEQ_UI_CAPTURE") {
                 capture_fixture(
                     hwnd,

@@ -54,6 +54,9 @@ jobs:
         run: |
           cargo fmt --manifest-path src-native/crates/phaze/Cargo.toml -- --check
           if ($LASTEXITCODE -ne 0) { throw 'Phaze formatting failed' }
+          $phazeTree = cargo tree --locked --manifest-path src-native/crates/phaze/Cargo.toml --target ${{ matrix.target }} -e normal,build --prefix none
+          if ($LASTEXITCODE -ne 0) { throw 'Phaze dependency inspection failed' }
+          if ($phazeTree | Select-String '^(ring|aws-lc-sys|openssl-sys|boring-sys|s2n-tls-sys|cc) v') { throw 'Phaze runtime must remain pure Rust' }
           cargo clippy --locked --manifest-path src-native/crates/phaze/Cargo.toml --target ${{ matrix.target }} --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { throw 'Phaze lint failed' }
           cargo test --locked --manifest-path src-native/crates/phaze/Cargo.toml --target ${{ matrix.target }}

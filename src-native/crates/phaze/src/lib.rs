@@ -4,6 +4,7 @@
 mod datagram;
 mod input;
 mod transport;
+pub mod turn;
 mod wire;
 use anyhow::{bail, ensure, Context, Result};
 pub use datagram::Datagram;
@@ -50,7 +51,17 @@ impl Session {
     }
 }
 fn tls() -> Result<Arc<rustls::ClientConfig>> {
-    let roots = rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    tls_with_roots(&[])
+}
+fn tls_with_roots(extra: &[Vec<u8>]) -> Result<Arc<rustls::ClientConfig>> {
+    let mut roots =
+        rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    roots.add_parsable_certificates(
+        extra
+            .iter()
+            .cloned()
+            .map(rustls::pki_types::CertificateDer::from),
+    );
     let config =
         rustls::ClientConfig::builder_with_provider(Arc::new(rustls_rustcrypto::provider()))
             .with_safe_default_protocol_versions()

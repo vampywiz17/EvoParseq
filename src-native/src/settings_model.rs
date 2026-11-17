@@ -1,4 +1,7 @@
 //! Editable Settings state and rules without window/control APIs.
+#[cfg(windows)]
+pub const PHAZE_NETWORK_NOTICE: &str =
+    "Phaze: select Force TURN to use a configured relay. Other modes use direct UDP.";
 use crate::connection_settings::{full_chroma_vendor_allowed, GpuPreference, Manager, Settings};
 use anyhow::{Context, Result};
 use zeroize::Zeroizing;
@@ -101,6 +104,7 @@ pub struct Availability {
 
 // Deliberately no Debug/Serialize: plaintext replacement secrets are transient.
 pub struct Form {
+    pub network_only: bool,
     pub active_tab: Tab,
     pub values: Settings,
     pub gpu_choices: Vec<Option<GpuPreference>>,
@@ -120,6 +124,7 @@ pub struct Form {
 impl Form {
     pub fn new(values: Settings, default_gpu_vendor: Option<u32>) -> Self {
         Self {
+            network_only: false,
             active_tab: Tab::Network,
             audio_min: values.audio_min_buffer_ms.to_string(),
             audio_max: values.audio_max_buffer_ms.to_string(),
@@ -155,7 +160,7 @@ impl Form {
     pub fn availability(&mut self) -> Availability {
         let vendor = self.gpu_vendor();
         let chroma_allowed = vendor.is_some_and(full_chroma_vendor_allowed);
-        if !chroma_allowed {
+        if !self.network_only && !chroma_allowed {
             self.values.experimental_chroma_444 = false;
         }
         let relay = !self.values.stun_only;
@@ -186,16 +191,18 @@ impl Form {
         settings.nvidia_vsr = settings.nvidia_vsr.min(4);
         // Preserve the existing parse order and validation even for inactive
         // numeric fields. Domain/secret validation remains in Manager::save.
-        crate::network_settings::apply_audio_fields(
-            &mut settings,
-            &self.audio_min,
-            &self.audio_max,
-        )?;
-        settings.video_gpu = self
-            .gpu_selection
-            .and_then(|i| self.gpu_choices.get(i))
-            .context("Choose Automatic or an available video GPU")?
-            .clone();
+        if !self.network_only {
+            crate::network_settings::apply_audio_fields(
+                &mut settings,
+                &self.audio_min,
+                &self.audio_max,
+            )?;
+            settings.video_gpu = self
+                .gpu_selection
+                .and_then(|i| self.gpu_choices.get(i))
+                .context("Choose Automatic or an available video GPU")?
+                .clone();
+        }
         crate::network_settings::apply_fields(
             &mut settings,
             &self.stun_urls,
@@ -573,5 +580,38 @@ mod vsr_tests {
                 );
             }
         }
+    }
+    #[test]
+    fn network_only_save_preserves_unavailable_gpu_and_non_network_preferences() {
+        let mut saved = Settings::default();
+        saved.video_gpu = Some(GpuPreference {
+            name: "Offline fixture GPU".into(),
+            vendor_id: 0x1002,
+            device_id: 7,
+            subsystem_id: 0,
+            revision: 0,
+            luid: 9,
+        });
+        saved.prefer_hevc = true;
+        saved.experimental_chroma_444 = true;
+        let mut form = Form::new(saved.clone(), Some(0x1002));
+        form.network_only = true;
+        form.gpu_selection = None;
+        form.audio_min = "not a network field".into();
+        form.availability();
+        form.turn_urls = "turn:127.0.0.1:3478?transport=udp".into();
+        form.values.force_relay = true;
+        let actual = form.candidate().unwrap();
+        assert_eq!(
+            serde_json::to_value(&actual.video_gpu).unwrap(),
+            serde_json::to_value(&saved.video_gpu).unwrap()
+        );
+        assert_eq!(actual.audio_min_buffer_ms, saved.audio_min_buffer_ms);
+        assert_eq!(
+            actual.experimental_chroma_444,
+            saved.experimental_chroma_444
+        );
+        assert!(actual.force_relay);
+        assert_eq!(actual.turn_urls.len(), 1);
     }
 }

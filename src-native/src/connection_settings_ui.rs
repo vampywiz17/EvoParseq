@@ -149,7 +149,14 @@ pub unsafe fn install_menu(parent: HWND) {
     SetMenu(parent, menu);
     DrawMenuBar(parent);
 }
+/// Reuse the canonical Network form without exposing unwired Parsec controls.
+pub unsafe fn open_phaze(parent: HWND, manager: Arc<Manager>) -> HWND {
+    open_mode(parent, manager, true)
+}
 pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
+    open_mode(parent, manager, false)
+}
+unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> HWND {
     let name = wide("EvoParseqSettings");
     let instance = GetModuleHandleW(null());
     let class = WNDCLASSW {
@@ -161,10 +168,12 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     };
     RegisterClassW(&class);
     let (saved, error) = manager.view();
+    let mut model = Form::new(saved, crate::video_windows::video_gpu_vendor(None));
+    model.network_only = network_only;
     let mut page = Box::new(Page {
         window_owned: false,
         manager,
-        model: Form::new(saved, crate::video_windows::video_gpu_vendor(None)),
+        model,
         gpu_labels: vec!["Automatic (Windows default)".into()],
         ai_upscaler: None,
         ai_hint: null_mut(),
@@ -829,9 +838,21 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     );
 
     page.building_tab = None;
-    add(hwnd, page, "STATIC",
-        "ICE chooses the route automatically unless Force TURN relay is enabled.\nChanges apply to your next connection.",
-        0, [0, 1056 + BUD_EXTRA, 820, 64], NOTICE, 0, page.small);
+    add(
+        hwnd,
+        page,
+        "STATIC",
+        if page.model.network_only {
+            crate::settings_model::PHAZE_NETWORK_NOTICE
+        } else {
+            "ICE chooses the route automatically unless Force TURN relay is enabled.\nChanges apply to your next connection."
+        },
+        0,
+        [0, 1056 + BUD_EXTRA, 820, 64],
+        NOTICE,
+        0,
+        page.small,
+    );
     page.model.feedback = error.unwrap_or_else(|| {
         "Saved in settings.json. Secrets are protected for your Windows user.".into()
     });
@@ -1205,6 +1226,18 @@ unsafe fn checked(hwnd: HWND, id: usize) -> bool {
 // to the shared model. This runs on user edits/saving, never on a media frame.
 unsafe fn read_options(hwnd: HWND, page: &mut Page) {
     let model = &mut page.model;
+    if let Some(mode) = RouteMode::ALL.get(selection(hwnd, ROUTE_MODE)) {
+        mode.apply(s);
+    }
+    s.provider = if SendMessageW(GetDlgItem(hwnd, PROVIDER as i32), CB_GETCURSEL, 0, 0) == 1 {
+        "cloudflare"
+    } else {
+        "custom"
+    }
+    .into();
+    if page.model.network_only {
+        return;
+    }
     model.gpu_selection = usize::try_from(SendMessageW(
         GetDlgItem(hwnd, GPU as i32),
         CB_GETCURSEL,
@@ -1221,15 +1254,6 @@ unsafe fn read_options(hwnd: HWND, page: &mut Page) {
         backend.apply(s, selection(hwnd, AI_UPSCALE));
     }
     s.custom_audio_buffer = checked(hwnd, AUDIO_CUSTOM);
-    if let Some(mode) = RouteMode::ALL.get(selection(hwnd, ROUTE_MODE)) {
-        mode.apply(s);
-    }
-    s.provider = if SendMessageW(GetDlgItem(hwnd, PROVIDER as i32), CB_GETCURSEL, 0, 0) == 1 {
-        "cloudflare"
-    } else {
-        "custom"
-    }
-    .into();
     #[cfg(feature = "bud")]
     {
         s.bud = checked(hwnd, BUD);
@@ -1288,6 +1312,13 @@ unsafe fn update_enabled(hwnd: HWND) {
             i32::from(enabled.zero_copy),
         );
     }
+    if page.model.network_only {
+        for id in [VIDEO_TAB, AUDIO_TAB, INPUT_TAB, STUN, TCP_QOS] {
+            EnableWindow(GetDlgItem(hwnd, id as i32), 0);
+        }
+        #[cfg(feature = "bud")]
+        EnableWindow(GetDlgItem(hwnd, BUD as i32), 0);
+    }
     layout(hwnd);
 }
 unsafe fn save(hwnd: HWND, page: &mut Page) {
@@ -1296,27 +1327,27 @@ unsafe fn save(hwnd: HWND, page: &mut Page) {
     let vsr_available =
         model.ai_upscaler() == AiUpscaler::Nvidia && model.availability().ai_upscale;
     let s = &mut model.values;
-    s.native_core.hide_session_button = checked(hwnd, HIDE_SESSION_BUTTON);
-    s.presentation_mode = crate::connection_settings::PresentationMode::from_index(SendMessageW(
-        GetDlgItem(hwnd, PRESENTATION as i32),
-        CB_GETCURSEL,
-        0,
-        0,
-    ) as usize);
-    s.allow_raw_audio = checked(hwnd, AUDIO_RAW);
-    s.experimental_surround_audio = checked(hwnd, AUDIO_SURROUND);
-    s.event_logging = checked(hwnd, EVENT_LOG);
-    s.experimental_tcp_qos = checked(hwnd, TCP_QOS);
-    #[cfg(feature = "vendor-video")]
-    {
-        s.zero_copy = checked(hwnd, ZERO_COPY);
-    }
-    #[cfg(feature = "bud")]
-    {
-        if let Some(mode) = InputMode::ALL.get(selection(hwnd, INPUT_MODE)) {
-            mode.apply(s);
+    if !page.model.network_only {
+        s.native_core.hide_session_button = checked(hwnd, HIDE_SESSION_BUTTON);
+        s.presentation_mode = crate::connection_settings::PresentationMode::from_index(
+            SendMessageW(GetDlgItem(hwnd, PRESENTATION as i32), CB_GETCURSEL, 0, 0) as usize,
+        );
+        s.allow_raw_audio = checked(hwnd, AUDIO_RAW);
+        s.experimental_surround_audio = checked(hwnd, AUDIO_SURROUND);
+        s.event_logging = checked(hwnd, EVENT_LOG);
+        s.experimental_tcp_qos = checked(hwnd, TCP_QOS);
+        #[cfg(feature = "vendor-video")]
+        {
+            s.zero_copy = checked(hwnd, ZERO_COPY);
+        }
+        #[cfg(feature = "bud")]
+        {
+            if let Some(mode) = InputMode::ALL.get(selection(hwnd, INPUT_MODE)) {
+                mode.apply(s);
+            }
         }
     }
+    s.event_logging = checked(hwnd, EVENT_LOG);
     s.custom_username = text(hwnd, USERNAME);
     s.turn_key_id = text(hwnd, KEY);
     s.cache_credentials = checked(hwnd, CACHE);
@@ -1329,7 +1360,8 @@ unsafe fn save(hwnd: HWND, page: &mut Page) {
     model.token = zeroize::Zeroizing::new(text(hwnd, TOKEN));
     model.forget_password = checked(hwnd, FORGET_PASSWORD);
     model.forget_token = checked(hwnd, FORGET_TOKEN);
-    let needs_vsr = s.nvidia_vsr != 0 && vsr_available && !crate::vsr_runtime::present();
+    let needs_vsr =
+        !model.network_only && s.nvidia_vsr != 0 && vsr_available && !crate::vsr_runtime::present();
     if needs_vsr && s.vsr_runtime_consent != crate::connection_settings::VsrRuntimeConsent::Allowed
     {
         let accepted = MessageBoxW(hwnd, wide("The NVIDIA VSR runtime is missing. Allow its verified download from NVIDIA on the next app start? Normal video remains available without it.").as_ptr(), wide("EvoParseq - NVIDIA VSR").as_ptr(), MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES;
@@ -1523,6 +1555,9 @@ unsafe extern "system" fn page_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LP
                 NETWORK_TAB | VIDEO_TAB | AUDIO_TAB | INPUT_TAB
                     if (wp >> 16) as u32 == BN_CLICKED =>
                 {
+                    if page.model.network_only && wp & 0xffff != NETWORK_TAB {
+                        return 0;
+                    }
                     page.model.active_tab = if wp & 0xffff == VIDEO_TAB {
                         Tab::Video
                     } else if wp & 0xffff == INPUT_TAB {
@@ -1539,7 +1574,12 @@ unsafe extern "system" fn page_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LP
                     );
                     SetWindowTextW(
                         GetDlgItem(hwnd, NOTICE as i32),
-                        wide(page.model.active_tab.notice()).as_ptr(),
+                        wide(if page.model.network_only {
+                            crate::settings_model::PHAZE_NETWORK_NOTICE
+                        } else {
+                            page.model.active_tab.notice()
+                        })
+                        .as_ptr(),
                     );
                     layout(hwnd);
                     return 0;
@@ -2163,5 +2203,45 @@ mod tests {
         DeleteObject(bitmap);
         DeleteDC(dc);
         (rect.right as u32, rect.bottom as u32, rgba)
+    }
+    #[test]
+    fn phaze_network_page_does_not_enable_unimplemented_settings() {
+        let directory = std::env::temp_dir().join(format!(
+            "evoparseq-phaze-network-{}",
+            crate::bud_attempt::native_attempt_id().unwrap()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let manager = Manager::open(directory.join("settings.json"));
+        unsafe {
+            let parent = CreateWindowExW(
+                0,
+                wide("STATIC").as_ptr(),
+                wide("Isolated Phaze settings fixture").as_ptr(),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                1000,
+                900,
+                null_mut(),
+                null_mut(),
+                GetModuleHandleW(null()),
+                null(),
+            );
+            assert!(!parent.is_null());
+            let page = open_phaze(parent, manager);
+            assert!(!page.is_null());
+            for id in [VIDEO_TAB, AUDIO_TAB, INPUT_TAB, STUN, TCP_QOS] {
+                assert_eq!(IsWindowEnabled(GetDlgItem(page, id as i32)), 0);
+            }
+            assert_ne!(IsWindowEnabled(GetDlgItem(page, TURN as i32)), 0);
+            SendMessageW(page, WM_COMMAND, VIDEO_TAB, 0);
+            let state = &*(GetWindowLongPtrW(page, GWLP_USERDATA) as *const Page);
+            assert_eq!(state.model.active_tab, Tab::Network);
+            assert_no_overlaps(page);
+            capture(page, "phaze-network");
+            DestroyWindow(page);
+            DestroyWindow(parent);
+        }
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

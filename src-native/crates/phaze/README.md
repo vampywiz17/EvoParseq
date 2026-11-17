@@ -44,9 +44,9 @@ Loss behavior and the full native congestion/retransmission behavior remain unve
 Windows integration only. Experimental primary-display session:
 H.264, 8-bit, 4:2:0; initial request uses the verified 10 Mbps / 30 fps fields.
 No Phaze clipboard, USB, virtual-display management, multi-display,
-HEVC, 10-bit, 4:4:4, or live relay integration is claimed.
-TURN feasibility is exercised by an isolated test using the existing TURN fixture;
-this is not a native-host TURN validation or an exposed routing option.
+HEVC, 10-bit or 4:4:4 support is claimed.
+Explicit Force TURN routing now uses the production Rust carrier over UDP, TCP
+or TLS, with no direct fallback. A native-host relay test is still required.
 Raw audio costs approximately 1.536 Mbit/s before transport overhead.
 Unintegrated Parsec session controls/settings are unavailable in Phaze mode.
 Existing local GPU/presentation preferences are reused.
@@ -71,3 +71,27 @@ fragment reordering, duplicates, malformed lengths, outgoing ACK bounds, mutual
 DTLS/CID authentication/encrypted data and the missing-EMS negotiation distinction.
 Live validation requires interactive login in the client; never insert account
 credentials into test sources, command arguments, fixtures or logs.
+
+## Testing an explicit TURN route on Windows
+
+Select Phaze, open Settings > Network, enter a custom TURN URL and its username
+and password (or use the existing Cloudflare credential provider), choose
+Force TURN relay, save and reconnect. Other routing modes retain direct UDP
+behavior in this experimental Phaze implementation. No new secrets storage is used.
+
+Supported URL forms are turn:server:3478?transport=udp,
+turn:server:3478?transport=tcp and turns:server:5349?transport=tcp.
+TLS validates the hostname and public/Windows-trusted roots. Do not use an
+untrusted certificate or send credentials in chat. IPv4 relay allocations and
+legacy MD5/SHA-1 TURN long-term authentication are supported; extended RFC 8489
+nonce-cookie algorithm negotiation is explicitly refused rather than downgraded.
+
+Only the allocated relay address is advertised in a forced-relay offer; every
+Phaze STUN/DTLS/media datagram uses that allocation. Route telemetry is emitted
+only after authenticated peer STUN and signaling-pinned DTLS complete. A failed
+relay does not connect directly. The host still needs an active physical or
+virtual display.
+
+The carrier reuses lowlat-core's existing RFC TURN codec and RustCrypto primitives.
+A bounded receiver owns complete TCP/TLS frames; a maintenance task refreshes
+the allocation and permissions before expiry. Neither runs on a decoded-video path.

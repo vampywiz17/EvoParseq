@@ -78,3 +78,24 @@ is required in the relay. It strengthens the opaque-datagram TURN design, but
 does not prove that a native host selects an advertised TURN allocation.
 No private endpoint, account credential, binary or native disassembly is included
 in the repository.
+
+## Production carrier integration (next feature-branch build)
+
+The existing Datagram boundary is now consumed by a Rust TURN allocation client
+using the already-vendored lowlat-core TURN codec. UDP, TCP and TLS are explicit
+carriers for the same Phaze packets. Integrity, 401/438 challenges, transaction
+IDs/timeouts, allocation expiry, periodic refresh and IP permissions are handled
+without a native crypto provider. Send/Data indications provide the required
+transparent datagram transport; unregistered ChannelData is not accepted.
+
+The Windows Phaze Network page reuses the existing URL validation, credential
+provisioning and protected storage. Force TURN advertises only the allocation.
+The route is confirmed only after authenticated STUN and pinned DTLS complete.
+Direct fallback is prohibited in this mode. No Parsec transport policy changes.
+The TLS embedding adapter supplies public and OS-trusted root certificates;
+hostname checks remain mandatory. No peer-supplied CA is trusted.
+
+Automated fixtures exercise the actual production carrier over UDP/TCP/TLS,
+fragmented stream reads, untrusted-certificate rejection and allocation/permission
+renewal. Test server crypto dependencies are not the production Phaze provider.
+Live native-host interoperability must still be confirmed by the user.

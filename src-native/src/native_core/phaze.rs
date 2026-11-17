@@ -31,6 +31,8 @@ struct View {
     pcm: Vec<i16>,
     keys: evoparseq_phaze::Keyboard,
     events: VecDeque<Event>,
+    route: &'static str,
+    carrier: &'static str,
 }
 impl View {
     fn publish(&self, state: &str) {
@@ -38,12 +40,12 @@ impl View {
             self.generation,
             crate::stats::Sample {
                 state: state.into(),
-                protocol: "Phaze / direct UDP".into(),
+                protocol: format!("Phaze / {}", self.carrier),
                 dtls: "Authenticated DTLS 1.2 (legacy non-EMS)".into(),
                 video: Some(self.video.snapshot()),
                 codec: Some(crate::video_stream::Codec::H264),
                 profile: self.inspector.snapshot().sps_profile_idc,
-                route: "Direct",
+                route: self.route,
                 ..Default::default()
             },
         );
@@ -51,6 +53,13 @@ impl View {
 }
 impl evoparseq_phaze::Sink for View {
     fn stage(&mut self, stage: &'static str) {
+        if stage == "dtls_authenticated" {
+            crate::event_log::record(
+                "INFO",
+                "phaze_route_selected",
+                serde_json::json!({"route":self.route,"carrier":self.carrier,"authenticated":true}),
+            );
+        }
         crate::event_log::record(
             "INFO",
             "phaze_connection_stage",
@@ -60,7 +69,7 @@ impl evoparseq_phaze::Sink for View {
             self.generation,
             crate::stats::Sample {
                 state: format!("Phaze: {stage}"),
-                protocol: "Phaze / direct UDP".into(),
+                protocol: format!("Phaze / {}", self.carrier),
                 dtls: if stage == "dtls_authenticated" {
                     "Authenticated DTLS 1.2 (legacy non-EMS)".into()
                 } else {
@@ -213,6 +222,8 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         pcm: Vec::new(),
         keys: Default::default(),
         events: VecDeque::new(),
+        route: "Direct",
+        carrier: "direct UDP",
     };
     let remote = evoparseq_phaze::Session::from_token(session.token())?;
     let result = block_on(async {
@@ -226,7 +237,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
             }
         };
         tokio::select! {
-            result=evoparseq_phaze::connect(&remote,peer,&mut view)=>result,
+            result=connect(&remote,peer,&manager,&mut view)=>result,
             result=local=>result,
         }
     });
@@ -238,6 +249,70 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         );
     }
     result
+}
+
+async fn connect(
+    remote: &evoparseq_phaze::Session,
+    peer: &str,
+    manager: &Manager,
+    view: &mut View,
+) -> Result<()> {
+    if !manager.view().0.force_relay {
+        return evoparseq_phaze::connect(remote, peer, view).await;
+    }
+    use evoparseq_phaze::turn::{Carrier, Relay};
+    use webrtc::ice::url::{ProtoType, SchemeType, Url};
+    let configuration = manager.resolve_configuration().await?;
+    for server in configuration.ice_servers {
+        for raw in server.urls {
+            let url = Url::parse_url(&raw)?;
+            let (carrier, name) = match (url.scheme, url.proto) {
+                (SchemeType::Turn, ProtoType::Udp) => (Carrier::Udp, "TURN / UDP"),
+                (SchemeType::Turn, ProtoType::Tcp) => (Carrier::Tcp, "TURN / TCP"),
+                (SchemeType::Turns, ProtoType::Tcp) => (Carrier::Tls, "TURN / TLS"),
+                _ => continue,
+            };
+            view.carrier = name;
+            evoparseq_phaze::Sink::stage(view, "allocating_turn");
+            let trusted_roots: Vec<_> = if carrier == Carrier::Tls {
+                rustls_native_certs::load_native_certs()
+                    .certs
+                    .into_iter()
+                    .map(|c| c.as_ref().to_vec())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let relay = match Relay::allocate_trusted(
+                &url.host,
+                url.port,
+                carrier,
+                &server.username,
+                &server.credential,
+                &trusted_roots,
+            )
+            .await
+            {
+                Ok(relay) => relay,
+                Err(error) => {
+                    crate::event_log::record(
+                        "WARN",
+                        "phaze_turn_allocation_failed",
+                        serde_json::json!({"carrier":name,"reason":error.to_string()}),
+                    );
+                    continue;
+                }
+            };
+            view.route = "TURN";
+            view.carrier = name;
+            let result = evoparseq_phaze::connect_via(remote, peer, view, &relay).await;
+            relay.close().await;
+            return result;
+        }
+    }
+    anyhow::bail!(
+        "No configured TURN server could allocate a Phaze relay. Check the URL and credentials."
+    )
 }
 
 fn normalized(viewport: Option<crate::viewport::Viewport>, x: i32, y: i32) -> Option<(i32, i32)> {
