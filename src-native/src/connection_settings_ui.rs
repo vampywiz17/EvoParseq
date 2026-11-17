@@ -797,7 +797,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
         hwnd,
         page,
         crate::app_style::forms::AUDIO_FORMAT.label,
-        crate::app_style::forms::AUDIO_FORMAT.help,
+        page.model.audio_format_help(),
         532,
         0,
         60,
@@ -1028,7 +1028,7 @@ unsafe fn layout(hwnd: HWND) {
         }
         Tab::Audio => {
             if page.model.phaze {
-                532
+                626
             } else {
                 750
             }
@@ -1226,9 +1226,13 @@ unsafe fn choice(hwnd: HWND, page: &mut Page, id: usize, y: i32, labels: &[&str]
     select(hwnd, id, selected);
 }
 unsafe fn binary_choice(hwnd: HWND, page: &mut Page, id: usize, y: i32) {
-    let labels = binary_choice_kind(id)
-        .expect("binary mode binding")
-        .labels();
+    let labels = if id == AUDIO_RAW {
+        page.model.audio_format_labels()
+    } else {
+        binary_choice_kind(id)
+            .expect("binary mode binding")
+            .labels()
+    };
     choice(hwnd, page, id, y, &labels, 0);
 }
 fn mode_combo(id: usize) -> bool {
@@ -1245,6 +1249,8 @@ fn mode_label(id: usize, index: u32, model: &Form) -> &'static str {
         crate::input_state::IMMERSIVE_LABELS.get(index).copied()
     } else if id == ROUTE_MODE {
         model.route_labels().get(index).copied()
+    } else if id == AUDIO_RAW {
+        model.audio_format_labels().get(index).copied()
     } else {
         binary_choice_kind(id).and_then(|kind| kind.labels().get(index).copied())
     }
@@ -1355,7 +1361,7 @@ unsafe fn update_enabled(hwnd: HWND) {
         (INPUT_MODE, enabled.bud),
         (AUDIO_MIN, enabled.audio_limits),
         (AUDIO_MAX, enabled.audio_limits),
-        (AUDIO_RAW, enabled.bud),
+        (AUDIO_RAW, enabled.bud || page.model.phaze),
         (AUDIO_SURROUND, enabled.bud),
         (CHROMA_444, enabled.chroma_444),
         (AI_UPSCALE, enabled.ai_upscale),
@@ -1402,8 +1408,8 @@ unsafe fn save(hwnd: HWND, page: &mut Page) {
         s.presentation_mode = crate::connection_settings::PresentationMode::from_index(
             SendMessageW(GetDlgItem(hwnd, PRESENTATION as i32), CB_GETCURSEL, 0, 0) as usize,
         );
+        s.allow_raw_audio = checked(hwnd, AUDIO_RAW);
         if !model.phaze {
-            s.allow_raw_audio = checked(hwnd, AUDIO_RAW);
             s.experimental_surround_audio = checked(hwnd, AUDIO_SURROUND);
         }
         s.event_logging = checked(hwnd, EVENT_LOG);
@@ -2296,7 +2302,7 @@ mod tests {
                 null(),
             );
             assert!(!parent.is_null());
-            let page = open_phaze(parent, manager);
+            let page = open_phaze(parent, manager.clone());
             assert!(!page.is_null());
             for id in [STUN, TCP_QOS] {
                 assert_eq!(IsWindowEnabled(GetDlgItem(page, id as i32)), 0);
@@ -2321,10 +2327,14 @@ mod tests {
                     & WS_VISIBLE,
                 0
             );
-            assert_eq!(
+            assert_ne!(
                 GetWindowLongW(GetDlgItem(page, AUDIO_RAW as i32), GWL_STYLE) as u32 & WS_VISIBLE,
                 0
             );
+            assert_ne!(IsWindowEnabled(GetDlgItem(page, AUDIO_RAW as i32)), 0);
+            let state = &*(GetWindowLongPtrW(page, GWLP_USERDATA) as *const Page);
+            assert_eq!(mode_label(AUDIO_RAW, 0, &state.model), "AAC-LC");
+            assert_eq!(mode_label(AUDIO_RAW, 1, &state.model), "Uncompressed PCM");
             assert_eq!(
                 GetWindowLongW(GetDlgItem(page, AUDIO_SURROUND as i32), GWL_STYLE) as u32
                     & WS_VISIBLE,
@@ -2346,6 +2356,10 @@ mod tests {
             SendMessageW(page, WM_COMMAND, NETWORK_TAB, 0);
             assert_no_overlaps(page);
             capture(page, "phaze-network");
+            check(page, AUDIO_RAW, true);
+            let state = &mut *(GetWindowLongPtrW(page, GWLP_USERDATA) as *mut Page);
+            save(page, state);
+            assert!(manager.view().0.allow_raw_audio);
             DestroyWindow(page);
             DestroyWindow(parent);
         }

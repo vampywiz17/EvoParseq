@@ -27,3 +27,5 @@ socket2 = "0.6"
 if-addrs = "=0.15.0"
 zeroize = { version = "1", features = ["serde"] }
 webpki-roots = "1"
+symphonia-codec-aac = { version = "=0.6.1", default-features = false }
+symphonia-core = { version = "=0.6.1", default-features = false }

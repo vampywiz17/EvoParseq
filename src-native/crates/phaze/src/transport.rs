@@ -504,7 +504,8 @@ pub async fn run(
     sink.stage("dtls_authenticated");
 
     let mut reliable = wire::Reliable::default();
-    for p in reliable.frame(&wire::hello())? {
+    let mut audio = crate::audio::Audio::default();
+    for p in reliable.frame(&wire::hello(sink.raw_audio()))? {
         send(&mut c, &p)?;
     }
     let transmission_started = Instant::now();
@@ -635,7 +636,10 @@ pub async fn run(
                         sink.video(bytes, flags & 1 != 0)?;
                         video_received |= !bytes.is_empty();
                     }
-                    Some(7) => sink.audio(wire::pcm(&frame[1..])?)?,
+                    Some(7) => {
+                        let (codec, pcm) = audio.decode(&frame[1..])?;
+                        sink.audio(pcm, codec)?;
+                    }
                     _ => {}
                 }
             }

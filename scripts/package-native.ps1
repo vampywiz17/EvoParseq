@@ -71,6 +71,10 @@ try {
     if (!$taskOpus) { throw 'Bundled Opus license directory missing' }
     Copy-Item (Join-Path $taskOpus.FullName 'LICENSE') (Join-Path $taskPackage 'LIBOPUS-SYS-LICENSE.txt')
     Copy-Item (Join-Path $taskOpus.FullName 'opus/COPYING') (Join-Path $taskPackage 'OPUS-LICENSE.txt')
+    $taskSymphonia = Get-ChildItem -Path (Join-Path $taskCargoHome 'registry/src/*/symphonia-core-0.6.1') -Directory | Select-Object -First 1
+    if (!$taskSymphonia) { throw 'Symphonia AAC license directory missing' }
+    Copy-Item (Join-Path $taskSymphonia.FullName 'LICENSE') (Join-Path $taskPackage 'SYMPHONIA-MPL-2.0.txt')
+    'Symphonia 0.6.1 AAC decoder, core, common and metadata: Copyright (c) The Project Symphonia Developers. MPL-2.0. Unmodified open-source dependencies; source: https://github.com/pdeljanov/Symphonia/tree/v0.6.1 and https://crates.io/crates/symphonia-codec-aac/0.6.1 (also symphonia-core, symphonia-common and symphonia-metadata at version 0.6.1). See SYMPHONIA-MPL-2.0.txt. No native Phaze code or libraries are included.' | Set-Content (Join-Path $taskPackage 'SYMPHONIA-NOTICE.txt') -Encoding utf8
     if ((Get-ChildItem -LiteralPath $taskPackage -Filter '*.exe').Count -ne 1) { throw 'Single executable package violated' }
     $taskZip = "dist/$taskPackageName.zip"
     Compress-Archive -LiteralPath $taskPackage -DestinationPath $taskZip -Force

@@ -151,14 +151,14 @@ impl Form {
         }
     }
     pub fn supports(&self, feature: Feature) -> bool {
-        !self.phaze || feature == Feature::Common
+        !self.phaze || matches!(feature, Feature::Common | Feature::RawAudio)
     }
     pub fn notice(&self) -> &'static str {
         if self.phaze {
             match self.active_tab {
                 Tab::Network => "Phaze: Force TURN uses the configured relay. Other modes use direct UDP.",
                 Tab::Video => "Video changes apply on your next connection. Check Connection stats for the actual format and decoder.",
-                Tab::Audio => "This client currently uses stereo PCM. Playback buffer changes apply on your next connection.",
+                Tab::Audio => "Phaze supports stereo AAC-LC or PCM. Audio changes apply on your next connection.",
                 Tab::Input => "Phaze supports keyboard, mouse and scrolling. HID and USB forwarding are unavailable.",
             }
         } else {
@@ -198,6 +198,20 @@ impl Form {
             "Default: 50 / 100 ms.\nCustom limits apply only when enabled."
         } else {
             crate::app_style::forms::PLAYBACK_BUFFER.help
+        }
+    }
+    pub fn audio_format_labels(&self) -> [&'static str; 2] {
+        if self.phaze {
+            ["AAC-LC", "Uncompressed PCM"]
+        } else {
+            BinaryChoice::AudioCodec.labels()
+        }
+    }
+    pub fn audio_format_help(&self) -> &'static str {
+        if self.phaze {
+            "48 kHz stereo: AAC-LC or uncompressed PCM.\nPCM uses about 1.54 Mbps before overhead.\nThe actual codec is shown in Connection stats."
+        } else {
+            crate::app_style::forms::AUDIO_FORMAT.help
         }
     }
     pub fn route_labels(&self) -> &'static [&'static str] {
@@ -670,18 +684,21 @@ mod vsr_tests {
         for phaze in [false, true] {
             form.phaze = phaze;
             assert!(form.supports(Feature::Common));
-            for feature in [
-                Feature::ParsecNetwork,
-                Feature::RawAudio,
-                Feature::SurroundAudio,
-                Feature::Hid,
-            ] {
+            assert!(form.supports(Feature::RawAudio));
+            for feature in [Feature::ParsecNetwork, Feature::SurroundAudio, Feature::Hid] {
                 assert_eq!(form.supports(feature), !phaze);
             }
             assert_eq!(form.video_formats().len(), if phaze { 2 } else { 3 });
             if phaze {
+                assert_eq!(form.audio_format_labels(), ["AAC-LC", "Uncompressed PCM"]);
+                assert!(form.audio_format_help().contains("AAC-LC"));
                 assert!(!form.availability().bud);
                 assert!(!form.video_formats().contains(&VideoFormat::Hevc10));
+            } else {
+                assert_eq!(
+                    form.audio_format_labels(),
+                    BinaryChoice::AudioCodec.labels()
+                );
             }
         }
     }

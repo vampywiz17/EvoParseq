@@ -103,22 +103,11 @@ impl VideoConfig {
         Ok(b)
     }
 }
-pub fn hello() -> Vec<u8> {
+pub fn hello(raw_audio: bool) -> Vec<u8> {
     let mut b = vec![18];
-    b.extend(1u32.to_be_bytes()); // Request raw audio: no native codec dependency.
+    b.extend(u32::from(raw_audio).to_be_bytes());
     b.extend(0u32.to_be_bytes()); // No virtual client display layout.
     b
-}
-/// Host audio: encoded flag, stereo frame count (BE), then interleaved s16le.
-pub fn pcm(b: &[u8]) -> Result<&[u8]> {
-    ensure!(b.len() >= 5, "Short Phaze audio header");
-    ensure!(b[0] == 0, "Phaze host did not honor the raw audio request");
-    let frames = be(b, 1) as usize;
-    ensure!(
-        frames > 0 && frames <= 5760 && b.len() == 5 + frames * 4,
-        "Invalid Phaze stereo PCM length"
-    );
-    Ok(&b[5..])
 }
 pub fn encoded(b: &[u8]) -> Result<&[u8]> {
     ensure!(b.len() >= 24, "Short video header");
@@ -335,8 +324,12 @@ fn wire_contracts() -> Result<()> {
     ensure!(b.receive(&p[1])?.0 == vec![data], "Reassembly test");
     ensure!(b.receive(&[1]).is_err(), "Truncation test");
     ensure!(
-        hello() == vec![18, 0, 0, 0, 1, 0, 0, 0, 0],
+        hello(true) == vec![18, 0, 0, 0, 1, 0, 0, 0, 0],
         "Hello/raw audio test"
+    );
+    ensure!(
+        hello(false) == vec![18, 0, 0, 0, 0, 0, 0, 0, 0],
+        "Hello/AAC test"
     );
     ensure!(
         VideoConfig::default().request(7)?.len() == 25,
@@ -487,15 +480,16 @@ fn protected_heartbeat_is_not_reliable_or_application_data() {
 #[cfg(test)]
 #[test]
 fn raw_audio_checks_encoding_sample_count_and_stereo_alignment() {
+    let mut audio = crate::audio::Audio::default();
     let mut packet = vec![0, 0, 0, 0, 2, 0, 128, 255, 127, 1, 0, 255, 255];
-    assert_eq!(pcm(&packet).unwrap(), &packet[5..]);
+    assert_eq!(audio.decode(&packet).unwrap().1, &[-32768, 32767, 1, -1]);
     packet[0] = 1;
-    assert!(pcm(&packet).is_err());
+    assert!(audio.decode(&packet).is_err());
     packet[0] = 0;
     packet.pop();
-    assert!(pcm(&packet).is_err());
-    assert!(pcm(&[0, 255, 255, 255, 255]).is_err());
-    assert!(pcm(&[]).is_err());
+    assert!(audio.decode(&packet).is_err());
+    assert!(audio.decode(&[0, 255, 255, 255, 255]).is_err());
+    assert!(audio.decode(&[]).is_err());
 }
 
 #[cfg(test)]

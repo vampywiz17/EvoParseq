@@ -1,12 +1,14 @@
 //! Independent experimental Phaze client. No Phaze native code or libraries.
 //! Wire behavior was observed from an authorized local host. Decode/presentation
 //! belong to the embedding application. Unknown media/control formats are ignored.
+mod audio;
 mod datagram;
 mod input;
 mod transport;
 pub mod turn;
 mod wire;
 use anyhow::{bail, ensure, Context, Result};
+pub use audio::AudioCodec;
 pub use datagram::Datagram;
 use futures_util::{SinkExt, StreamExt};
 pub use input::{Input, Keyboard};
@@ -188,6 +190,10 @@ fn random_hex(n: usize) -> Result<String> {
 }
 /// Called directly by the network consumer. No decoded frames or extra queue.
 pub trait Sink {
+    /// Request stereo PCM instead of AAC-LC. Applies at connection startup.
+    fn raw_audio(&self) -> bool {
+        false
+    }
     fn video_config(&self) -> VideoConfig {
         VideoConfig::default()
     }
@@ -204,7 +210,7 @@ pub trait Sink {
     fn stage(&mut self, stage: &'static str);
     fn outputs(&mut self, outputs: &[Output]);
     fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()>;
-    fn audio(&mut self, pcm: &[u8]) -> Result<()>;
+    fn audio(&mut self, pcm: &[i16], codec: AudioCodec) -> Result<()>;
     /// Drain the application's existing event queue. False closes the session.
     fn poll(&mut self, output: Option<u32>, input: &mut Vec<Input>) -> Result<bool>;
 }

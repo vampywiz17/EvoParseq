@@ -30,12 +30,13 @@ struct View {
     sent: u64,
     rtt: Option<Duration>,
     audio_bytes: u64,
+    raw_audio: bool,
+    audio_codec: Option<evoparseq_phaze::AudioCodec>,
     authenticated: bool,
     video: crate::video_windows::Pipeline,
     generation: u64,
     inspector: crate::video_stream::Inspector,
     audio: Option<Arc<crate::audio_windows::Playback>>,
-    pcm: Vec<i16>,
     keys: evoparseq_phaze::Keyboard,
     events: VecDeque<Event>,
     route: &'static str,
@@ -63,7 +64,7 @@ impl View {
                 rtt_ms: self.rtt.map(|elapsed| elapsed.as_secs_f64() * 1000.0),
                 audio_bytes: self.audio_bytes,
                 audio_ready: self.audio.is_some(),
-                audio_codec: self.audio.as_ref().map(|_| "PCM s16le"),
+                audio_codec: self.audio_codec.map(|codec| codec.label()),
                 audio_layout: self
                     .audio
                     .as_ref()
@@ -82,6 +83,9 @@ impl View {
     }
 }
 impl evoparseq_phaze::Sink for View {
+    fn raw_audio(&self) -> bool {
+        self.raw_audio
+    }
     fn video_config(&self) -> evoparseq_phaze::VideoConfig {
         self.config
     }
@@ -162,8 +166,11 @@ impl evoparseq_phaze::Sink for View {
         }
         Ok(())
     }
-    fn audio(&mut self, bytes: &[u8]) -> Result<()> {
-        self.audio_bytes = self.audio_bytes.saturating_add(bytes.len() as u64);
+    fn audio(&mut self, pcm: &[i16], codec: evoparseq_phaze::AudioCodec) -> Result<()> {
+        self.audio_bytes = self
+            .audio_bytes
+            .saturating_add(std::mem::size_of_val(pcm) as u64);
+        self.audio_codec = Some(codec);
         if self.audio.is_none() {
             let playback = Arc::new(crate::audio_windows::Playback::create_layout(
                 self.window.clone(),
@@ -176,20 +183,11 @@ impl evoparseq_phaze::Sink for View {
             crate::event_log::record(
                 "INFO",
                 "phaze_audio_started",
-                serde_json::json!({"codec":"PCM s16le","sample_rate":48000,"channels":2}),
+                serde_json::json!({"codec":codec.label(),"sample_rate":48000,"channels":2}),
             );
         }
-        self.pcm.clear();
-        self.pcm.extend(
-            bytes
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .copied()
-                .map(i16::from_le_bytes),
-        );
         if let Some(playback) = &self.audio {
-            playback.queue(&self.pcm);
+            playback.queue(pcm);
         }
         Ok(())
     }
@@ -359,12 +357,13 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         sent: 0,
         rtt: None,
         audio_bytes: 0,
+        raw_audio: saved.allow_raw_audio,
+        audio_codec: None,
         authenticated: false,
         video,
         generation,
         inspector,
         audio: None,
-        pcm: Vec::new(),
         keys: Default::default(),
         events: VecDeque::new(),
         route: "Direct",
@@ -565,10 +564,11 @@ mod tests {
                 sent: 0,
                 rtt: None,
                 audio_bytes: 0,
+                raw_audio: false,
+                audio_codec: None,
                 authenticated: false,
                 inspector: Default::default(),
                 audio: None,
-                pcm: Vec::new(),
                 keys: Default::default(),
                 events: VecDeque::new(),
                 route: "Direct",
@@ -624,10 +624,15 @@ mod tests {
             assert!(cards.contains(&("Incoming traffic", "1.0 Mbps".into())));
             assert!(cards.contains(&("Outgoing traffic", "0.5 Mbps".into())));
             assert!(cards.contains(&("Connection RTT", "—".into())));
+            assert!(!view.raw_audio());
+            view.raw_audio = true;
+            assert!(view.raw_audio());
+            view.audio_codec = Some(evoparseq_phaze::AudioCodec::Aac);
             view.rtt(Some(Duration::from_micros(12500)));
             view.traffic(127048, 63524);
             let measured = window.stats.read().context("Missing RTT sample")?;
             assert_eq!(measured.rtt_ms, Some(12.5));
+            assert_eq!(measured.audio_codec, Some("AAC-LC"));
             assert!(crate::stats_view::Presentation::new(
                 &measured,
                 &values,

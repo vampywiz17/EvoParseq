@@ -8,13 +8,37 @@ in [libmatoya's header](https://github.com/snowcone-ltd/libmatoya/blob/master/sr
 
 ## Audio and input
 
-The hello requests raw audio (option bit 0); it does not request a virtual display
-layout. Audio opcode 7 contains an encoded flag, big-endian stereo frame count
-and samples. The implemented path accepts only unencoded, interleaved 48 kHz
-signed 16-bit little-endian stereo with an exact bounded length. It passes PCM
-to existing WASAPI playback; there is no new codec dependency or native Phaze code.
-Raw samples use 1.536 Mbit/s before overhead. Compressed Phaze audio is not
-silently interpreted as PCM. Existing Parsec Opus decoding is unchanged.
+The hello requests raw PCM with option bit 0 set, or AAC-LC with it clear;
+it does not request a virtual display layout. The saved Audio format preference
+selects AAC-LC (default) or Uncompressed PCM on the next connection. Audio opcode
+7 contains an encoded flag, big-endian stereo frame count and payload. Flag 0
+accepts interleaved 48 kHz signed 16-bit little-endian stereo with an exact bounded
+length. Flag 1 requires a zero frame-count header and a bounded raw AAC block.
+The observed host uses AAC-LC 48 kHz stereo with AudioSpecificConfig `11 90`;
+decoded output must contain 1024 frames. Symphonia 0.6.1 decodes AAC entirely in
+Rust. Parsing, decoder state and reusable interleaved s16 storage live in the
+shared Phaze crate. WASAPI only receives decoded samples and the observed codec.
+No native Phaze or Media Foundation AAC codec code is used. A malformed packet
+fails explicitly; it is never interpreted as another codec. No automatic mode
+fallback or new worker/queue is added. Raw samples use 1.536 Mbit/s before
+overhead; observed host AAC configuration is nominally 192 kbit/s. Existing
+Parsec Opus decoding is unchanged. Original synthetic silent AAC blocks validate
+actual decode, continuity, mode changes, bounds and error recovery in CI; live
+AAC-host interoperability and latency still need user validation.
+
+### USB/HID investigation (not implemented)
+
+The official client's USB send/receive settings govern USB forwarding; they do
+not establish compatibility with Parsec HID input messages. Static symbol
+metadata includes `ClientUsbForwardDevice`, `ClientUsbGetDevices` and a separate
+`ClientUsbFakeAdd` / `ClientUsbFakeSend` / `ClientUsbFakeRemove` family, plus host
+USB enablement and a separately loaded USB library. These are evidence of a
+potential virtual-device route, not a verified wire contract or a usable public
+SDK. We do not call these proprietary entry points. Device descriptors, report
+transport, host creation/acceptance and lifecycle/release behavior must be
+established before an independent implementation. Existing common HID report
+models may be reusable; the Phaze transport must be original and separately
+validated. The HID/USB controls remain unavailable in EvoParseq Phaze mode.
 
 Input opcodes 8/9/10/11 carry keyboard/wheel/button/motion messages. Each has
 five big-endian words: selected output plus four event fields. Absolute motion
@@ -162,7 +186,7 @@ credentials, packet captures or proprietary implementation bodies are included.
 The shared settings model selects the service's implemented rows. Parsec retains
 its transport, HID and audio negotiation controls. Phaze exposes the shared GPU,
 GPU processing, presentation, playback buffer and immersive input preferences;
-it does not expose Parsec HID, audio negotiation or a 10-bit host request.
+it exposes its own AAC/PCM selection, but not Parsec HID or a 10-bit host request.
 The login service dropdown uses the native dark form styling and separate rows.
 
 Phaze stream request opcode 3 carries six big-endian u32 words: output ID,

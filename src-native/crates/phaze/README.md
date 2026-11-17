@@ -28,8 +28,12 @@ not a production cryptographic dependency recommendation.
   H.264/HEVC, full chroma, bitrate and FPS.
 - Bounded fragment reassembly, duplicate handling, acknowledgment and bounded
   retry of outbound hello, request and input commands.
-- Raw 48 kHz stereo s16le audio, checked against its declared sample count,
-  delivered to the existing WASAPI playback backend. No new native codec library.
+- AAC-LC or raw 48 kHz stereo s16le audio. Pure-Rust Symphonia 0.6.1 decodes
+  bounded raw AAC packets using AudioSpecificConfig 11 90; PCM is checked against
+  its declared sample count. Shared reusable samples feed existing WASAPI playback.
+  The saved Audio format selection applies at reconnect; AAC-LC is the default.
+  Original synthetic decoder fixtures are covered by CI; live AAC validation
+  remains outstanding. No native codec library or native Phaze code is included.
 - Physical keyboard, normalized absolute mouse, relative deltas, five buttons,
   wheel input and focus-loss release. Input starts only when a video viewport is ready.
 - Borrowed compressed video callbacks; decode and presentation stay in EvoParseq's
@@ -53,7 +57,8 @@ Explicit Force TURN routing now uses the production Rust carrier over UDP, TCP
 or TLS, with no direct fallback. Cloudflare TURN/UDP connectivity and H.264 video
 were confirmed against the native host on 2026-11-17 after the post-answer
 `sync` fix. Native-host TCP/TLS tests remain outstanding.
-Raw audio costs approximately 1.536 Mbit/s before transport overhead.
+Raw audio costs approximately 1.536 Mbit/s before transport overhead. The observed
+host AAC-LC configuration is nominally 192 kbit/s. Actual codec is reported in stats.
 Unintegrated Parsec session controls/settings are unavailable in Phaze mode.
 Existing local GPU/presentation, playback buffer and immersive input preferences
 are reused. The canonical session overlay provides local controls, bitrate/FPS
