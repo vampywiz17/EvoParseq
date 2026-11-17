@@ -2309,18 +2309,38 @@ mod tests {
                 SendMessageW(GetDlgItem(page, VIDEO_FORMAT as i32), CB_GETCOUNT, 0, 0),
                 2
             );
-            assert_ne!(IsWindowVisible(GetDlgItem(page, GPU as i32)), 0);
+            assert_ne!(
+                GetWindowLongW(GetDlgItem(page, GPU as i32), GWL_STYLE) as u32 & WS_VISIBLE,
+                0
+            );
             assert_no_overlaps(page);
             capture(page, "phaze-video");
             SendMessageW(page, WM_COMMAND, AUDIO_TAB, 0);
-            assert_ne!(IsWindowVisible(GetDlgItem(page, AUDIO_CUSTOM as i32)), 0);
-            assert_eq!(IsWindowVisible(GetDlgItem(page, AUDIO_RAW as i32)), 0);
-            assert_eq!(IsWindowVisible(GetDlgItem(page, AUDIO_SURROUND as i32)), 0);
+            assert_ne!(
+                GetWindowLongW(GetDlgItem(page, AUDIO_CUSTOM as i32), GWL_STYLE) as u32
+                    & WS_VISIBLE,
+                0
+            );
+            assert_eq!(
+                GetWindowLongW(GetDlgItem(page, AUDIO_RAW as i32), GWL_STYLE) as u32 & WS_VISIBLE,
+                0
+            );
+            assert_eq!(
+                GetWindowLongW(GetDlgItem(page, AUDIO_SURROUND as i32), GWL_STYLE) as u32
+                    & WS_VISIBLE,
+                0
+            );
             assert_no_overlaps(page);
             capture(page, "phaze-audio");
             SendMessageW(page, WM_COMMAND, INPUT_TAB, 0);
-            assert_eq!(IsWindowVisible(GetDlgItem(page, INPUT_MODE as i32)), 0);
-            assert_ne!(IsWindowVisible(GetDlgItem(page, IMMERSIVE as i32)), 0);
+            assert_eq!(
+                GetWindowLongW(GetDlgItem(page, INPUT_MODE as i32), GWL_STYLE) as u32 & WS_VISIBLE,
+                0
+            );
+            assert_ne!(
+                GetWindowLongW(GetDlgItem(page, IMMERSIVE as i32), GWL_STYLE) as u32 & WS_VISIBLE,
+                0
+            );
             assert_no_overlaps(page);
             capture(page, "phaze-input");
             SendMessageW(page, WM_COMMAND, NETWORK_TAB, 0);
