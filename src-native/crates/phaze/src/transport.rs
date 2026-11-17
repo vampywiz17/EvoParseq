@@ -9,7 +9,7 @@ use purecrypto::{
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, VecDeque},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6},
     sync::Arc,
     time::{Duration, Instant},
@@ -247,6 +247,36 @@ fn unreachable(e: &std::io::Error) -> bool {
                 | std::io::ErrorKind::HostUnreachable
         )
 }
+/// Bounded, one-use transaction IDs: an old authenticated response cannot
+/// repeatedly extend peer liveness. Uses the already verified Binding format.
+#[derive(Default)]
+struct Keepalive {
+    pending: VecDeque<[u8; 12]>,
+}
+impl Keepalive {
+    fn request(&mut self, own: &str, pwd: &str, remote: &str) -> Result<Vec<u8>> {
+        let mut id = [0; 12];
+        getrandom::fill(&mut id).map_err(|_| anyhow::anyhow!("OS randomness unavailable"))?;
+        let mut packet = header(1, id);
+        attr(&mut packet, 6, format!("{own}:{remote}").as_bytes());
+        finish_stun(&mut packet, pwd)?;
+        if self.pending.len() == 4 {
+            self.pending.pop_front();
+        }
+        self.pending.push_back(id);
+        Ok(packet)
+    }
+    fn response(&mut self, bytes: &[u8], key: &str) -> bool {
+        if bytes.len() < 20 || bytes[..2] != [1, 1] || check_stun(bytes, key).is_err() {
+            return false;
+        }
+        let Some(index) = self.pending.iter().position(|id| bytes[8..20] == *id) else {
+            return false;
+        };
+        self.pending.remove(index);
+        true
+    }
+}
 async fn select_peer(socket: &UdpSocket, own: &str, pwd: &str, a: &Answer) -> Result<SocketAddr> {
     let targets = probe_targets(a);
     ensure!(
@@ -468,15 +498,27 @@ pub async fn run(
     flush(&mut c, &socket, peer).await?;
     sink.stage("waiting_outputs");
     let mut requested = false;
+    let app_started = Instant::now();
+    let mut video_received = false;
     let mut last_data = Instant::now();
+    let mut keepalive = Keepalive::default();
+    let mut keepalive_timer = tokio::time::interval(Duration::from_millis(2500));
     let mut last_retry = Instant::now();
     let mut retries = 0;
     loop {
         ensure!(
             last_data.elapsed() < Duration::from_secs(20),
-            "Phaze media timed out"
+            "Phaze peer stopped responding"
+        );
+        ensure!(
+            video_received || app_started.elapsed() < Duration::from_secs(20),
+            "Phaze first video timed out"
         );
         tokio::select! {
+            _=keepalive_timer.tick()=>{
+                let request=keepalive.request(ufrag,pwd,&a.ufrag)?;
+                socket.send_to(&request,peer).await?;
+            },
             _=tick.tick()=>{if c.next_timeout().is_some_and(|t|start.elapsed()>=t){c.on_timeout(start.elapsed());}},
             r=socket.recv_from(&mut buf)=>{
                 let(n,src)=match r {
@@ -487,6 +529,7 @@ pub async fn run(
                 let src=dual_endpoint(src);
                 if src!=peer { continue }
                 if n>=8 && buf[4..8]==0x2112a442u32.to_be_bytes() {
+                    if keepalive.response(&buf[..n],&a.pwd) {last_data=Instant::now();}
                     handle_stun(&socket,&buf[..n],src,ufrag,pwd,&a).await?;
                     continue
                 }
@@ -531,6 +574,7 @@ pub async fn run(
                         let bytes = wire::encoded(&frame[1..])?;
                         let flags = u32::from_be_bytes(frame[9..13].try_into().unwrap());
                         sink.video(bytes, flags & 1 != 0)?;
+                        video_received |= !bytes.is_empty();
                     }
                     _ => {}
                 }
@@ -556,6 +600,34 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn keepalive_requires_fresh_transaction_and_authenticated_response() -> Result<()> {
+        let mut keepalive = Keepalive::default();
+        let request = keepalive.request("client", "client-key", "host")?;
+        assert_eq!(
+            check_stun(&request, "client-key")?,
+            Some(&b"client:host"[..])
+        );
+        let id = request[8..20].try_into().unwrap();
+        let address = "127.0.0.1:31000".parse().unwrap();
+        let response = reply_stun(id, address, "host-key")?;
+        assert!(!keepalive.response(&response, "wrong-key"));
+        let foreign = reply_stun([7; 12], address, "host-key")?;
+        assert!(!keepalive.response(&foreign, "host-key"));
+        assert!(keepalive.response(&response, "host-key"));
+        assert!(
+            !keepalive.response(&response, "host-key"),
+            "replay must not extend liveness"
+        );
+        let old = keepalive.request("client", "client-key", "host")?;
+        for _ in 0..4 {
+            keepalive.request("client", "client-key", "host")?;
+        }
+        assert_eq!(keepalive.pending.len(), 4);
+        let expired = reply_stun(old[8..20].try_into().unwrap(), address, "host-key")?;
+        assert!(!keepalive.response(&expired, "host-key"));
+        Ok(())
+    }
     #[test]
     fn stun_requires_integrity_and_fingerprint() -> Result<()> {
         let mut packet = header(1, [3; 12]);

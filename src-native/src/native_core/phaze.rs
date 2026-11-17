@@ -132,7 +132,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         inspector: Default::default(),
     };
     let remote = evoparseq_phaze::Session::from_token(session.token())?;
-    block_on(async {
+    let result = block_on(async {
         let local = async {
             let mut tick = tokio::time::interval(Duration::from_millis(50));
             let mut events = VecDeque::new();
@@ -169,5 +169,13 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
             result=evoparseq_phaze::connect(&remote,peer,&mut view)=>result,
             result=local=>result,
         }
-    })
+    });
+    if let Err(error) = &result {
+        crate::event_log::record(
+            "ERROR",
+            "phaze_session_failed",
+            serde_json::json!({"reason":error.to_string()}),
+        );
+    }
+    result
 }
