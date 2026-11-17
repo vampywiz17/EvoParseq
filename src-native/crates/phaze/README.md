@@ -24,7 +24,8 @@ not a production cryptographic dependency recommendation.
   handled separately from reliable media frames; a static image is not a dead peer.
 - DTLS 1.2/CID with fresh ephemeral identity, mutual certificate handshake and
   mandatory signaling-fingerprint pinning before application requests.
-- Output-list reception, selection of the primary active output and H.264 request.
+- Output-list reception, active-output selection and bounded stream requests for
+  H.264/HEVC, full chroma, bitrate and FPS.
 - Bounded fragment reassembly, duplicate handling, acknowledgment and bounded
   retry of outbound hello, request and input commands.
 - Raw 48 kHz stereo s16le audio, checked against its declared sample count,
@@ -42,17 +43,22 @@ Loss behavior and the full native congestion/retransmission behavior remain unve
 
 ## Explicit limitations
 
-Windows integration only. Experimental primary-display session:
-H.264, 8-bit, 4:2:0; initial request uses the verified 10 Mbps / 30 fps fields.
-No Phaze clipboard, USB, virtual-display management, multi-display,
-HEVC, 10-bit or 4:4:4 support is claimed.
+Windows integration only. H.264 8-bit 4:2:0 has live validation. HEVC and
+4:4:4 requests are integrated for testing through the existing GPU video path;
+their native-host results still need live confirmation. Initial bitrate/FPS use
+the saved shared preferences, defaulting to 10 Mbps / 60 FPS.
+No Phaze clipboard, USB, virtual-display management, simultaneous multi-display
+or 10-bit host request is implemented.
 Explicit Force TURN routing now uses the production Rust carrier over UDP, TCP
 or TLS, with no direct fallback. Cloudflare TURN/UDP connectivity and H.264 video
 were confirmed against the native host on 2026-11-17 after the post-answer
 `sync` fix. Native-host TCP/TLS tests remain outstanding.
 Raw audio costs approximately 1.536 Mbit/s before transport overhead.
 Unintegrated Parsec session controls/settings are unavailable in Phaze mode.
-Existing local GPU/presentation preferences are reused.
+Existing local GPU/presentation, playback buffer and immersive input preferences
+are reused. The canonical session overlay provides local controls, bitrate/FPS
+requests, active-output selection and measured stats. Missing host telemetry
+remains unknown. Settings tabs show the selected service's integrated options.
 No automatic fallback to Parsec or WebRTC occurs.
 
 The observed host omits the RFC 7627 EMS extension. This adapter explicitly permits
