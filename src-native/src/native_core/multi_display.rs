@@ -508,6 +508,19 @@ mod tests {
         assert_eq!(second.video.snapshot().frames_decoded, 0);
         assert_eq!(third.video.snapshot().frames_decoded, 0);
 
+        // This fixture injects its own events. Visible windows can enqueue
+        // desktop focus/input while poll() is checking control-only routing.
+        // Finish startup visibility changes and discard those native events;
+        // actual foreground capture has its own isolated lifecycle fixture.
+        for window in [&primary, &second.window, &third.window] {
+            unsafe {
+                use windows_sys::Win32::UI::WindowsAndMessaging::*;
+                ShowWindow(window.handle(), SW_HIDE);
+                SendMessageW(window.handle(), WM_NULL, 0, 0);
+            }
+            window.events.drain();
+        }
+
         let mut input = Input::default();
         displays.synchronize_input(&attempt, &mut input).unwrap();
         assert!(packets().is_empty());
@@ -567,7 +580,11 @@ mod tests {
         assert!(primary_events.iter().any(|event| matches!(event,
             Event::NativeSession(Command::DisplayResolution { stream: 1, resolution: r, size })
                 if *r == resolution && *size == second.window.native_display_size())));
-        assert!(packets().is_empty());
+        let unexpected = packets();
+        assert!(
+            unexpected.is_empty(),
+            "Unexpected fixture commands: {unexpected:?}"
+        );
         second
             .window
             .events
