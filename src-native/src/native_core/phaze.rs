@@ -46,6 +46,7 @@ impl View {
         self.window.stats.publish(
             self.generation,
             crate::stats::Sample {
+                phaze: true,
                 state: state.into(),
                 protocol: format!("Phaze / {}", self.carrier),
                 dtls: if self.authenticated {
@@ -72,6 +73,8 @@ impl View {
                 } else {
                     "Unknown"
                 },
+                turn_protocol: (self.authenticated && self.route == "TURN")
+                    .then(|| self.carrier.trim_start_matches("TURN / ").to_owned()),
                 ..Default::default()
             },
         );
@@ -349,7 +352,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
             hevc: saved.prefer_hevc,
             chroma_444: saved.prefer_hevc && saved.experimental_chroma_444,
             mbps: saved.native_core.video.bandwidth_mbps.unwrap_or(10),
-            fps: saved.native_core.video.fps.unwrap_or(30),
+            fps: saved.native_core.video.fps.unwrap_or(60),
         },
         pending: None,
         received: 0,

@@ -175,6 +175,11 @@ impl<'a> Presentation<'a> {
         };
         #[cfg(not(feature = "bud"))]
         let footer = WEBRTC_FOOTER;
+        let footer = if sample.phaze {
+            "Traffic counts received/sent DTLS datagrams, including encrypted control and retransmissions. Initial handshake, TURN encapsulation and IP/TCP/UDP headers are excluded. PCM bytes describe decoded audio. Host encode time and RTT remain unknown until measured. Local dropped frames are not network packet loss."
+        } else {
+            footer
+        };
         let footer = if timing.requested {
             format!("{footer} Host timing averages and peaks cover the current diagnostic collection. These are host durations, not capture-to-display latency or GPU execution times.")
         } else {

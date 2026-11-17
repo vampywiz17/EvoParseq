@@ -17,6 +17,7 @@ pub struct MemoryUsage {
 }
 #[derive(Clone)]
 pub struct Sample {
+    pub phaze: bool,
     #[cfg(feature = "bud")]
     pub bud: Option<evoparseq_bud::bud::Snapshot>,
     pub at: Instant,
@@ -50,6 +51,7 @@ pub struct Sample {
 impl Default for Sample {
     fn default() -> Self {
         Self {
+            phaze: false,
             #[cfg(feature = "bud")]
             bud: None,
             at: Instant::now(),
