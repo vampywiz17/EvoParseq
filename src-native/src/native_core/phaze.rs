@@ -166,10 +166,13 @@ impl evoparseq_phaze::Sink for View {
         }
         Ok(())
     }
-    fn audio(&mut self, pcm: &[i16], codec: evoparseq_phaze::AudioCodec) -> Result<()> {
-        self.audio_bytes = self
-            .audio_bytes
-            .saturating_add(std::mem::size_of_val(pcm) as u64);
+    fn audio(
+        &mut self,
+        pcm: &[i16],
+        codec: evoparseq_phaze::AudioCodec,
+        payload_bytes: usize,
+    ) -> Result<()> {
+        self.audio_bytes = self.audio_bytes.saturating_add(payload_bytes as u64);
         self.audio_codec = Some(codec);
         if self.audio.is_none() {
             let playback = Arc::new(crate::audio_windows::Playback::create_layout(

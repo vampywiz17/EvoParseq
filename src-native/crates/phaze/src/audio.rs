@@ -30,7 +30,9 @@ pub(crate) struct Audio {
     pcm: Vec<i16>,
 }
 impl Audio {
-    pub fn decode(&mut self, bytes: &[u8]) -> Result<(AudioCodec, &[i16])> {
+    /// Returns the actual codec, decoded samples and delivered payload byte count.
+    /// The byte count excludes the five-byte audio header and all transport framing.
+    pub fn decode(&mut self, bytes: &[u8]) -> Result<(AudioCodec, &[i16], usize)> {
         ensure!(bytes.len() >= 5, "Short Phaze audio header");
         let frames = u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
         let payload = &bytes[5..];
@@ -67,7 +69,7 @@ impl Audio {
             }
             _ => anyhow::bail!("Unknown Phaze audio encoding"),
         };
-        Ok((codec, &self.pcm))
+        Ok((codec, &self.pcm, payload.len()))
     }
     fn decode_aac(&mut self, payload: &[u8]) -> Result<()> {
         if self.aac.is_none() {
@@ -116,15 +118,18 @@ mod tests {
     fn aac_raw_block_decodes_stereo_and_reuses_state_across_packets() -> Result<()> {
         let mut audio = Audio::default();
         for _ in 0..3 {
-            let (codec, pcm) = audio.decode(&packet(1, 0, &SILENCE))?;
+            let (codec, pcm, payload_bytes) = audio.decode(&packet(1, 0, &SILENCE))?;
             assert_eq!(codec.label(), "AAC-LC");
             assert_eq!(pcm.len(), 2048);
+            assert_eq!(payload_bytes, SILENCE.len());
+            assert_ne!(payload_bytes, std::mem::size_of_val(pcm));
             assert!(pcm.iter().all(|s| *s == 0));
         }
         assert!(audio.aac.is_some());
-        let (codec, pcm) = audio.decode(&packet(0, 1, &[1, 0, 255, 255]))?;
+        let (codec, pcm, payload_bytes) = audio.decode(&packet(0, 1, &[1, 0, 255, 255]))?;
         assert_eq!(codec.label(), "PCM s16le");
         assert_eq!(pcm, &[1, -1]);
+        assert_eq!(payload_bytes, 4);
         assert!(audio.aac.is_none());
         assert_eq!(audio.decode(&packet(1, 0, &SILENCE))?.1.len(), 2048);
         Ok(())

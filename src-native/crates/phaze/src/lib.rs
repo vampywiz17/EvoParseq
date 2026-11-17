@@ -210,7 +210,8 @@ pub trait Sink {
     fn stage(&mut self, stage: &'static str);
     fn outputs(&mut self, outputs: &[Output]);
     fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()>;
-    fn audio(&mut self, pcm: &[i16], codec: AudioCodec) -> Result<()>;
+    /// Audio payload bytes are measured before decoding; headers are excluded.
+    fn audio(&mut self, pcm: &[i16], codec: AudioCodec, payload_bytes: usize) -> Result<()>;
     /// Drain the application's existing event queue. False closes the session.
     fn poll(&mut self, output: Option<u32>, input: &mut Vec<Input>) -> Result<bool>;
 }

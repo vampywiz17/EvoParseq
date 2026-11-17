@@ -637,8 +637,8 @@ pub async fn run(
                         video_received |= !bytes.is_empty();
                     }
                     Some(7) => {
-                        let (codec, pcm) = audio.decode(&frame[1..])?;
-                        sink.audio(pcm, codec)?;
+                        let (codec, pcm, payload_bytes) = audio.decode(&frame[1..])?;
+                        sink.audio(pcm, codec, payload_bytes)?;
                     }
                     _ => {}
                 }

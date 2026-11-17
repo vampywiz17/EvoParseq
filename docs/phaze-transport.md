@@ -208,7 +208,11 @@ implemented. The official product's support does not establish our client suppor
 
 Stats reuse the shared sample, rates and native playback/decoder/presentation
 reports. Carrier byte counters exclude TURN encapsulation and initial handshake;
-PCM byte count/layout and the observed codec are reported. Connection RTT is
+Audio payload bitrate counts delivered AAC or PCM payload bytes before decoding,
+not the expanded PCM playback buffer. Audio message headers, DTLS/TURN/network
+overhead and duplicate retransmissions are excluded. It is measured over the
+sampling interval, not a nominal encoder bitrate read from metadata. Audio layout
+and the observed codec are reported. Connection RTT is
 measured locally from reliable commands and their authenticated ACKs (kinds 3/4),
 using the existing cumulative frontier and selective bitmap. Timing starts at
 carrier batch submission, committed only after a successful flush. Each ACK
