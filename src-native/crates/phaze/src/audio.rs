@@ -44,8 +44,11 @@ impl Audio {
                 self.pcm.clear();
                 self.pcm.extend(
                     payload
-                        .chunks_exact(2)
-                        .map(|s| i16::from_le_bytes([s[0], s[1]])),
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .copied()
+                        .map(i16::from_le_bytes),
                 );
                 AudioCodec::Pcm
             }
