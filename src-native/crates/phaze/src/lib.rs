@@ -1,10 +1,14 @@
 //! Independent experimental Phaze client. No Phaze native code or libraries.
 //! Wire behavior was observed from an authorized local host. Decode/presentation
 //! belong to the embedding application. Unknown media/control formats are ignored.
+mod datagram;
+mod input;
 mod transport;
 mod wire;
 use anyhow::{bail, ensure, Context, Result};
+pub use datagram::Datagram;
 use futures_util::{SinkExt, StreamExt};
+pub use input::{Input, Keyboard};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{sync::Arc, time::Duration};
@@ -176,13 +180,38 @@ pub trait Sink {
     fn stage(&mut self, stage: &'static str);
     fn outputs(&mut self, outputs: &[Output]);
     fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()>;
+    fn audio(&mut self, pcm: &[u8]) -> Result<()>;
+    /// Drain the application's existing event queue. False closes the session.
+    fn poll(&mut self, output: Option<u32>, input: &mut Vec<Input>) -> Result<bool>;
 }
-/// Experimental direct UDP only. No automatic Parsec fallback, input injection,
-/// relay, audio or unverified codec capabilities.
+/// Experimental direct UDP session. Video, PCM audio and input reuse the
+/// embedding client's backends. No automatic Parsec fallback occurs.
 pub async fn connect(session: &Session, peer: &str, sink: &mut impl Sink) -> Result<()> {
     ensure!(valid_peer(peer), "Invalid Phaze host peer ID");
     let socket = transport::local_socket()?;
-    let candidates = transport::local_candidates(socket.local_addr()?.port())?;
+    connect_via(session, peer, sink, socket).await
+}
+/// Explicit caller-owned UDP/TURN carrier. No direct fallback occurs here.
+pub async fn connect_via(
+    session: &Session,
+    peer: &str,
+    sink: &mut impl Sink,
+    socket: impl Datagram,
+) -> Result<()> {
+    ensure!(valid_peer(peer), "Invalid Phaze host peer ID");
+    let addresses = socket.candidates()?;
+    ensure!(
+        !addresses.is_empty()
+            && addresses.len() <= 16
+            && addresses
+                .iter()
+                .all(|a| a.port() != 0 && !a.ip().is_unspecified()),
+        "Invalid Phaze advertised candidates"
+    );
+    let candidates: Vec<_> = addresses
+        .iter()
+        .map(|a| json!({"addr":a.ip().to_string(),"port":a.port(),"short_ttl":false}))
+        .collect();
     let identity = transport::Identity::generate()?;
     let mut random = [0; 4];
     getrandom::fill(&mut random).map_err(|_| anyhow::anyhow!("OS randomness unavailable"))?;

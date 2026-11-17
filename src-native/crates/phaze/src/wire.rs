@@ -74,8 +74,20 @@ pub fn request(output: u32) -> Vec<u8> {
 }
 pub fn hello() -> Vec<u8> {
     let mut b = vec![18];
-    b.extend([0; 8]);
+    b.extend(1u32.to_be_bytes()); // Request raw audio: no native codec dependency.
+    b.extend(0u32.to_be_bytes()); // No virtual client display layout.
     b
+}
+/// Host audio: encoded flag, stereo frame count (BE), then interleaved s16le.
+pub fn pcm(b: &[u8]) -> Result<&[u8]> {
+    ensure!(b.len() >= 5, "Short Phaze audio header");
+    ensure!(b[0] == 0, "Phaze host did not honor the raw audio request");
+    let frames = be(b, 1) as usize;
+    ensure!(
+        frames > 0 && frames <= 5760 && b.len() == 5 + frames * 4,
+        "Invalid Phaze stereo PCM length"
+    );
+    Ok(&b[5..])
 }
 pub fn encoded(b: &[u8]) -> Result<&[u8]> {
     ensure!(b.len() >= 24, "Short video header");
@@ -146,8 +158,11 @@ impl Reliable {
         if b.is_empty() {
             bail!("Empty reliable packet")
         }
-        if b[0] == 3 {
-            ensure!(b.len() == 34, "Invalid acknowledgment length");
+        if matches!(b[0], 3 | 4) {
+            ensure!(
+                b.len() == if b[0] == 3 { 34 } else { 50 },
+                "Invalid acknowledgment length"
+            );
             let frontier = u64::from_le_bytes(b[10..18].try_into().unwrap());
             let anchor = u64::from_le_bytes(b[18..26].try_into().unwrap());
             let bitmap = u64::from_le_bytes(b[26..34].try_into().unwrap());
@@ -245,7 +260,10 @@ fn wire_contracts() -> Result<()> {
     ensure!(b.receive(&p[0])?.0.is_empty(), "Duplicate test");
     ensure!(b.receive(&p[1])?.0 == vec![data], "Reassembly test");
     ensure!(b.receive(&[1]).is_err(), "Truncation test");
-    ensure!(hello() == vec![18, 0, 0, 0, 0, 0, 0, 0, 0], "Hello test");
+    ensure!(
+        hello() == vec![18, 0, 0, 0, 1, 0, 0, 0, 0],
+        "Hello/raw audio test"
+    );
     ensure!(request(7).len() == 25, "Request test");
     ensure!(outputs(&[0; 12]).is_err(), "Output bounds test");
     ensure!(encoded(&[0; 23]).is_err(), "Video bounds test");
@@ -291,4 +309,35 @@ fn protected_heartbeat_is_not_reliable_or_application_data() {
     for bytes in [&[][..], &[0xcd][..], &[0, 3][..], &[0xcd, 4][..]] {
         assert!(envelope(bytes).is_none());
     }
+}
+
+#[cfg(test)]
+#[test]
+fn raw_audio_checks_encoding_sample_count_and_stereo_alignment() {
+    let mut packet = vec![0, 0, 0, 0, 2, 0, 128, 255, 127, 1, 0, 255, 255];
+    assert_eq!(pcm(&packet).unwrap(), &packet[5..]);
+    packet[0] = 1;
+    assert!(pcm(&packet).is_err());
+    packet[0] = 0;
+    packet.pop();
+    assert!(pcm(&packet).is_err());
+    assert!(pcm(&[0, 255, 255, 255, 255]).is_err());
+    assert!(pcm(&[]).is_err());
+}
+
+#[cfg(test)]
+#[test]
+fn timing_feedback_also_acknowledges_outgoing_input() -> Result<()> {
+    let mut sender = Reliable::default();
+    let mut receiver = Reliable::default();
+    let packet = sender.frame(&crate::Input::Release.encode(0))?.remove(0);
+    let (_, ack) = receiver.receive(&packet)?;
+    let mut timing = ack.unwrap();
+    timing[0] = 4;
+    timing.extend([0; 16]);
+    sender.receive(&timing)?;
+    assert_eq!(sender.pending().count(), 0);
+    timing.pop();
+    assert!(sender.receive(&timing).is_err());
+    Ok(())
 }

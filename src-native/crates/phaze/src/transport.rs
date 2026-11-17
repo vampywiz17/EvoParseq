@@ -191,13 +191,13 @@ fn local_ips() -> Result<BTreeSet<IpAddr>> {
     }
     Ok(ips)
 }
-pub fn local_candidates(port: u16) -> Result<Vec<serde_json::Value>> {
+pub fn local_candidates(port: u16) -> Result<Vec<SocketAddr>> {
     // Native peer info has room for sixteen addresses. Prefer loopback and IPv4;
     // scoped link-local IPv6 needs separate interface-index handling and is omitted.
     let ips = local_ips()?;
     let mut out = vec![
-        serde_json::json!({"addr":"::1","port":port,"short_ttl":false}),
-        serde_json::json!({"addr":"127.0.0.1","port":port,"short_ttl":false}),
+        SocketAddr::new("::1".parse().unwrap(), port),
+        SocketAddr::new("127.0.0.1".parse().unwrap(), port),
     ];
     for ip in ips {
         if ip.is_loopback() || matches!(ip,IpAddr::V6(v)if v.is_unicast_link_local()) {
@@ -206,11 +206,11 @@ pub fn local_candidates(port: u16) -> Result<Vec<serde_json::Value>> {
         if out.len() == 16 {
             break;
         }
-        out.push(serde_json::json!({"addr":ip.to_string(),"port":port,"short_ttl":false}));
+        out.push(SocketAddr::new(ip, port));
     }
     Ok(out)
 }
-fn dual_endpoint(addr: SocketAddr) -> SocketAddr {
+pub(crate) fn dual_endpoint(addr: SocketAddr) -> SocketAddr {
     match addr {
         SocketAddr::V4(v) => {
             SocketAddr::V6(SocketAddrV6::new(v.ip().to_ipv6_mapped(), v.port(), 0, 0))
@@ -247,8 +247,16 @@ fn unreachable(e: &std::io::Error) -> bool {
                 | std::io::ErrorKind::HostUnreachable
         )
 }
-async fn select_peer(socket: &UdpSocket, own: &str, pwd: &str, a: &Answer) -> Result<SocketAddr> {
-    let targets = probe_targets(a);
+async fn select_peer(
+    socket: &impl crate::Datagram,
+    own: &str,
+    pwd: &str,
+    a: &Answer,
+) -> Result<SocketAddr> {
+    let targets: Vec<_> = probe_targets(a)
+        .into_iter()
+        .filter_map(|a| socket.endpoint(a))
+        .collect();
     ensure!(
         !targets.is_empty(),
         "Host answer has no numeric candidate for a direct UDP connection"
@@ -266,7 +274,7 @@ async fn select_peer(socket: &UdpSocket, own: &str, pwd: &str, a: &Answer) -> Re
         _=tokio::time::sleep_until(stop)=>bail!("No authenticated STUN response from advertised host candidates"),
         _=tick.tick()=>{for target in &targets{match socket.send_to(&req,*target).await{Ok(_)=>{},Err(err)if unreachable(&err)=>{},Err(err)=>return Err(err).context("STUN candidate send failed")}}},
         r=socket.recv_from(&mut buf)=>{
-        let(n,src)=match r{Ok(v)=>v,Err(err)if unreachable(&err)=>{continue},Err(err)=>return Err(err).context("STUN receive failed")};let src=dual_endpoint(src);
+        let(n,src)=match r{Ok(v)=>v,Err(err)if unreachable(&err)=>{continue},Err(err)=>return Err(err).context("STUN receive failed")};let Some(src)=socket.endpoint(src) else { continue };
         if !targets.contains(&src)||n<20{continue}let b=&buf[..n];if b[4..8]!=0x2112a442u32.to_be_bytes(){continue}
         let username=match check_stun(b,&a.pwd){Ok(u)=>u,Err(_)=>{continue}};
         let kind=u16::from_be_bytes(b[..2].try_into().unwrap());
@@ -322,7 +330,7 @@ fn outbound_batches(c: &mut Connection) -> Result<Vec<Vec<u8>>> {
     Ok(batches)
 }
 
-async fn flush(c: &mut Connection, socket: &UdpSocket, peer: SocketAddr) -> Result<()> {
+async fn flush(c: &mut Connection, socket: &impl crate::Datagram, peer: SocketAddr) -> Result<()> {
     for packet in outbound_batches(c)? {
         socket.send_to(&packet, peer).await?;
     }
@@ -335,7 +343,7 @@ fn send(c: &mut Connection, b: &[u8]) -> Result<()> {
         .map_err(|_| anyhow::anyhow!("DTLS application write failed"))
 }
 async fn handle_stun(
-    s: &UdpSocket,
+    s: &impl crate::Datagram,
     b: &[u8],
     src: SocketAddr,
     own: &str,
@@ -383,7 +391,7 @@ fn routing_cid(b: &[u8]) -> Option<[u8; 8]> {
     None
 }
 pub async fn run(
-    socket: UdpSocket,
+    socket: impl crate::Datagram,
     identity: Identity,
     own_cid: u32,
     ufrag: &str,
@@ -416,7 +424,8 @@ pub async fn run(
         .map_err(|_| anyhow::anyhow!("Cannot initialize Rust DTLS client"))?;
     let start = Instant::now();
     let mut buf = vec![0; 65536];
-    let mut tick = tokio::time::interval(Duration::from_millis(20));
+    let mut tick = tokio::time::interval(Duration::from_millis(4));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     sink.stage("dtls_handshaking");
     c.handshake()
         .map_err(|_| anyhow::anyhow!("DTLS initial handshake error"))?;
@@ -438,7 +447,7 @@ pub async fn run(
                     Err(err) if unreachable(&err)=>continue,
                     Err(_)=>bail!("Phaze UDP handshake receive failed"),
                 };
-                let src=dual_endpoint(src);
+                let Some(src)=socket.endpoint(src) else { continue };
                 if n>=8 && buf[4..8]==0x2112a442u32.to_be_bytes() {
                     handle_stun(&socket,&buf[..n],src,ufrag,pwd,&a).await?;
                     continue;
@@ -476,6 +485,8 @@ pub async fn run(
     heartbeat_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_retry = Instant::now();
     let mut retries = 0;
+    let mut selected_output = None;
+    let mut input = Vec::new();
     loop {
         ensure!(
             last_heartbeat.elapsed() < Duration::from_secs(20),
@@ -489,14 +500,29 @@ pub async fn run(
             _=heartbeat_timer.tick()=>{
                 c.send(&wire::HEARTBEAT).map_err(|_|anyhow::anyhow!("Phaze heartbeat send failed"))?;
             },
-            _=tick.tick()=>{if c.next_timeout().is_some_and(|t|start.elapsed()>=t){c.on_timeout(start.elapsed());}},
+            _=tick.tick()=>{
+                if c.next_timeout().is_some_and(|t|start.elapsed()>=t){c.on_timeout(start.elapsed());}
+                input.clear();
+                let running=sink.poll(selected_output,&mut input);
+                if !matches!(running,Ok(true)) {
+                    for p in reliable.frame(&crate::Input::Release.encode(0))? { send(&mut c,&p)?; }
+                    c.send(&[0xcd,1]).map_err(|_|anyhow::anyhow!("Phaze close send failed"))?;
+                    flush(&mut c,&socket,peer).await?;
+                    return running.map(|_|());
+                }
+                if let Some(output)=selected_output {
+                    for command in input.drain(..) {
+                        for p in reliable.frame(&command.encode(output))? { send(&mut c,&p)?; }
+                    }
+                }
+            },
             r=socket.recv_from(&mut buf)=>{
                 let(n,src)=match r {
                     Ok(v)=>v,
                     Err(err) if unreachable(&err)=>continue,
                     Err(_)=>bail!("Phaze UDP receive failed")
                 };
-                let src=dual_endpoint(src);
+                let Some(src)=socket.endpoint(src) else { continue };
                 if src!=peer { continue }
                 if n>=8 && buf[4..8]==0x2112a442u32.to_be_bytes() {
                     handle_stun(&socket,&buf[..n],src,ufrag,pwd,&a).await?;
@@ -544,6 +570,7 @@ pub async fn run(
                             for p in reliable.frame(&wire::request(output.id))? {
                                 send(&mut c, &p)?;
                             }
+                            selected_output = Some(output.id);
                             requested = true;
                             sink.stage("h264_requested");
                         }
@@ -554,6 +581,7 @@ pub async fn run(
                         sink.video(bytes, flags & 1 != 0)?;
                         video_received |= !bytes.is_empty();
                     }
+                    Some(7) => sink.audio(wire::pcm(&frame[1..])?)?,
                     _ => {}
                 }
             }

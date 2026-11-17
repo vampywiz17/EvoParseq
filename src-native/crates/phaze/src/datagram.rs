@@ -1,0 +1,33 @@
+//! Datagram carrier boundary: TURN transports the same authenticated Phaze
+//! packets. The embedding client owns allocation, permissions and renewal.
+use std::{future::Future, io, net::SocketAddr};
+
+pub trait Datagram: Sync {
+    fn candidates(&self) -> io::Result<Vec<SocketAddr>>;
+    /// Canonical socket-family representation; None means unsupported family.
+    fn endpoint(&self, address: SocketAddr) -> Option<SocketAddr>;
+    fn send_to(
+        &self,
+        data: &[u8],
+        peer: SocketAddr,
+    ) -> impl Future<Output = io::Result<usize>> + Send;
+    fn recv_from(
+        &self,
+        data: &mut [u8],
+    ) -> impl Future<Output = io::Result<(usize, SocketAddr)>> + Send;
+}
+
+impl Datagram for tokio::net::UdpSocket {
+    fn candidates(&self) -> io::Result<Vec<SocketAddr>> {
+        super::transport::local_candidates(self.local_addr()?.port()).map_err(io::Error::other)
+    }
+    fn endpoint(&self, address: SocketAddr) -> Option<SocketAddr> {
+        Some(super::transport::dual_endpoint(address))
+    }
+    async fn send_to(&self, data: &[u8], peer: SocketAddr) -> io::Result<usize> {
+        self.send_to(data, peer).await
+    }
+    async fn recv_from(&self, data: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.recv_from(data).await
+    }
+}

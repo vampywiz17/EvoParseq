@@ -26,23 +26,28 @@ not a production cryptographic dependency recommendation.
   mandatory signaling-fingerprint pinning before application requests.
 - Output-list reception, selection of the primary active output and H.264 request.
 - Bounded fragment reassembly, duplicate handling, acknowledgment and bounded
-  retry of the small outbound hello/request commands.
+  retry of outbound hello, request and input commands.
+- Raw 48 kHz stereo s16le audio, checked against its declared sample count,
+  delivered to the existing WASAPI playback backend. No new native codec library.
+- Physical keyboard, normalized absolute mouse, relative deltas, five buttons,
+  wheel input and focus-loss release. Input starts only when a video viewport is ready.
 - Borrowed compressed video callbacks; decode and presentation stay in EvoParseq's
   existing Windows Pipeline and shared Annex B inspector. No decoded-pixel readback.
 
-The Rust proof received the real host output list and decoded one H.264 picture.
 A user-confirmed Windows GUI test displayed H.264 8-bit 4:2:0 through the existing
-Media Foundation pipeline. That initial GUI session subsequently timed out.
-The required protected peer heartbeat is now under live validation. Sustained playback, remote
-routing under loss and the full native congestion/retransmission behavior are
-not yet validated.
+Media Foundation pipeline and continued updating beyond one minute after the
+protected heartbeat fix. Audio/input wiring requires a new live validation.
+Loss behavior and the full native congestion/retransmission behavior remain unverified.
 
 ## Explicit limitations
 
-Windows integration only. Experimental video-only primary-display session:
+Windows integration only. Experimental primary-display session:
 H.264, 8-bit, 4:2:0; initial request uses the verified 10 Mbps / 30 fps fields.
-No Phaze audio, input, clipboard, USB, virtual-display management, multi-display,
-HEVC, 10-bit, 4:4:4, or relay integration is claimed.
+No Phaze clipboard, USB, virtual-display management, multi-display,
+HEVC, 10-bit, 4:4:4, or live relay integration is claimed.
+TURN feasibility is exercised by an isolated test using the existing TURN fixture;
+this is not a native-host TURN validation or an exposed routing option.
+Raw audio costs approximately 1.536 Mbit/s before transport overhead.
 Unintegrated Parsec session controls/settings are unavailable in Phaze mode.
 Existing local GPU/presentation preferences are reused.
 No automatic fallback to Parsec or WebRTC occurs.
