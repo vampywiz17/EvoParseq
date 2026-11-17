@@ -1227,15 +1227,16 @@ unsafe fn checked(hwnd: HWND, id: usize) -> bool {
 unsafe fn read_options(hwnd: HWND, page: &mut Page) {
     let model = &mut page.model;
     if let Some(mode) = RouteMode::ALL.get(selection(hwnd, ROUTE_MODE)) {
-        mode.apply(s);
+        mode.apply(&mut model.values);
     }
-    s.provider = if SendMessageW(GetDlgItem(hwnd, PROVIDER as i32), CB_GETCURSEL, 0, 0) == 1 {
-        "cloudflare"
-    } else {
-        "custom"
-    }
-    .into();
-    if page.model.network_only {
+    model.values.provider =
+        if SendMessageW(GetDlgItem(hwnd, PROVIDER as i32), CB_GETCURSEL, 0, 0) == 1 {
+            "cloudflare"
+        } else {
+            "custom"
+        }
+        .into();
+    if model.network_only {
         return;
     }
     model.gpu_selection = usize::try_from(SendMessageW(
@@ -1327,7 +1328,7 @@ unsafe fn save(hwnd: HWND, page: &mut Page) {
     let vsr_available =
         model.ai_upscaler() == AiUpscaler::Nvidia && model.availability().ai_upscale;
     let s = &mut model.values;
-    if !page.model.network_only {
+    if !model.network_only {
         s.native_core.hide_session_button = checked(hwnd, HIDE_SESSION_BUTTON);
         s.presentation_mode = crate::connection_settings::PresentationMode::from_index(
             SendMessageW(GetDlgItem(hwnd, PRESENTATION as i32), CB_GETCURSEL, 0, 0) as usize,
@@ -2236,7 +2237,7 @@ mod tests {
             assert_ne!(IsWindowEnabled(GetDlgItem(page, TURN as i32)), 0);
             SendMessageW(page, WM_COMMAND, VIDEO_TAB, 0);
             let state = &*(GetWindowLongPtrW(page, GWLP_USERDATA) as *const Page);
-            assert_eq!(state.model.active_tab, Tab::Network);
+            assert!(state.model.active_tab == Tab::Network);
             assert_no_overlaps(page);
             capture(page, "phaze-network");
             DestroyWindow(page);
