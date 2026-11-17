@@ -531,6 +531,109 @@ mod tests {
     use super::*;
     use evoparseq_phaze::{Input, Keyboard};
     #[test]
+    fn offline_session_controls_reuse_preferences_and_validate_advertised_outputs() -> Result<()> {
+        use super::super::session_model::Command;
+        use evoparseq_phaze::Sink as _;
+        let directory = std::env::temp_dir().join(format!(
+            "evoparseq-phaze-controls-{}",
+            crate::bud_attempt::native_attempt_id()?
+        ));
+        std::fs::create_dir(&directory)?;
+        let manager = Manager::open(directory.join("settings.json"));
+        {
+            let window = Window::create_native()?;
+            let _lifecycle = SessionWindow(window.clone());
+            window.session.phaze.store(true, Ordering::Release);
+            window.install_connection_settings(manager.clone());
+            let mut view = View {
+                video: crate::video_windows::Pipeline::start(
+                    window.clone(),
+                    crate::video_output::DisplayCatchUpPolicy::Fixed,
+                ),
+                generation: window.stats.begin(),
+                window: window.clone(),
+                manager: manager.clone(),
+                config: Default::default(),
+                pending: None,
+                received: 0,
+                sent: 0,
+                audio_bytes: 0,
+                authenticated: false,
+                inspector: Default::default(),
+                audio: None,
+                pcm: Vec::new(),
+                keys: Default::default(),
+                events: VecDeque::new(),
+                route: "Direct",
+                carrier: "direct UDP",
+            };
+            let output = |id| evoparseq_phaze::Output {
+                id,
+                name: format!("Fixture {id}"),
+                width: 1920,
+                height: 1080,
+                active: true,
+                primary: id == 7,
+            };
+            view.outputs(&[output(7), output(8)]);
+            view.selected(7);
+            view.stage("dtls_authenticated");
+            view.traffic(2048, 1024);
+            assert!(view.authenticated);
+            assert_eq!((view.received, view.sent), (2048, 1024));
+            window.events.drain();
+            let video = crate::session_preferences::Video {
+                bandwidth_mbps: Some(40),
+                fps: Some(144),
+                ..Default::default()
+            };
+            window
+                .events
+                .push(Event::NativeSession(Command::Apply(video.clone())));
+            let mut commands = Vec::new();
+            assert!(view.poll(Some(7), &mut commands)?);
+            let (id, config) = view.stream_request().context("Missing stream update")?;
+            assert_eq!((id, config.mbps, config.fps), (7, 40, 144));
+            assert_eq!(manager.view().0.native_core.video, video);
+            window
+                .events
+                .push(Event::NativeSession(Command::SelectDisplay("99".into())));
+            assert!(view.poll(Some(7), &mut commands)?);
+            assert!(view.stream_request().is_none());
+            window
+                .events
+                .push(Event::NativeSession(Command::SelectDisplay("8".into())));
+            assert!(view.poll(Some(7), &mut commands)?);
+            assert_eq!(view.stream_request(), Some((8, config)));
+            assert_eq!(commands.last(), Some(&Input::Release));
+            view.selected(8);
+            assert_eq!(
+                window.session.displays.lock().unwrap().current.as_deref(),
+                Some("8")
+            );
+            window.events.push(Event::NativeSession(Command::Apply(
+                crate::session_preferences::Video {
+                    rotated: Some(true),
+                    ..video.clone()
+                },
+            )));
+            assert!(view.poll(Some(8), &mut commands)?);
+            assert!(view.stream_request().is_none());
+            assert_eq!(manager.view().0.native_core.video, video);
+            window
+                .events
+                .push(Event::NativeSession(Command::HideButton));
+            assert!(view.poll(Some(8), &mut commands)?);
+            assert!(manager.native_session_button_hidden());
+            window
+                .events
+                .push(Event::NativeSession(Command::Disconnect));
+            assert!(!view.poll(Some(8), &mut commands)?);
+        }
+        std::fs::remove_dir_all(directory)?;
+        Ok(())
+    }
+    #[test]
     fn activating_click_positions_before_press_and_focus_loss_releases() -> Result<()> {
         let viewport = Some(crate::viewport::Viewport {
             source: (1920, 1080),
