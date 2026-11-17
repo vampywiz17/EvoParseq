@@ -1,7 +1,4 @@
 //! Editable Settings state and rules without window/control APIs.
-#[cfg(windows)]
-pub const PHAZE_NETWORK_NOTICE: &str =
-    "Phaze: select Force TURN to use a configured relay. Other modes use direct UDP.";
 use crate::connection_settings::{full_chroma_vendor_allowed, GpuPreference, Manager, Settings};
 use anyhow::{Context, Result};
 use zeroize::Zeroizing;
@@ -86,6 +83,17 @@ impl Tab {
     }
 }
 
+/// Settings rows whose protocol support differs between services.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum Feature {
+    #[default]
+    Common,
+    ParsecNetwork,
+    RawAudio,
+    SurroundAudio,
+    Hid,
+}
+
 pub use crate::connection_settings::BinaryChoice;
 pub use crate::connection_settings::InputMode;
 pub use crate::connection_settings::RouteMode;
@@ -104,7 +112,7 @@ pub struct Availability {
 
 // Deliberately no Debug/Serialize: plaintext replacement secrets are transient.
 pub struct Form {
-    pub network_only: bool,
+    pub phaze: bool,
     pub active_tab: Tab,
     pub values: Settings,
     pub gpu_choices: Vec<Option<GpuPreference>>,
@@ -124,7 +132,7 @@ pub struct Form {
 impl Form {
     pub fn new(values: Settings, default_gpu_vendor: Option<u32>) -> Self {
         Self {
-            network_only: false,
+            phaze: false,
             active_tab: Tab::Network,
             audio_min: values.audio_min_buffer_ms.to_string(),
             audio_max: values.audio_max_buffer_ms.to_string(),
@@ -140,6 +148,28 @@ impl Form {
             forget_password: false,
             forget_token: false,
             feedback: String::new(),
+        }
+    }
+    pub fn supports(&self, feature: Feature) -> bool {
+        !self.phaze || feature == Feature::Common
+    }
+    pub fn notice(&self) -> &'static str {
+        if self.phaze {
+            match self.active_tab {
+                Tab::Network => "Phaze: Force TURN uses the configured relay. Other modes use direct UDP.",
+                Tab::Video => "Video changes apply on your next connection. Check Connection stats for the actual format and decoder.",
+                Tab::Audio => "Phaze uses stereo PCM audio. Playback buffer changes apply on your next connection.",
+                Tab::Input => "Phaze supports keyboard, mouse and scrolling. HID and USB forwarding are unavailable.",
+            }
+        } else {
+            self.active_tab.notice()
+        }
+    }
+    pub fn video_formats(&self) -> &'static [VideoFormat] {
+        if self.phaze {
+            &VideoFormat::ALL[..2]
+        } else {
+            &VideoFormat::ALL
         }
     }
     pub fn cloudflare(&self) -> bool {
@@ -160,12 +190,12 @@ impl Form {
     pub fn availability(&mut self) -> Availability {
         let vendor = self.gpu_vendor();
         let chroma_allowed = vendor.is_some_and(full_chroma_vendor_allowed);
-        if !self.network_only && !chroma_allowed {
+        if !self.phaze && !chroma_allowed {
             self.values.experimental_chroma_444 = false;
         }
         let relay = !self.values.stun_only;
         Availability {
-            bud: {
+            bud: !self.phaze && {
                 #[cfg(feature = "bud")]
                 {
                     self.values.bud
@@ -191,7 +221,7 @@ impl Form {
         settings.nvidia_vsr = settings.nvidia_vsr.min(4);
         // Preserve the existing parse order and validation even for inactive
         // numeric fields. Domain/secret validation remains in Manager::save.
-        if !self.network_only {
+        {
             crate::network_settings::apply_audio_fields(
                 &mut settings,
                 &self.audio_min,
@@ -582,7 +612,28 @@ mod vsr_tests {
         }
     }
     #[test]
-    fn network_only_save_preserves_unavailable_gpu_and_non_network_preferences() {
+    fn service_policy_keeps_local_media_controls_and_excludes_unwired_protocols() {
+        let mut form = form();
+        for phaze in [false, true] {
+            form.phaze = phaze;
+            assert!(form.supports(Feature::Common));
+            for feature in [
+                Feature::ParsecNetwork,
+                Feature::RawAudio,
+                Feature::SurroundAudio,
+                Feature::Hid,
+            ] {
+                assert_eq!(form.supports(feature), !phaze);
+            }
+            assert_eq!(form.video_formats().len(), if phaze { 2 } else { 3 });
+            if phaze {
+                assert!(!form.availability().bud);
+                assert!(!form.video_formats().contains(&VideoFormat::Hevc10));
+            }
+        }
+    }
+    #[test]
+    fn phaze_settings_validate_shared_gpu_and_audio_options() {
         let saved = Settings {
             video_gpu: Some(GpuPreference {
                 name: "Offline fixture GPU".into(),
@@ -597,9 +648,11 @@ mod vsr_tests {
             ..Default::default()
         };
         let mut form = Form::new(saved.clone(), Some(0x1002));
-        form.network_only = true;
-        form.gpu_selection = None;
-        form.audio_min = "not a network field".into();
+        form.phaze = true;
+        form.gpu_choices.push(saved.video_gpu.clone());
+        form.gpu_selection = Some(1);
+        form.audio_min = "30".into();
+        form.audio_max = "90".into();
         form.availability();
         form.turn_urls = "turn:127.0.0.1:3478?transport=udp".into();
         form.values.force_relay = true;
@@ -608,7 +661,7 @@ mod vsr_tests {
             serde_json::to_value(&actual.video_gpu).unwrap(),
             serde_json::to_value(&saved.video_gpu).unwrap()
         );
-        assert_eq!(actual.audio_min_buffer_ms, saved.audio_min_buffer_ms);
+        assert_eq!(actual.audio_min_buffer_ms, 30);
         assert_eq!(
             actual.experimental_chroma_444,
             saved.experimental_chroma_444

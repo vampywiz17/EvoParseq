@@ -110,6 +110,7 @@ pub use crate::session_preferences::HostVideo;
 /// Keeps the existing lock/atomic boundaries; no new queue, worker or polling.
 #[derive(Default)]
 pub struct State {
+    pub phaze: AtomicBool,
     pub host_video: Mutex<HostVideo>,
     pub display_resolution: Mutex<crate::session_preferences::Resolution>,
     pub displays: Mutex<Displays>,

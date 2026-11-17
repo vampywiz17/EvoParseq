@@ -136,6 +136,14 @@ unsafe fn collect(p: &Panel) -> Result<Video> {
         fullscreen: SendMessageW(p.fullscreen, BM_GETCHECK, 0, 0) == BST_CHECKED as isize,
     }
     .parse()
+    .map(|mut video| {
+        if (&*p.window).session.phaze.load(Ordering::Acquire) {
+            video.resolution = crate::session_preferences::Resolution::Host;
+            video.constant_fps = None;
+            video.rotated = None;
+        }
+        video
+    })
 }
 unsafe fn close(hwnd: HWND) {
     let parent = GetParent(hwnd);
@@ -222,7 +230,7 @@ unsafe fn update_displays(hwnd: HWND, panel: &mut Panel) {
     );
     EnableWindow(
         GetDlgItem(hwnd, REFRESH_DISPLAYS as i32),
-        i32::from(!displays.loading && !busy),
+        i32::from(!window.session.phaze.load(Ordering::Acquire) && !displays.loading && !busy),
     );
     let hint = if displays.hid_mouse {
         if window.session.hid_primary_ready.load(Ordering::Acquire) {
@@ -1044,6 +1052,16 @@ pub unsafe fn toggle(
             BS_OWNERDRAW as u32 | WS_TABSTOP,
             rect,
         );
+    }
+    if window.session.phaze.load(Ordering::Acquire) {
+        for control in [
+            p.controls[0],
+            p.controls[3],
+            p.controls[4],
+            GetDlgItem(hwnd, SECURE_ATTENTION as i32),
+        ] {
+            EnableWindow(control, 0);
+        }
     }
     ShowWindow(hwnd, SW_SHOW);
     SetTimer(hwnd, 1, 1000, None);

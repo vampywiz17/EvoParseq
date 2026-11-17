@@ -396,7 +396,11 @@ impl Window {
             self.apply_input_capture();
             self.apply_relative_mouse(false);
             self.show_video_surface();
-            let page = crate::connection_settings_ui::open(self.handle(), manager);
+            let page = if self.session.phaze.load(Ordering::Acquire) {
+                crate::connection_settings_ui::open_phaze(self.handle(), manager)
+            } else {
+                crate::connection_settings_ui::open(self.handle(), manager)
+            };
             self.settings_page.store(page as usize, Ordering::Release);
             if page.is_null() {
                 self.settings_active.store(false, Ordering::Release);

@@ -275,9 +275,40 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             }
 
             WM_DRAWITEM => {
+                let draw = &*(lp as *const DRAWITEMSTRUCT);
+                if draw.CtlID == SERVICE as u32 {
+                    let brush = CreateSolidBrush(if draw.itemState & ODS_SELECTED != 0 {
+                        crate::branding::BLUE
+                    } else {
+                        FIELD
+                    });
+                    FillRect(draw.hDC, &draw.rcItem, brush);
+                    DeleteObject(brush);
+                    SetTextColor(draw.hDC, FG);
+                    SetBkMode(draw.hDC, TRANSPARENT as i32);
+                    let mut rect = draw.rcItem;
+                    rect.left += 6;
+                    let label = match draw.itemID {
+                        0 => "Parsec",
+                        1 => "Phaze",
+                        _ => "",
+                    };
+                    DrawTextW(
+                        draw.hDC,
+                        wide(label).as_ptr(),
+                        -1,
+                        &mut rect,
+                        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+                    );
+                    return 1;
+                }
                 if draw_wordmark(lp, f) || draw_button(lp) {
                     return 1;
                 }
+            }
+            WM_MEASUREITEM if wp == SERVICE => {
+                (*(lp as *mut MEASUREITEMSTRUCT)).itemHeight = 28;
+                return 1;
             }
             WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX | WM_CTLCOLORBTN => {
                 SetTextColor(
@@ -607,9 +638,15 @@ pub fn choose(
             "COMBOBOX",
             "",
             SERVICE,
-            WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST as u32,
+            WS_TABSTOP
+                | WS_VSCROLL
+                | CBS_DROPDOWNLIST as u32
+                | CBS_OWNERDRAWFIXED as u32
+                | CBS_HASSTRINGS as u32,
             layout::SERVICE_CHOICE,
         );
+        crate::connection_settings_ui::controls::combo(f.service_choice);
+        SendMessageW(f.service_choice, CB_SETITEMHEIGHT, usize::MAX, 28);
         for name in ["Parsec", "Phaze"] {
             SendMessageW(
                 f.service_choice,

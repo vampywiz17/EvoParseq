@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{sync::Arc, time::Duration};
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue, Message};
-pub use wire::Output;
+pub use wire::{Output, VideoConfig};
 use zeroize::{Zeroize, Zeroizing};
 const API: &str = "https://api.phaze.app";
 
@@ -188,6 +188,16 @@ fn random_hex(n: usize) -> Result<String> {
 }
 /// Called directly by the network consumer. No decoded frames or extra queue.
 pub trait Sink {
+    fn video_config(&self) -> VideoConfig {
+        VideoConfig::default()
+    }
+    /// A validated stream update, optionally targeting another advertised output.
+    fn stream_request(&mut self) -> Option<(u32, VideoConfig)> {
+        None
+    }
+    fn selected(&mut self, _output: u32) {}
+    /// DTLS carrier bytes, excluding TURN encapsulation and handshake traffic.
+    fn traffic(&mut self, _received: u64, _sent: u64) {}
     fn stage(&mut self, stage: &'static str);
     fn outputs(&mut self, outputs: &[Output]);
     fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()>;

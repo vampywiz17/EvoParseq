@@ -65,12 +65,42 @@ pub fn outputs(b: &[u8]) -> Result<Vec<Output>> {
     }
     Ok(out)
 }
-pub fn request(output: u32) -> Vec<u8> {
-    let mut b = vec![3];
-    for x in [output, 0, 10, 30, 4096, 4096] {
-        b.extend(x.to_be_bytes())
+/// Independent encoding of the six big-endian stream-request words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VideoConfig {
+    pub hevc: bool,
+    pub chroma_444: bool,
+    pub mbps: u32,
+    pub fps: u32,
+}
+impl Default for VideoConfig {
+    fn default() -> Self {
+        Self {
+            hevc: false,
+            chroma_444: false,
+            mbps: 10,
+            fps: 30,
+        }
     }
-    b
+}
+impl VideoConfig {
+    pub fn validate(self) -> Result<()> {
+        ensure!(
+            (1..=100).contains(&self.mbps) && (1..=240).contains(&self.fps),
+            "Invalid Phaze stream limits"
+        );
+        ensure!(!self.chroma_444 || self.hevc, "Phaze 4:4:4 requires HEVC");
+        Ok(())
+    }
+    pub fn request(self, output: u32) -> Result<Vec<u8>> {
+        self.validate()?;
+        let mut b = vec![3];
+        let caps = u32::from(self.hevc) | (u32::from(self.chroma_444) << 1);
+        for x in [output, caps, self.mbps, self.fps, 4096, 4096] {
+            b.extend(x.to_be_bytes());
+        }
+        Ok(b)
+    }
 }
 pub fn hello() -> Vec<u8> {
     let mut b = vec![18];
@@ -264,7 +294,10 @@ fn wire_contracts() -> Result<()> {
         hello() == vec![18, 0, 0, 0, 1, 0, 0, 0, 0],
         "Hello/raw audio test"
     );
-    ensure!(request(7).len() == 25, "Request test");
+    ensure!(
+        VideoConfig::default().request(7)?.len() == 25,
+        "Request test"
+    );
     ensure!(outputs(&[0; 12]).is_err(), "Output bounds test");
     ensure!(encoded(&[0; 23]).is_err(), "Video bounds test");
     ensure!(
@@ -340,4 +373,45 @@ fn timing_feedback_also_acknowledges_outgoing_input() -> Result<()> {
     timing.pop();
     assert!(sender.receive(&timing).is_err());
     Ok(())
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+    #[test]
+    fn stream_options_have_bounded_independent_wire_encoding() -> Result<()> {
+        let config = VideoConfig {
+            hevc: true,
+            chroma_444: true,
+            mbps: 50,
+            fps: 144,
+        };
+        let packet = config.request(7)?;
+        let mut expected = vec![3];
+        for word in [7u32, 3, 50, 144, 4096, 4096] {
+            expected.extend(word.to_be_bytes());
+        }
+        assert_eq!(packet, expected);
+        assert!(VideoConfig { fps: 0, ..config }.validate().is_err());
+        assert!(VideoConfig {
+            mbps: 101,
+            ..config
+        }
+        .validate()
+        .is_err());
+        assert!(VideoConfig {
+            hevc: false,
+            ..config
+        }
+        .validate()
+        .is_err());
+        assert!(VideoConfig {
+            hevc: false,
+            chroma_444: false,
+            ..config
+        }
+        .validate()
+        .is_ok());
+        Ok(())
+    }
 }

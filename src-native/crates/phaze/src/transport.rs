@@ -341,11 +341,12 @@ fn outbound_batches(c: &mut Connection) -> Result<Vec<Vec<u8>>> {
     Ok(batches)
 }
 
-async fn flush(c: &mut Connection, socket: &impl crate::Datagram, peer: SocketAddr) -> Result<()> {
+async fn flush(c: &mut Connection, socket: &impl crate::Datagram, peer: SocketAddr) -> Result<u64> {
+    let mut bytes = 0;
     for packet in outbound_batches(c)? {
-        socket.send_to(&packet, peer).await?;
+        bytes += socket.send_to(&packet, peer).await? as u64;
     }
-    Ok(())
+    Ok(bytes)
 }
 fn send(c: &mut Connection, b: &[u8]) -> Result<()> {
     let mut app = vec![0xcd, 2];
@@ -519,6 +520,9 @@ pub async fn run(
     let mut retries = 0;
     let mut selected_output = None;
     let mut input = Vec::new();
+    let mut outputs_available = Vec::new();
+    let (mut received, mut sent) = (0u64, 0u64);
+    let mut reported = Instant::now();
     loop {
         ensure!(
             last_heartbeat.elapsed() < Duration::from_secs(20),
@@ -539,6 +543,17 @@ pub async fn run(
                 if !matches!(running,Ok(true)) {
                     release_and_close(&mut c,&mut reliable,&socket,peer).await;
                     return running.map(|_|());
+                }
+                if let Some((output,config))=sink.stream_request() {
+                    ensure!(outputs_available.iter().any(|o: &wire::Output| o.id==output && o.active), "Phaze display is unavailable");
+                    if selected_output != Some(output) {
+                        if let Some(previous)=selected_output {
+                            let mut stop=vec![4]; stop.extend(u32::to_be_bytes(previous));
+                            for p in reliable.frame(&stop)? { send(&mut c,&p)?; }
+                        }
+                    }
+                    for p in reliable.frame(&config.request(output)?)? { send(&mut c,&p)?; }
+                    selected_output=Some(output); sink.selected(output);
                 }
                 if let Some(output)=selected_output {
                     for command in input.drain(..) {
@@ -562,6 +577,7 @@ pub async fn run(
                     handle_stun(&socket,&buf[..n],src,ufrag,pwd,&a).await?;
                     continue
                 }
+                received=received.saturating_add(n as u64);
                 c.set_now(start.elapsed());
                 c.feed(&buf[..n]).map_err(|_|anyhow::anyhow!("Phaze DTLS record rejected"))?;
             }
@@ -601,13 +617,15 @@ pub async fn run(
                                 .find(|o| o.active && o.primary)
                                 .or_else(|| outputs.iter().find(|o| o.active))
                                 .context("Phaze host has no active display")?;
-                            for p in reliable.frame(&wire::request(output.id))? {
+                            for p in reliable.frame(&sink.video_config().request(output.id)?)? {
                                 send(&mut c, &p)?;
                             }
                             selected_output = Some(output.id);
                             requested = true;
-                            sink.stage("h264_requested");
+                            sink.selected(output.id);
+                            sink.stage("video_requested");
                         }
+                        outputs_available = outputs;
                     }
                     Some(5) if requested => {
                         let bytes = wire::encoded(&frame[1..])?;
@@ -633,7 +651,11 @@ pub async fn run(
             retries += 1;
             last_retry = Instant::now();
         }
-        flush(&mut c, &socket, peer).await?;
+        sent = sent.saturating_add(flush(&mut c, &socket, peer).await?);
+        if reported.elapsed() >= Duration::from_millis(500) {
+            sink.traffic(received, sent);
+            reported = Instant::now();
+        }
     }
 }
 

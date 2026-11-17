@@ -4,7 +4,7 @@
 pub(crate) mod controls;
 use crate::connection_settings::Manager;
 use crate::settings_model::{
-    AiUpscaler, BinaryChoice, Form, InputMode, RouteMode, Tab, VideoFormat,
+    AiUpscaler, BinaryChoice, Feature, Form, InputMode, RouteMode, Tab, VideoFormat,
 };
 use std::{
     ptr::{null, null_mut},
@@ -68,6 +68,7 @@ const TCP_QOS: usize = 4138;
 const AUDIO_TAB: usize = 4124;
 const INPUT_TAB: usize = 4129;
 const INPUT_MODE: usize = 4130;
+const IMMERSIVE: usize = 4140;
 const AUDIO_CUSTOM: usize = 4125;
 const AUDIO_MIN: usize = 4126;
 const AUDIO_MAX: usize = 4127;
@@ -85,6 +86,7 @@ struct Item {
     rect: RECT,
     group: u8,
     tab: Option<Tab>,
+    feature: Feature,
 }
 struct Page {
     window_owned: bool,
@@ -100,6 +102,7 @@ struct Page {
     small: HFONT,
     items: Vec<Item>,
     building_tab: Option<Tab>,
+    building_feature: Feature,
     scroll: i32,
     reflowing: bool,
 }
@@ -149,14 +152,14 @@ pub unsafe fn install_menu(parent: HWND) {
     SetMenu(parent, menu);
     DrawMenuBar(parent);
 }
-/// Reuse the canonical Network form without exposing unwired Parsec controls.
+/// Reuse the canonical form with the selected service's implemented controls.
 pub unsafe fn open_phaze(parent: HWND, manager: Arc<Manager>) -> HWND {
     open_mode(parent, manager, true)
 }
 pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     open_mode(parent, manager, false)
 }
-unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> HWND {
+unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
     let name = wide("EvoParseqSettings");
     let instance = GetModuleHandleW(null());
     let class = WNDCLASSW {
@@ -169,7 +172,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> 
     RegisterClassW(&class);
     let (saved, error) = manager.view();
     let mut model = Form::new(saved, crate::video_windows::video_gpu_vendor(None));
-    model.network_only = network_only;
+    model.phaze = phaze;
     let mut page = Box::new(Page {
         window_owned: false,
         manager,
@@ -184,6 +187,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> 
         small: font(crate::app_style::settings::SMALL, 400),
         items: Vec::new(),
         building_tab: None,
+        building_feature: Feature::Common,
         scroll: 0,
         reflowing: false,
     });
@@ -300,6 +304,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> 
         page.font,
     );
     page.building_tab = Some(Tab::Network);
+    page.building_feature = Feature::ParsecNetwork;
     row(
         hwnd,
         page,
@@ -312,6 +317,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> 
         0,
         ES_MULTILINE as u32 | ES_WANTRETURN as u32 | ES_AUTOVSCROLL as u32 | WS_CLIPCHILDREN,
     );
+    page.building_feature = Feature::Common;
     row_label(
         hwnd,
         page,
@@ -572,8 +578,12 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> 
         page,
         VIDEO_FORMAT,
         344,
-        &VideoFormat::LABELS,
-        VideoFormat::current(&s) as usize,
+        if page.model.phaze {
+            &VideoFormat::LABELS[..2]
+        } else {
+            &VideoFormat::LABELS
+        },
+        (VideoFormat::current(&s) as usize).min(page.model.video_formats().len() - 1),
     );
     row_label(
         hwnd,
@@ -665,6 +675,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> 
     );
     controls::combo(ai);
     page.building_tab = Some(Tab::Network);
+    page.building_feature = Feature::ParsecNetwork;
     #[cfg(feature = "bud")]
     {
         row_label(
@@ -696,6 +707,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> 
     #[cfg(feature = "vendor-video")]
     {
         page.building_tab = Some(Tab::Video);
+        page.building_feature = Feature::Common;
         let y = 532;
         row_label(
             hwnd,
@@ -710,6 +722,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> 
         check(hwnd, ZERO_COPY, s.zero_copy);
     }
     page.building_tab = Some(Tab::Network);
+    page.building_feature = Feature::ParsecNetwork;
     row_label(
         hwnd,
         page,
@@ -721,6 +734,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> 
     );
     binary_choice(hwnd, page, TCP_QOS, 844 + BUD_EXTRA);
     check(hwnd, TCP_QOS, s.experimental_tcp_qos);
+    page.building_feature = Feature::Common;
     row_label(
         hwnd,
         page,
@@ -778,6 +792,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> 
         0,
         ES_NUMBER as u32,
     );
+    page.building_feature = Feature::RawAudio;
     row_label(
         hwnd,
         page,
@@ -789,6 +804,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> 
     );
     binary_choice(hwnd, page, AUDIO_RAW, 532);
     check(hwnd, AUDIO_RAW, s.allow_raw_audio);
+    page.building_feature = Feature::SurroundAudio;
     row_label(
         hwnd,
         page,
@@ -801,6 +817,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> 
     binary_choice(hwnd, page, AUDIO_SURROUND, 630);
     check(hwnd, AUDIO_SURROUND, s.experimental_surround_audio);
     page.building_tab = Some(Tab::Input);
+    page.building_feature = Feature::Hid;
     row_label(
         hwnd,
         page,
@@ -837,16 +854,32 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> 
         64,
     );
 
+    page.building_feature = Feature::Common;
+    let capture_y = if page.model.phaze { 242 } else { 580 };
+    row_label(
+        hwnd,
+        page,
+        "Input capture",
+        "Choose which local input remains inside the stream window.",
+        capture_y,
+        0,
+        48,
+    );
+    choice(
+        hwnd,
+        page,
+        IMMERSIVE,
+        capture_y,
+        &crate::input_state::IMMERSIVE_LABELS,
+        crate::input_state::immersive_index(s.native_core.video.immersive),
+    );
     page.building_tab = None;
+    page.building_feature = Feature::Common;
     add(
         hwnd,
         page,
         "STATIC",
-        if page.model.network_only {
-            crate::settings_model::PHAZE_NETWORK_NOTICE
-        } else {
-            "ICE chooses the route automatically unless Force TURN relay is enabled.\nChanges apply to your next connection."
-        },
+        page.model.notice(),
         0,
         [0, 1056 + BUD_EXTRA, 820, 64],
         NOTICE,
@@ -876,7 +909,10 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, network_only: bool) -> 
         null_mut(),
         RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW,
     );
-    SetFocus(GetDlgItem(hwnd, STUN as i32));
+    SetFocus(GetDlgItem(
+        hwnd,
+        if page.model.phaze { ROUTE_MODE } else { STUN } as i32,
+    ));
     hwnd
 }
 #[allow(clippy::too_many_arguments)] // Native control descriptors, UI-thread only.
@@ -903,6 +939,7 @@ unsafe fn add(
         },
         group,
         tab: page.building_tab,
+        feature: page.building_feature,
     });
     hwnd
 }
@@ -983,8 +1020,20 @@ unsafe fn layout(hwnd: HWND) {
     let cloudflare = SendMessageW(GetDlgItem(hwnd, PROVIDER as i32), CB_GETCURSEL, 0, 0) == 1;
     let footer = match page.model.active_tab {
         Tab::Network => 1056 + BUD_EXTRA,
-        Tab::Audio => 750,
-        Tab::Input => 570,
+        Tab::Audio => {
+            if page.model.phaze {
+                532
+            } else {
+                750
+            }
+        }
+        Tab::Input => {
+            if page.model.phaze {
+                340
+            } else {
+                680
+            }
+        }
         Tab::Video => 1034,
     };
     let height = footer + 138 + HEADER_EXTRA;
@@ -1004,7 +1053,8 @@ unsafe fn layout(hwnd: HWND) {
     GetClientRect(hwnd, &mut client);
     let x = ((client.right - 820) / 2).max(24);
     for item in &page.items {
-        let visible = item.tab.is_none_or(|tab| tab == page.model.active_tab)
+        let visible = page.model.supports(item.feature)
+            && item.tab.is_none_or(|tab| tab == page.model.active_tab)
             && (item.group == 0 || item.group == if cloudflare { CLOUDFLARE } else { CUSTOM });
         let mut r = item.rect;
         let id = GetDlgCtrlID(item.hwnd) as usize;
@@ -1171,7 +1221,8 @@ unsafe fn binary_choice(hwnd: HWND, page: &mut Page, id: usize, y: i32) {
     choice(hwnd, page, id, y, &labels, 0);
 }
 fn mode_combo(id: usize) -> bool {
-    matches!(id, VIDEO_FORMAT | INPUT_MODE | ROUTE_MODE) || binary_choice_kind(id).is_some()
+    matches!(id, VIDEO_FORMAT | INPUT_MODE | ROUTE_MODE | IMMERSIVE)
+        || binary_choice_kind(id).is_some()
 }
 fn mode_label(id: usize, index: u32) -> &'static str {
     let index = index as usize;
@@ -1179,6 +1230,8 @@ fn mode_label(id: usize, index: u32) -> &'static str {
         VideoFormat::LABELS.get(index).copied()
     } else if id == INPUT_MODE {
         InputMode::LABELS.get(index).copied()
+    } else if id == IMMERSIVE {
+        crate::input_state::IMMERSIVE_LABELS.get(index).copied()
     } else if id == ROUTE_MODE {
         RouteMode::LABELS.get(index).copied()
     } else {
@@ -1236,9 +1289,6 @@ unsafe fn read_options(hwnd: HWND, page: &mut Page) {
             "custom"
         }
         .into();
-    if model.network_only {
-        return;
-    }
     model.gpu_selection = usize::try_from(SendMessageW(
         GetDlgItem(hwnd, GPU as i32),
         CB_GETCURSEL,
@@ -1246,8 +1296,12 @@ unsafe fn read_options(hwnd: HWND, page: &mut Page) {
         0,
     ))
     .ok();
+    let format = model
+        .video_formats()
+        .get(selection(hwnd, VIDEO_FORMAT))
+        .copied();
     let s = &mut model.values;
-    if let Some(mode) = VideoFormat::ALL.get(selection(hwnd, VIDEO_FORMAT)) {
+    if let Some(mode) = format {
         mode.apply(s);
     }
     s.experimental_chroma_444 = checked(hwnd, CHROMA_444);
@@ -1257,7 +1311,9 @@ unsafe fn read_options(hwnd: HWND, page: &mut Page) {
     s.custom_audio_buffer = checked(hwnd, AUDIO_CUSTOM);
     #[cfg(feature = "bud")]
     {
-        s.bud = checked(hwnd, BUD);
+        if !model.phaze {
+            s.bud = checked(hwnd, BUD);
+        }
     }
 }
 unsafe fn update_enabled(hwnd: HWND) {
@@ -1313,8 +1369,8 @@ unsafe fn update_enabled(hwnd: HWND) {
             i32::from(enabled.zero_copy),
         );
     }
-    if page.model.network_only {
-        for id in [VIDEO_TAB, AUDIO_TAB, INPUT_TAB, STUN, TCP_QOS] {
+    if page.model.phaze {
+        for id in [STUN, TCP_QOS] {
             EnableWindow(GetDlgItem(hwnd, id as i32), 0);
         }
         #[cfg(feature = "bud")]
@@ -1328,22 +1384,31 @@ unsafe fn save(hwnd: HWND, page: &mut Page) {
     let vsr_available =
         model.ai_upscaler() == AiUpscaler::Nvidia && model.availability().ai_upscale;
     let s = &mut model.values;
-    if !model.network_only {
+    {
+        s.native_core.video.immersive =
+            crate::input_state::immersive_value(selection(hwnd, IMMERSIVE));
         s.native_core.hide_session_button = checked(hwnd, HIDE_SESSION_BUTTON);
         s.presentation_mode = crate::connection_settings::PresentationMode::from_index(
             SendMessageW(GetDlgItem(hwnd, PRESENTATION as i32), CB_GETCURSEL, 0, 0) as usize,
         );
-        s.allow_raw_audio = checked(hwnd, AUDIO_RAW);
-        s.experimental_surround_audio = checked(hwnd, AUDIO_SURROUND);
+        if !model.phaze {
+            s.allow_raw_audio = checked(hwnd, AUDIO_RAW);
+            s.experimental_surround_audio = checked(hwnd, AUDIO_SURROUND);
+        }
         s.event_logging = checked(hwnd, EVENT_LOG);
-        s.experimental_tcp_qos = checked(hwnd, TCP_QOS);
+        if !model.phaze {
+            s.experimental_tcp_qos = checked(hwnd, TCP_QOS);
+        }
         #[cfg(feature = "vendor-video")]
         {
             s.zero_copy = checked(hwnd, ZERO_COPY);
         }
         #[cfg(feature = "bud")]
         {
-            if let Some(mode) = InputMode::ALL.get(selection(hwnd, INPUT_MODE)) {
+            if let Some(mode) = InputMode::ALL
+                .get(selection(hwnd, INPUT_MODE))
+                .filter(|_| !model.phaze)
+            {
                 mode.apply(s);
             }
         }
@@ -1361,8 +1426,7 @@ unsafe fn save(hwnd: HWND, page: &mut Page) {
     model.token = zeroize::Zeroizing::new(text(hwnd, TOKEN));
     model.forget_password = checked(hwnd, FORGET_PASSWORD);
     model.forget_token = checked(hwnd, FORGET_TOKEN);
-    let needs_vsr =
-        !model.network_only && s.nvidia_vsr != 0 && vsr_available && !crate::vsr_runtime::present();
+    let needs_vsr = s.nvidia_vsr != 0 && vsr_available && !crate::vsr_runtime::present();
     if needs_vsr && s.vsr_runtime_consent != crate::connection_settings::VsrRuntimeConsent::Allowed
     {
         let accepted = MessageBoxW(hwnd, wide("The NVIDIA VSR runtime is missing. Allow its verified download from NVIDIA on the next app start? Normal video remains available without it.").as_ptr(), wide("EvoParseq - NVIDIA VSR").as_ptr(), MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES;
@@ -1556,9 +1620,6 @@ unsafe extern "system" fn page_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LP
                 NETWORK_TAB | VIDEO_TAB | AUDIO_TAB | INPUT_TAB
                     if (wp >> 16) as u32 == BN_CLICKED =>
                 {
-                    if page.model.network_only && wp & 0xffff != NETWORK_TAB {
-                        return 0;
-                    }
                     page.model.active_tab = if wp & 0xffff == VIDEO_TAB {
                         Tab::Video
                     } else if wp & 0xffff == INPUT_TAB {
@@ -1575,12 +1636,7 @@ unsafe extern "system" fn page_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LP
                     );
                     SetWindowTextW(
                         GetDlgItem(hwnd, NOTICE as i32),
-                        wide(if page.model.network_only {
-                            crate::settings_model::PHAZE_NETWORK_NOTICE
-                        } else {
-                            page.model.active_tab.notice()
-                        })
-                        .as_ptr(),
+                        wide(page.model.notice()).as_ptr(),
                     );
                     layout(hwnd);
                     return 0;
@@ -2206,7 +2262,7 @@ mod tests {
         (rect.right as u32, rect.bottom as u32, rgba)
     }
     #[test]
-    fn phaze_network_page_does_not_enable_unimplemented_settings() {
+    fn phaze_pages_expose_shared_controls_without_parsec_protocol_options() {
         let directory = std::env::temp_dir().join(format!(
             "evoparseq-phaze-network-{}",
             crate::bud_attempt::native_attempt_id().unwrap()
@@ -2231,13 +2287,32 @@ mod tests {
             assert!(!parent.is_null());
             let page = open_phaze(parent, manager);
             assert!(!page.is_null());
-            for id in [VIDEO_TAB, AUDIO_TAB, INPUT_TAB, STUN, TCP_QOS] {
+            for id in [STUN, TCP_QOS] {
                 assert_eq!(IsWindowEnabled(GetDlgItem(page, id as i32)), 0);
             }
             assert_ne!(IsWindowEnabled(GetDlgItem(page, TURN as i32)), 0);
             SendMessageW(page, WM_COMMAND, VIDEO_TAB, 0);
             let state = &*(GetWindowLongPtrW(page, GWLP_USERDATA) as *const Page);
-            assert!(state.model.active_tab == Tab::Network);
+            assert!(state.model.active_tab == Tab::Video);
+            assert_eq!(
+                SendMessageW(GetDlgItem(page, VIDEO_FORMAT as i32), CB_GETCOUNT, 0, 0),
+                2
+            );
+            assert_ne!(IsWindowVisible(GetDlgItem(page, GPU as i32)), 0);
+            assert_no_overlaps(page);
+            capture(page, "phaze-video");
+            SendMessageW(page, WM_COMMAND, AUDIO_TAB, 0);
+            assert_ne!(IsWindowVisible(GetDlgItem(page, AUDIO_CUSTOM as i32)), 0);
+            assert_eq!(IsWindowVisible(GetDlgItem(page, AUDIO_RAW as i32)), 0);
+            assert_eq!(IsWindowVisible(GetDlgItem(page, AUDIO_SURROUND as i32)), 0);
+            assert_no_overlaps(page);
+            capture(page, "phaze-audio");
+            SendMessageW(page, WM_COMMAND, INPUT_TAB, 0);
+            assert_eq!(IsWindowVisible(GetDlgItem(page, INPUT_MODE as i32)), 0);
+            assert_ne!(IsWindowVisible(GetDlgItem(page, IMMERSIVE as i32)), 0);
+            assert_no_overlaps(page);
+            capture(page, "phaze-input");
+            SendMessageW(page, WM_COMMAND, NETWORK_TAB, 0);
             assert_no_overlaps(page);
             capture(page, "phaze-network");
             DestroyWindow(page);

@@ -155,3 +155,35 @@ whole interval. Audio playback and input were previously user-confirmed on the
 direct/VPN path; their TURN behavior needs user confirmation. Native-host
 TURN/TCP and TURN/TLS remain unverified by this trial. No private addresses,
 credentials, packet captures or proprietary implementation bodies are included.
+
+
+## Windows session controls and service-specific settings
+
+The shared settings model selects the service's implemented rows. Parsec retains
+its transport, HID and audio negotiation controls. Phaze exposes the shared GPU,
+GPU processing, presentation, playback buffer and immersive input preferences;
+it does not expose Parsec HID, audio negotiation or a 10-bit host request.
+The login service dropdown uses the native dark form styling and separate rows.
+
+Phaze stream request opcode 3 carries six big-endian u32 words: output ID,
+capabilities (bit 0 HEVC, bit 1 full chroma), maximum Mbps, FPS, maximum width
+and maximum height. The independent encoder bounds Mbps to 1–100 and FPS to
+1–240 and retains the existing 4096x4096 request bound. HEVC and 4:4:4 are
+requests, not proof of the resulting stream format. The existing Annex B
+inspector and GPU video pipeline determine and report the actual codec/format.
+These controls need live host validation, including GPU-specific HEVC/4:4:4.
+No proprietary implementation bodies or binary components are incorporated.
+
+The existing session overlay handles bitrate/FPS requests, advertised active
+output selection, local fullscreen/immersive input, volume/mute, settings and
+stats. Output switching stops the old stream (opcode 4 + output ID) before
+requesting the new one. A sent request is not labeled host-confirmed.
+Host resolution/rotation/constant-FPS, display refresh requests, secure attention,
+additional simultaneous displays and USB forwarding remain unavailable until
+implemented. The official product's support does not establish our client support.
+
+Stats reuse the shared sample, rates and native playback/decoder/presentation
+reports. Carrier byte counters exclude TURN encapsulation and initial handshake;
+PCM byte count/layout and the observed codec are reported. Host encode time,
+RTT and other unparsed host telemetry remain unknown (N/A). The new controls
+and UI do not establish live HEVC, full chroma or display-switching success.

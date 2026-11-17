@@ -23,6 +23,13 @@ pub(super) fn block_on<T>(future: impl std::future::Future<Output = Result<T>>) 
 }
 struct View {
     window: Arc<Window>,
+    manager: Arc<Manager>,
+    config: evoparseq_phaze::VideoConfig,
+    pending: Option<(u32, evoparseq_phaze::VideoConfig)>,
+    received: u64,
+    sent: u64,
+    audio_bytes: u64,
+    authenticated: bool,
     video: crate::video_windows::Pipeline,
     generation: u64,
     last_report: Instant,
@@ -41,19 +48,62 @@ impl View {
             crate::stats::Sample {
                 state: state.into(),
                 protocol: format!("Phaze / {}", self.carrier),
-                dtls: "Authenticated DTLS 1.2 (legacy non-EMS)".into(),
+                dtls: if self.authenticated {
+                    "Authenticated DTLS 1.2 (legacy non-EMS)"
+                } else {
+                    "Not reported"
+                }
+                .into(),
                 video: Some(self.video.snapshot()),
-                codec: Some(crate::video_stream::Codec::H264),
+                codec: self.inspector.snapshot().codec,
+                hevc_advertised: self.config.hevc,
+                received: self.authenticated.then_some(self.received),
+                sent: self.authenticated.then_some(self.sent),
+                audio_bytes: self.audio_bytes,
+                audio_ready: self.audio.is_some(),
+                audio_codec: self.audio.as_ref().map(|_| "PCM s16le"),
+                audio_layout: self
+                    .audio
+                    .as_ref()
+                    .map(|_| crate::audio_layout::Layout::STEREO),
                 profile: self.inspector.snapshot().sps_profile_idc,
-                route: self.route,
+                route: if self.authenticated {
+                    self.route
+                } else {
+                    "Unknown"
+                },
                 ..Default::default()
             },
         );
     }
 }
 impl evoparseq_phaze::Sink for View {
+    fn video_config(&self) -> evoparseq_phaze::VideoConfig {
+        self.config
+    }
+    fn stream_request(&mut self) -> Option<(u32, evoparseq_phaze::VideoConfig)> {
+        self.pending.take()
+    }
+    fn traffic(&mut self, received: u64, sent: u64) {
+        self.received = received;
+        self.sent = sent;
+        self.publish("Connected (Phaze, experimental)");
+    }
+    fn selected(&mut self, output: u32) {
+        use super::session_model::{Notification, View as _};
+        self.window
+            .session
+            .displays
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .current = Some(output.to_string());
+        self.window.notify(Notification::DisplaySelected);
+        // Accepted locally and sent; no host confirmation or requested-value telemetry is invented.
+        self.window.finished(false);
+    }
     fn stage(&mut self, stage: &'static str) {
         if stage == "dtls_authenticated" {
+            self.authenticated = true;
             crate::event_log::record(
                 "INFO",
                 "phaze_route_selected",
@@ -65,21 +115,29 @@ impl evoparseq_phaze::Sink for View {
             "phaze_connection_stage",
             serde_json::json!({"stage":stage}),
         );
-        self.window.stats.publish(
-            self.generation,
-            crate::stats::Sample {
-                state: format!("Phaze: {stage}"),
-                protocol: format!("Phaze / {}", self.carrier),
-                dtls: if stage == "dtls_authenticated" {
-                    "Authenticated DTLS 1.2 (legacy non-EMS)".into()
-                } else {
-                    "Not reported".into()
-                },
-                ..Default::default()
-            },
-        );
+        self.publish(&format!("Phaze: {stage}"));
     }
     fn outputs(&mut self, outputs: &[evoparseq_phaze::Output]) {
+        use super::session_model::{Notification, View as _};
+        {
+            let mut displays = self
+                .window
+                .session
+                .displays
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            displays.outputs = outputs
+                .iter()
+                .filter(|o| o.active)
+                .map(|o| super::host_displays::Output {
+                    id: o.id.to_string(),
+                    name: o.name.clone(),
+                    adapter: String::new(),
+                })
+                .collect();
+            displays.loading = false;
+        }
+        self.window.notify(Notification::DisplaysChanged);
         crate::event_log::record(
             "INFO",
             "phaze_displays_received",
@@ -89,6 +147,8 @@ impl evoparseq_phaze::Sink for View {
     fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()> {
         if reset {
             self.video.encoder_rebuilt();
+            self.inspector = Default::default();
+            self.inspector.enable_hevc(self.config.hevc);
         }
         if let Some(info) = self.inspector.receive(encoded) {
             self.video.submit(encoded, info);
@@ -100,6 +160,7 @@ impl evoparseq_phaze::Sink for View {
         Ok(())
     }
     fn audio(&mut self, bytes: &[u8]) -> Result<()> {
+        self.audio_bytes = self.audio_bytes.saturating_add(bytes.len() as u64);
         if self.audio.is_none() {
             let playback = Arc::new(crate::audio_windows::Playback::create_layout(
                 self.window.clone(),
@@ -163,6 +224,69 @@ impl evoparseq_phaze::Sink for View {
                     commands.push(Input::Release);
                     self.window.toggle_input_detached();
                 }
+                Event::NativeSession(command) => {
+                    use super::session_model::{Command, View as _};
+                    let result = (|| -> Result<()> {
+                        match command {
+                            Command::Apply(video) => {
+                                video.validate()?;
+                                anyhow::ensure!(
+                                    video.resolution
+                                        == crate::session_preferences::Resolution::Host
+                                        && video.constant_fps.is_none()
+                                        && video.rotated.is_none(),
+                                    "Unsupported Phaze stream option"
+                                );
+                                let config = evoparseq_phaze::VideoConfig {
+                                    mbps: video.bandwidth_mbps.unwrap_or(self.config.mbps),
+                                    fps: video.fps.unwrap_or(self.config.fps),
+                                    ..self.config
+                                };
+                                config.validate()?;
+                                self.manager.update_native(|p| p.video = video.clone())?;
+                                self.window.set_input_state(crate::input_state::State {
+                                    mode: video.mode(),
+                                    detached: self.window.input_detached(),
+                                    ..Default::default()
+                                });
+                                self.window.set_fullscreen(video.fullscreen);
+                                if let Some(output) = output {
+                                    self.pending = Some((output, config));
+                                    self.config = config;
+                                }
+                            }
+                            Command::SelectDisplay(id) => {
+                                self.window
+                                    .session
+                                    .displays
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .validate_selection(&id, false)?;
+                                self.keys.reset();
+                                commands.clear();
+                                commands.push(Input::Release);
+                                self.pending = Some((id.parse()?, self.config));
+                            }
+                            Command::HideButton => {
+                                self.manager
+                                    .update_native(|p| p.hide_session_button = true)?;
+                                self.window.native_refresh_overlay();
+                            }
+                            _ => anyhow::bail!("Unsupported Phaze control"),
+                        }
+                        Ok(())
+                    })();
+                    if let Err(error) = result {
+                        crate::event_log::record(
+                            "WARN",
+                            "phaze_control_failed",
+                            serde_json::json!({"reason":error.to_string()}),
+                        );
+                        self.window.result(false);
+                    } else if self.pending.is_none() {
+                        self.window.result(true);
+                    }
+                }
                 event => translate(
                     event,
                     &mut self.keys,
@@ -192,8 +316,12 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
     );
     let window = Window::create_native()?;
     let _lifecycle = SessionWindow(window.clone());
-    window.remote_controls.store(false, Ordering::Release);
-    window.set_input_state(Default::default());
+    window.session.phaze.store(true, Ordering::Release);
+    let saved = manager.view().0;
+    window.set_input_state(crate::input_state::State {
+        mode: saved.native_core.video.mode(),
+        ..Default::default()
+    });
     window.install_connection_settings(manager.clone());
     window.set_fullscreen(manager.view().0.native_core.video.fullscreen);
     window.events.set_consumer(std::thread::current());
@@ -212,12 +340,26 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         crate::video_output::DisplayCatchUpPolicy::Fixed,
     );
     let generation = window.stats.begin();
+    let mut inspector = crate::video_stream::Inspector::default();
+    inspector.enable_hevc(saved.prefer_hevc);
     let mut view = View {
         window: window.clone(),
+        manager: manager.clone(),
+        config: evoparseq_phaze::VideoConfig {
+            hevc: saved.prefer_hevc,
+            chroma_444: saved.prefer_hevc && saved.experimental_chroma_444,
+            mbps: saved.native_core.video.bandwidth_mbps.unwrap_or(10),
+            fps: saved.native_core.video.fps.unwrap_or(30),
+        },
+        pending: None,
+        received: 0,
+        sent: 0,
+        audio_bytes: 0,
+        authenticated: false,
         video,
         generation,
         last_report: Instant::now(),
-        inspector: Default::default(),
+        inspector,
         audio: None,
         pcm: Vec::new(),
         keys: Default::default(),
