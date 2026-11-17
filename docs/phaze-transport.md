@@ -61,3 +61,20 @@ must retain the pure-Rust dependency requirement.
 and permission semantics. Phaze also distributes a separate company relay
 ([official download page](https://phaze.app/downloads)); implementing that proprietary
 service is unnecessary for this TURN approach and is not part of this work.
+
+## Additional public relay evidence (2026-11-17)
+
+The user-supplied [public relay archive](https://public.phaze.app/relay/latest/phaze-relay-linux-amd64.zip)
+was inspected locally without executing it. Its README describes UDP forwarding
+(default inbound port 41000), outbound signaling to relay.phaze.app and a relay
+key provisioned by the Phaze admin panel. This downloadable binary is not an
+open-source code grant and is not incorporated into EvoParseq.
+
+Bounded static inspection of its routing path identifies DTLS record type 25
+(CID) and reads the eight-byte Connection ID at record offset 11. Handshake CID
+extraction and a forward-table lookup precede UDP forwarding. This is consistent
+with the already observed direct-host CID framing; no media-codec implementation
+is required in the relay. It strengthens the opaque-datagram TURN design, but
+does not prove that a native host selects an advertised TURN allocation.
+No private endpoint, account credential, binary or native disassembly is included
+in the repository.

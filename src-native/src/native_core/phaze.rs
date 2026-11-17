@@ -100,12 +100,20 @@ impl evoparseq_phaze::Sink for View {
             )?);
             self.window.stats.set_audio(Arc::downgrade(&playback));
             self.audio = Some(playback);
+            crate::event_log::record(
+                "INFO",
+                "phaze_audio_started",
+                serde_json::json!({"codec":"PCM s16le","sample_rate":48000,"channels":2}),
+            );
         }
         self.pcm.clear();
         self.pcm.extend(
             bytes
-                .chunks_exact(2)
-                .map(|s| i16::from_le_bytes([s[0], s[1]])),
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .copied()
+                .map(i16::from_le_bytes),
         );
         if let Some(playback) = &self.audio {
             playback.queue(&self.pcm);
