@@ -10,6 +10,7 @@ pub use crate::session_preferences::Video;
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Profile {
+    pub service: super::account::Service,
     pub email: String,
     pub encrypted_session: String,
     pub last_peer: String,
@@ -37,7 +38,12 @@ impl Profile {
         );
         let raw = STANDARD.decode(&self.encrypted_session)?;
         let plain = zeroize::Zeroizing::new(crate::secure_storage::protect(&raw, false)?);
-        super::account::Session::from_token(std::str::from_utf8(&plain)?).map(Some)
+        let session = super::account::Session::from_saved(std::str::from_utf8(&plain)?)?;
+        #[cfg(not(windows))]
+        if session.service() == super::account::Service::Phaze {
+            return Ok(None);
+        }
+        Ok((session.service() == self.service).then_some(session))
     }
     pub fn encrypted(token: &str) -> Result<String> {
         Ok(STANDARD.encode(crate::secure_storage::protect(token.as_bytes(), true)?))
@@ -65,6 +71,20 @@ impl super::sign_in::SessionStore for crate::connection_settings::Manager {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+    #[test]
+    fn saved_account_is_not_restored_for_another_service() {
+        let mut profile = Profile {
+            encrypted_session: Profile::encrypted("phaze:isolated-fixture").unwrap(),
+            ..Default::default()
+        };
+        assert!(profile.session().unwrap().is_none());
+        profile.service = super::super::account::Service::Phaze;
+        let session = profile.session().unwrap().unwrap();
+        assert_eq!(session.service(), super::super::account::Service::Phaze);
+        assert_eq!(session.token(), "isolated-fixture");
+        let legacy: Profile = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.service, super::super::account::Service::Parsec);
+    }
     #[test]
     fn protected_session_and_video_requests_do_not_store_passwords() {
         for (mode, mouse, keyboard) in [

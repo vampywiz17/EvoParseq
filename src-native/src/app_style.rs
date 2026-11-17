@@ -30,6 +30,10 @@ pub mod desktop {
     pub const WORDMARK: [[i32; 4]; 2] = [[84, 24, 68, 46], [152, 24, 180, 46]];
     pub const SETTINGS: [i32; 4] = [580, 28, 116, 36];
     pub const SUBTITLE: [i32; 4] = [32, 80, 650, 26];
+    #[cfg(windows)]
+    pub const SERVICE_LABEL: [i32; 4] = [32, 104, 215, 24];
+    #[cfg(windows)]
+    pub const SERVICE_CHOICE: [i32; 4] = [250, 103, 446, 160];
     pub const HOSTS: [i32; 4] = [32, 130, 664, 220];
     pub const PEER_LABEL: [i32; 4] = [32, 370, 155, 26];
     pub const PEER: [i32; 4] = [200, 366, 496, 32];

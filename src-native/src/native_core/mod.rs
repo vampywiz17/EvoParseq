@@ -8,6 +8,7 @@ pub(crate) mod host_displays;
 mod host_video;
 mod input;
 pub(crate) mod multi_display;
+mod phaze;
 mod picker;
 mod pointer;
 pub(crate) mod profile;
@@ -85,6 +86,9 @@ fn run() -> Result<()> {
             bud: preferences.bud,
         };
         let result = (|| {
+            if selection.session.service() == account::Service::Phaze {
+                return phaze::run(&selection.session, &selection.peer, settings.clone());
+            }
             let socket = signaling::Socket::open(&selection.session)?;
             let platform = session_platform::Windows::create(settings.clone())?;
             session::run(

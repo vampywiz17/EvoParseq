@@ -50,6 +50,7 @@ opt-level = "s"
 rtrb = "=0.4.1"
 
 [target.'cfg(windows)'.dependencies]
+evoparseq-phaze = { path = "crates/phaze" }
 # Required by windows::core::implement(IMMNotificationClient) macro expansion.
 windows-core = "=0.62.2"
 evoparseq-bud = { path = "crates/bud", optional = true }

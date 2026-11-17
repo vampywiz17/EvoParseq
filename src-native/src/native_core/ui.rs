@@ -28,6 +28,7 @@ const LOGOUT: usize = 4;
 const LIST: usize = 5;
 const REMEMBER: usize = 6;
 const SETTINGS: usize = 7;
+const SERVICE: usize = 9;
 const DONE: usize = 0x6e01;
 const AUTO_REFRESH: usize = 0x6e02;
 const WORDMARK_BLUE: usize = 0x6e03;
@@ -40,6 +41,8 @@ pub struct Selection {
     pub peer: String,
 }
 struct Form {
+    service: account::Service,
+    service_choice: HWND,
     settings_page: HWND,
     info_pages: Arc<crate::updater_ui::Pages>,
     manager: Arc<crate::connection_settings::Manager>,
@@ -112,12 +115,15 @@ unsafe fn view(f: &Form) {
     } else {
         KillTimer(GetParent(f.status), AUTO_REFRESH);
     }
-    for h in f.fields.into_iter().chain([f.remember]) {
+    for h in f.fields.into_iter().chain([f.remember, f.service_choice]) {
         EnableWindow(h, i32::from(!busy));
     }
     for id in [LOGIN, REFRESH, CONNECT, LOGOUT, SETTINGS] {
         let h = GetDlgItem(GetParent(f.status), id as i32);
-        EnableWindow(h, i32::from(!busy));
+        EnableWindow(
+            h,
+            i32::from(!busy && (id != SETTINGS || f.service == account::Service::Parsec)),
+        );
     }
 }
 unsafe fn start_hosts(hwnd: HWND, f: &mut Form, mode: Refresh) {
@@ -338,8 +344,42 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 if f.sign_in.busy() || f.picker.blocks_controls() {
                     return 0;
                 }
+                if id == SERVICE && (wp >> 16) as u32 == CBN_SELCHANGE {
+                    let service = if SendMessageW(f.service_choice, CB_GETCURSEL, 0, 0) == 1 {
+                        account::Service::Phaze
+                    } else {
+                        account::Service::Parsec
+                    };
+                    if f.manager
+                        .update_native(|p| {
+                            p.service = service;
+                            p.last_peer.clear();
+                        })
+                        .is_err()
+                    {
+                        SendMessageW(
+                            f.service_choice,
+                            CB_SETCURSEL,
+                            usize::from(f.service == account::Service::Phaze),
+                            0,
+                        );
+                        status(f, "Could not save the selected service.");
+                        return 0;
+                    }
+                    f.service = service;
+                    for field in f.fields {
+                        SetWindowTextW(field, wide("").as_ptr());
+                    }
+                    SetWindowTextW(f.peer, wide("").as_ptr());
+                    status(f, service.notice());
+                    view(f);
+                    return 0;
+                }
                 match id {
                     SETTINGS => {
+                        if f.service == account::Service::Phaze {
+                            return 0;
+                        }
                         if f.settings_page.is_null() {
                             f.settings_page =
                                 crate::connection_settings_ui::open(hwnd, f.manager.clone());
@@ -370,7 +410,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                             password,
                             tfa,
                         };
-                        match f.sign_in.login(login, remember) {
+                        match f.sign_in.login_service(login, remember, f.service) {
                             Ok(true) => {}
                             Ok(false) => return 0,
                             Err(error) => {
@@ -465,7 +505,10 @@ pub fn choose(
             ),
         }
         };
+        let service = current.as_ref().map_or(profile.service, |s| s.service());
         let mut f = Box::new(Form {
+            service,
+            service_choice: null_mut(),
             settings_page: null_mut(),
             info_pages: Default::default(),
             manager,
@@ -560,6 +603,31 @@ pub fn choose(
             layout::SUBTITLE,
         );
         f.common_controls.push(subtitle);
+        let service_label = add(hwnd, &f, "STATIC", "Service", 0, 0, layout::SERVICE_LABEL);
+        f.service_choice = add(
+            hwnd,
+            &f,
+            "COMBOBOX",
+            "",
+            SERVICE,
+            WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST as u32,
+            layout::SERVICE_CHOICE,
+        );
+        for name in ["Parsec", "Phaze"] {
+            SendMessageW(
+                f.service_choice,
+                CB_ADDSTRING,
+                0,
+                wide(name).as_ptr() as isize,
+            );
+        }
+        SendMessageW(
+            f.service_choice,
+            CB_SETCURSEL,
+            usize::from(service == account::Service::Phaze),
+            0,
+        );
+        f.login_controls.extend([service_label, f.service_choice]);
         for (i, label) in crate::app_style::LOGIN_FIELDS.iter().enumerate() {
             let l = add(hwnd, &f, "STATIC", label, 0, 0, layout::login_label(i));
             let edit = add(
@@ -652,7 +720,7 @@ pub fn choose(
             hwnd,
             &f,
             "STATIC",
-            notice.unwrap_or(crate::app_style::LOGIN_NOTICE),
+            notice.unwrap_or(service.notice()),
             0,
             0,
             layout::STATUS,
@@ -675,6 +743,37 @@ pub fn choose(
                 )
                 .unwrap();
             }
+            SetWindowTextW(f.fields[1], wide("offline-password-fixture").as_ptr());
+            SendMessageW(f.service_choice, CB_SETCURSEL, 1, 0);
+            SendMessageW(
+                hwnd,
+                WM_COMMAND,
+                SERVICE | ((CBN_SELCHANGE as usize) << 16),
+                0,
+            );
+            assert_eq!(f.service, account::Service::Phaze);
+            assert_eq!(
+                f.manager.view().0.native_core.service,
+                account::Service::Phaze
+            );
+            assert!(text(f.fields[1]).is_empty());
+            assert_eq!(IsWindowEnabled(GetDlgItem(hwnd, SETTINGS as i32)), 0);
+            if let Some(path) = std::env::var_os("EVOPARSEQ_UI_CAPTURE") {
+                capture_fixture(
+                    hwnd,
+                    &std::path::PathBuf::from(path).with_file_name("sign-in-phaze.png"),
+                )
+                .unwrap();
+            }
+            SendMessageW(f.service_choice, CB_SETCURSEL, 0, 0);
+            SendMessageW(
+                hwnd,
+                WM_COMMAND,
+                SERVICE | ((CBN_SELCHANGE as usize) << 16),
+                0,
+            );
+            assert_eq!(f.service, account::Service::Parsec);
+            assert_ne!(IsWindowEnabled(GetDlgItem(hwnd, SETTINGS as i32)), 0);
             for show_picker in [false, true] {
                 if show_picker {
                     // A local fixture token never enters auth, host discovery,

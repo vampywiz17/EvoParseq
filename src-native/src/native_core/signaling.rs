@@ -67,6 +67,10 @@ pub struct Socket {
 }
 impl Socket {
     pub fn open(session: &Session) -> Result<Self> {
+        anyhow::ensure!(
+            session.service() == super::account::Service::Parsec,
+            "Parsec signaling requires a Parsec account."
+        );
         let url = connect_url(session.token())?;
         let (out, outgoing) = tokio::sync::mpsc::channel::<String>(64);
         let (incoming_tx, incoming) = mpsc::sync_channel(64);
@@ -219,6 +223,17 @@ impl Drop for Socket {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn phaze_session_is_rejected_before_parsec_network_requests() {
+        let session = Session::from_saved("phaze:offline-fixture").unwrap();
+        let error = Socket::open(&session)
+            .err()
+            .expect("provider must be checked before connecting");
+        assert_eq!(
+            error.to_string(),
+            "Parsec signaling requires a Parsec account."
+        );
+    }
     use tokio_tungstenite::tungstenite::{
         client::IntoClientRequest, handshake::client::generate_request,
     };

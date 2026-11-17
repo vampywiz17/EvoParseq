@@ -48,6 +48,16 @@ jobs:
           done
           cat /tmp/evoparseq-turn-stdout.log
           exit 1
+      - name: Check independent Phaze protocol
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path src-native/crates/phaze/Cargo.toml -- --check
+          if ($LASTEXITCODE -ne 0) { throw 'Phaze formatting failed' }
+          cargo clippy --locked --manifest-path src-native/crates/phaze/Cargo.toml --target ${{ matrix.target }} --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'Phaze lint failed' }
+          cargo test --locked --manifest-path src-native/crates/phaze/Cargo.toml --target ${{ matrix.target }}
+          if ($LASTEXITCODE -ne 0) { throw 'Phaze protocol tests failed' }
       - name: Check isolated adapters
         shell: pwsh
         run: |

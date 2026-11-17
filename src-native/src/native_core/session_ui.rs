@@ -654,6 +654,9 @@ unsafe fn panel_for_parent(parent: HWND) -> HWND {
     }
 }
 pub unsafe fn install(window: &crate::window::Window) {
+    if !window.remote_controls.load(Ordering::Acquire) {
+        return;
+    }
     super::session_badge::install(window);
     raise(window);
 }

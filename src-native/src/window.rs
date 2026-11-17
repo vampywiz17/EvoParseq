@@ -40,6 +40,7 @@ pub struct Window {
     settings_active: AtomicBool,
     pub hwnd: AtomicUsize,
     pub closing: AtomicBool,
+    pub(crate) remote_controls: AtomicBool,
     pub events: crate::event_queue::Queue<Event>,
     pub dimensions: Mutex<(i32, i32)>,
 
@@ -171,6 +172,7 @@ impl Window {
             settings_active: AtomicBool::new(false),
             hwnd: AtomicUsize::new(0),
             closing: AtomicBool::new(false),
+            remote_controls: AtomicBool::new(true),
             events: crate::event_queue::Queue::input(),
             dimensions: Mutex::new((1024, 720)),
 
@@ -1243,6 +1245,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                     && lp as usize == s.native_session_button.load(Ordering::Acquire)
                     && wp >> 16 == BN_CLICKED as usize) =>
             {
+                if !s.remote_controls.load(Ordering::Acquire) {
+                    return 0;
+                }
                 let manager = s
                     .connection_settings
                     .lock()
