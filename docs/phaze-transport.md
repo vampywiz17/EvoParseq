@@ -40,12 +40,12 @@ there is no SDP/WebRTC-only candidate type needed to describe an allocation.
 A TURN allocation address can therefore be advertised in that candidate shape.
 That is an architectural inference, not evidence that the installed host accepts it.
 
-The protocol now accepts a datagram carrier without changing cryptography or
-media framing. The Windows runtime still uses its tested direct UDP carrier.
-The isolated TURN fixture allocates an authenticated relay and checks both
+The first carrier-boundary implementation accepted a datagram carrier without
+changing cryptography or media framing; its Windows runtime used direct UDP.
+That initial isolated TURN fixture allocated an authenticated relay and checked both
 payload preservation and the peer-observed relay source address for 20, 35 and
 1232 byte datagrams. It uses only loopback, fixed fixture credentials and the
-existing TURN implementation; it is not linked into the production Phaze path.
+existing TURN implementation. The production carrier below supersedes that fixture.
 The existing DTLS/CID tests independently cover mutual authentication and encrypted
 heartbeat delivery. Neither test substitutes for an end-to-end native-host relay test.
 

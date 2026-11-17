@@ -1,14 +1,14 @@
 //! Isolated proof of the production Rust TURN carrier; no user credentials.
 use evoparseq_phaze::{
-    Datagram,
     turn::{Carrier, Relay},
+    Datagram,
 };
 use std::{
     io,
     net::SocketAddr,
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
     time::Duration,
 };
@@ -19,11 +19,11 @@ use tokio::{
 };
 use webrtc::{
     turn::{
-        auth::{AuthHandler, generate_auth_key},
+        auth::{generate_auth_key, AuthHandler},
         relay::relay_static::RelayAddressGeneratorStatic,
         server::{
-            Server,
             config::{ConnConfig, ServerConfig},
+            Server,
         },
     },
     util::vnet::net::Net,
@@ -183,17 +183,15 @@ async fn production_phaze_turn_udp_tcp_tls_are_opaque_and_tls_is_verified() -> a
             task.abort();
         }
         let (proxy, _, task) = stream_proxy(address, true).await?;
-        assert!(
-            Relay::allocate(
-                "127.0.0.1",
-                proxy.port(),
-                Carrier::Tls,
-                "phaze-fixture",
-                "fixture-only-password"
-            )
-            .await
-            .is_err()
-        );
+        assert!(Relay::allocate(
+            "127.0.0.1",
+            proxy.port(),
+            Carrier::Tls,
+            "phaze-fixture",
+            "fixture-only-password"
+        )
+        .await
+        .is_err());
         task.abort();
         server.close().await?;
         Ok::<_, anyhow::Error>(())
