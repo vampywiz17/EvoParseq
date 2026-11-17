@@ -198,6 +198,9 @@ pub trait Sink {
     fn selected(&mut self, _output: u32) {}
     /// DTLS carrier bytes, excluding TURN encapsulation and handshake traffic.
     fn traffic(&mut self, _received: u64, _sent: u64) {}
+    /// Local reliable-command ACK round trip, including peer ACK scheduling.
+    /// None means no unambiguous sample in the last ten seconds.
+    fn rtt(&mut self, _elapsed: Option<Duration>) {}
     fn stage(&mut self, stage: &'static str);
     fn outputs(&mut self, outputs: &[Output]);
     fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()>;

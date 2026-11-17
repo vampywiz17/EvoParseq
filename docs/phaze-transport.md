@@ -184,6 +184,21 @@ implemented. The official product's support does not establish our client suppor
 
 Stats reuse the shared sample, rates and native playback/decoder/presentation
 reports. Carrier byte counters exclude TURN encapsulation and initial handshake;
-PCM byte count/layout and the observed codec are reported. Host encode time,
-RTT and other unparsed host telemetry remain unknown (N/A). The new controls
+PCM byte count/layout and the observed codec are reported. Connection RTT is
+measured locally from reliable commands and their authenticated ACKs (kinds 3/4),
+using the existing cumulative frontier and selective bitmap. Timing starts at
+carrier batch submission, committed only after a successful flush. Each ACK
+contributes at most one sample, from its newest newly acknowledged command.
+Retransmitted commands are excluded following the ambiguity rule described in
+[RFC 6298 section 3](https://www.rfc-editor.org/rfc/rfc6298.html#section-3);
+this does not change Phaze retransmission timers or implement TCP congestion control.
+Duplicate ACKs do not refresh the sample. It expires after ten seconds without a
+new eligible ACK, so an idle connection can show N/A. The measurement includes
+local/carrier scheduling and host ACK delay; it is not host-reported telemetry,
+ICMP ping, frame latency or a separate TURN-server ping. It follows the selected
+direct/TURN carrier without sending extra probes. Deterministic fixtures cover
+ACK reordering, cumulative/selective feedback, retries, invalid/duplicate ACKs,
+unsent packets, sample expiry and the shared Windows stats adapter. Live RTT
+validation remains outstanding. Host encode time and other unparsed host
+telemetry remain unknown (N/A). The new controls
 and UI do not establish live HEVC, full chroma or display-switching success.

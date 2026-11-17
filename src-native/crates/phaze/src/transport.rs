@@ -507,7 +507,9 @@ pub async fn run(
     for p in reliable.frame(&wire::hello())? {
         send(&mut c, &p)?;
     }
+    let transmission_started = Instant::now();
     flush(&mut c, &socket, peer).await?;
+    reliable.transmitted(transmission_started);
     sink.stage("waiting_outputs");
     let mut requested = false;
     let app_started = Instant::now();
@@ -645,14 +647,18 @@ pub async fn run(
                 retries < 20,
                 "Phaze reliable command acknowledgment timed out"
             );
+            reliable.retransmitting();
             for packet in reliable.pending() {
                 send(&mut c, packet)?;
             }
             retries += 1;
             last_retry = Instant::now();
         }
+        let transmission_started = Instant::now();
         sent = sent.saturating_add(flush(&mut c, &socket, peer).await?);
+        reliable.transmitted(transmission_started);
         if reported.elapsed() >= Duration::from_millis(500) {
+            sink.rtt(reliable.rtt(Instant::now()));
             sink.traffic(received, sent);
             reported = Instant::now();
         }

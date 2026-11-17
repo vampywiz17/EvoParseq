@@ -59,6 +59,10 @@ Existing local GPU/presentation, playback buffer and immersive input preferences
 are reused. The canonical session overlay provides local controls, bitrate/FPS
 requests, active-output selection and measured stats. Missing host telemetry
 remains unknown. Settings tabs show the selected service's integrated options.
+Connection RTT uses local reliable-command/ACK timing on the selected carrier;
+retransmitted packets are excluded and samples expire after ten seconds without
+a fresh eligible ACK. No extra probes are sent. Host ACK and local scheduling
+delay are included; live RTT validation remains outstanding.
 No automatic fallback to Parsec or WebRTC occurs.
 
 The observed host omits the RFC 7627 EMS extension. This adapter explicitly permits

@@ -1,6 +1,7 @@
 use anyhow::{bail, ensure, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 type Received = (Vec<Vec<u8>>, Option<Vec<u8>>);
 /// Protected peer heartbeat: separate from ordinary reliable/application frames.
 pub const HEARTBEAT: [u8; 2] = [0xcd, 3];
@@ -153,8 +154,14 @@ pub struct Reliable {
     packets: BTreeMap<u64, Vec<u8>>,
     seen: BTreeSet<u64>,
     tx_next: u64,
-    outgoing: BTreeMap<u64, Vec<u8>>,
+    outgoing: BTreeMap<u64, Pending>,
+    rtt: Option<(Instant, Duration)>,
     buffered: usize,
+}
+struct Pending {
+    bytes: Vec<u8>,
+    sent: Option<Instant>,
+    retransmitted: bool,
 }
 impl Reliable {
     pub fn frame(&mut self, payload: &[u8]) -> Result<Vec<Vec<u8>>> {
@@ -175,16 +182,43 @@ impl Reliable {
             b.extend(self.tx_next.to_le_bytes());
             b.extend(((chunk.len() + 14) as u16).to_le_bytes());
             b.extend(chunk);
-            self.outgoing.insert(self.tx_next, b.clone());
+            self.outgoing.insert(
+                self.tx_next,
+                Pending {
+                    bytes: b.clone(),
+                    sent: None,
+                    retransmitted: false,
+                },
+            );
             self.tx_next += 1;
             out.push(b)
         }
         Ok(out)
     }
     pub fn pending(&self) -> impl Iterator<Item = &[u8]> {
-        self.outgoing.values().map(Vec::as_slice)
+        self.outgoing.values().map(|p| p.bytes.as_slice())
+    }
+    /// Commit timestamps only after the carrier successfully flushed the batch.
+    pub fn transmitted(&mut self, started: Instant) {
+        for packet in self.outgoing.values_mut() {
+            packet.sent.get_or_insert(started);
+        }
+    }
+    pub fn retransmitting(&mut self) {
+        // Karn's rule: an ACK cannot identify which transmission it acknowledges.
+        for packet in self.outgoing.values_mut() {
+            packet.retransmitted = true;
+        }
+    }
+    pub fn rtt(&self, now: Instant) -> Option<Duration> {
+        self.rtt
+            .filter(|(at, _)| now.saturating_duration_since(*at) < Duration::from_secs(10))
+            .map(|(_, elapsed)| elapsed)
     }
     pub fn receive(&mut self, b: &[u8]) -> Result<Received> {
+        self.receive_at(b, Instant::now())
+    }
+    fn receive_at(&mut self, b: &[u8], now: Instant) -> Result<Received> {
         if b.is_empty() {
             bail!("Empty reliable packet")
         }
@@ -200,12 +234,22 @@ impl Reliable {
                 frontier <= self.tx_next && (self.tx_next == 0 || anchor < self.tx_next),
                 "Acknowledgment outside sent window"
             );
-            self.outgoing.retain(|seq, _| {
-                *seq >= frontier
-                    && !anchor
+            let mut latest_sent = None;
+            self.outgoing.retain(|seq, packet| {
+                let acknowledged = *seq < frontier
+                    || anchor
                         .checked_sub(*seq)
-                        .is_some_and(|d| d < 64 && bitmap & (1 << d) != 0)
+                        .is_some_and(|d| d < 64 && bitmap & (1 << d) != 0);
+                if acknowledged && !packet.retransmitted {
+                    latest_sent = latest_sent.max(packet.sent);
+                }
+                !acknowledged
             });
+            // One sample per ACK, from its newest newly acknowledged packet.
+            // Duplicate ACKs and packets never flushed provide no measurement.
+            if let Some(elapsed) = latest_sent.and_then(|sent| now.checked_duration_since(sent)) {
+                self.rtt = Some((now, elapsed));
+            }
             return Ok((Vec::new(), None));
         }
         if !matches!(b[0], 1 | 5) {
@@ -304,6 +348,102 @@ fn wire_contracts() -> Result<()> {
         nal_types(&[0, 0, 0, 1, 0x67, 9, 0, 0, 1, 0x68]) == vec![7, 8],
         "NAL test"
     );
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn ack_rtt_handles_selective_cumulative_duplicate_and_expired_samples() -> Result<()> {
+    let start = Instant::now();
+    let mut sender = Reliable::default();
+    let mut receiver = Reliable::default();
+    let first = sender.frame(b"first")?;
+    sender.transmitted(start);
+    let second = sender.frame(b"second")?;
+    sender.transmitted(start + Duration::from_millis(10));
+    assert_eq!(sender.rtt(start), None);
+    let (_, ack) = receiver.receive(&second[0])?;
+    let ack = ack.unwrap();
+    sender.receive_at(&ack, start + Duration::from_millis(40))?;
+    assert_eq!(
+        sender.rtt(start + Duration::from_millis(40)),
+        Some(Duration::from_millis(30))
+    );
+    assert_eq!(sender.pending().count(), 1);
+    // A duplicate must neither change the sample nor refresh its expiry.
+    sender.receive_at(&ack, start + Duration::from_millis(50))?;
+    assert_eq!(
+        sender.rtt(start + Duration::from_millis(50)),
+        Some(Duration::from_millis(30))
+    );
+    let (_, ack) = receiver.receive(&first[0])?;
+    let mut extended = ack.unwrap();
+    extended[0] = 4;
+    extended.extend([0; 16]); // Unmapped feedback fields are not RTT measurements.
+    sender.receive_at(&extended, start + Duration::from_millis(70))?;
+    assert_eq!(
+        sender.rtt(start + Duration::from_millis(70)),
+        Some(Duration::from_millis(70))
+    );
+    assert_eq!(sender.pending().count(), 0);
+    sender.receive_at(&extended, start + Duration::from_secs(9))?;
+    assert_eq!(sender.rtt(start + Duration::from_millis(10070)), None);
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn ack_rtt_ignores_retries_unsent_packets_and_invalid_feedback() -> Result<()> {
+    let start = Instant::now();
+    let mut sender = Reliable::default();
+    let mut receiver = Reliable::default();
+    let packets = sender.frame(b"retry")?;
+    sender.transmitted(start);
+    sender.retransmitting();
+    sender.transmitted(start + Duration::from_millis(250));
+    let (_, ack) = receiver.receive(&packets[0])?;
+    sender.receive_at(&ack.unwrap(), start + Duration::from_millis(300))?;
+    assert_eq!(sender.rtt(start + Duration::from_millis(300)), None);
+    let packets = sender.frame(b"not flushed")?;
+    let (_, ack) = receiver.receive(&packets[0])?;
+    sender.receive_at(&ack.unwrap(), start)?;
+    assert_eq!(sender.rtt(start), None);
+    let packets = sender.frame(b"fresh")?;
+    sender.transmitted(start);
+    let (_, ack) = receiver.receive(&packets[0])?;
+    let ack = ack.unwrap();
+    assert!(sender.receive_at(&ack[..33], start).is_err());
+    let mut invalid = ack.clone();
+    invalid[10..18].copy_from_slice(&u64::MAX.to_le_bytes());
+    assert!(sender.receive_at(&invalid, start).is_err());
+    assert_eq!(sender.pending().count(), 1);
+    assert_eq!(sender.rtt(start), None);
+    sender.receive_at(&ack, start + Duration::from_millis(15))?;
+    assert_eq!(
+        sender.rtt(start + Duration::from_millis(15)),
+        Some(Duration::from_millis(15))
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn ack_rtt_uses_newest_packet_in_a_cumulative_batch() -> Result<()> {
+    let start = Instant::now();
+    let mut sender = Reliable::default();
+    let mut receiver = Reliable::default();
+    let first = sender.frame(b"first")?;
+    sender.transmitted(start);
+    let second = sender.frame(b"second")?;
+    sender.transmitted(start + Duration::from_millis(20));
+    receiver.receive(&first[0])?;
+    let (_, ack) = receiver.receive(&second[0])?;
+    sender.receive_at(&ack.unwrap(), start + Duration::from_millis(35))?;
+    assert_eq!(
+        sender.rtt(start + Duration::from_millis(35)),
+        Some(Duration::from_millis(15))
+    );
+    assert_eq!(sender.pending().count(), 0);
     Ok(())
 }
 

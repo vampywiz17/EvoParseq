@@ -176,7 +176,7 @@ impl<'a> Presentation<'a> {
         #[cfg(not(feature = "bud"))]
         let footer = WEBRTC_FOOTER;
         let footer = if sample.phaze {
-            "Traffic counts received/sent DTLS datagrams, including encrypted control and retransmissions. Initial handshake, TURN encapsulation and IP/TCP/UDP headers are excluded. PCM bytes describe decoded audio. Host encode time and RTT remain unknown until measured. Local dropped frames are not network packet loss."
+            "Traffic counts received/sent DTLS datagrams, including encrypted control and retransmissions. Initial handshake, TURN encapsulation and IP/TCP/UDP headers are excluded. PCM bytes describe decoded audio. RTT is the latest local command/ACK round trip, including host ACK scheduling; retransmitted commands are excluded and samples expire after 10 seconds. Host encode time remains unknown. Local dropped frames are not network packet loss."
         } else {
             footer
         };

@@ -28,6 +28,7 @@ struct View {
     pending: Option<(u32, evoparseq_phaze::VideoConfig)>,
     received: u64,
     sent: u64,
+    rtt: Option<Duration>,
     audio_bytes: u64,
     authenticated: bool,
     video: crate::video_windows::Pipeline,
@@ -59,6 +60,7 @@ impl View {
                 hevc_advertised: self.config.hevc,
                 received: self.authenticated.then_some(self.received),
                 sent: self.authenticated.then_some(self.sent),
+                rtt_ms: self.rtt.map(|elapsed| elapsed.as_secs_f64() * 1000.0),
                 audio_bytes: self.audio_bytes,
                 audio_ready: self.audio.is_some(),
                 audio_codec: self.audio.as_ref().map(|_| "PCM s16le"),
@@ -90,6 +92,9 @@ impl evoparseq_phaze::Sink for View {
         self.received = received;
         self.sent = sent;
         self.publish("connected");
+    }
+    fn rtt(&mut self, elapsed: Option<Duration>) {
+        self.rtt = elapsed;
     }
     fn selected(&mut self, output: u32) {
         use super::session_model::{Notification, View as _};
@@ -352,6 +357,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         pending: None,
         received: 0,
         sent: 0,
+        rtt: None,
         audio_bytes: 0,
         authenticated: false,
         video,
@@ -557,6 +563,7 @@ mod tests {
                 pending: None,
                 received: 0,
                 sent: 0,
+                rtt: None,
                 audio_bytes: 0,
                 authenticated: false,
                 inspector: Default::default(),
@@ -617,6 +624,22 @@ mod tests {
             assert!(cards.contains(&("Incoming traffic", "1.0 Mbps".into())));
             assert!(cards.contains(&("Outgoing traffic", "0.5 Mbps".into())));
             assert!(cards.contains(&("Connection RTT", "—".into())));
+            view.rtt(Some(Duration::from_micros(12500)));
+            view.traffic(127048, 63524);
+            let measured = window.stats.read().context("Missing RTT sample")?;
+            assert_eq!(measured.rtt_ms, Some(12.5));
+            assert!(crate::stats_view::Presentation::new(
+                &measured,
+                &values,
+                (None, None, None),
+                None,
+                &timing,
+            )
+            .cards
+            .contains(&("Connection RTT", "12.5 ms".into())));
+            view.rtt(None);
+            view.traffic(127048, 63524);
+            assert_eq!(window.stats.read().unwrap().rtt_ms, None);
             window.events.drain();
             let video = crate::session_preferences::Video {
                 bandwidth_mbps: Some(40),
