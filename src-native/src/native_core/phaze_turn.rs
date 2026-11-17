@@ -138,16 +138,16 @@ async fn roundtrip(relay: &Relay) -> anyhow::Result<()> {
     let peer = UdpSocket::bind("127.0.0.1:0").await?;
     let target = peer.local_addr()?;
     let mut received = [0; 2048];
-    assert_eq!((&relay).candidates()?, vec![advertised]);
+    assert_eq!(relay.candidates()?, vec![advertised]);
     for size in [20usize, 35, 1232] {
         let payload: Vec<_> = (0..size).map(|i| (i % 251) as u8).collect();
-        (&relay).send_to(&payload, target).await?;
+        relay.send_to(&payload, target).await?;
         let (n, from) = peer.recv_from(&mut received).await?;
         assert_eq!(from, advertised);
         assert_eq!(&received[..n], payload);
         peer.send_to(&payload, advertised).await?;
-        let (n, from) = (&relay).recv_from(&mut received).await?;
-        assert_eq!((&relay).endpoint(from), Some(target));
+        let (n, from) = relay.recv_from(&mut received).await?;
+        assert_eq!(relay.endpoint(from), Some(target));
         assert_eq!(&received[..n], payload);
     }
     Ok(())
@@ -177,7 +177,7 @@ async fn production_phaze_turn_udp_tcp_tls_are_opaque_and_tls_is_verified() -> a
                 &roots,
             )
             .await?;
-            roundtrip(&relay).await?;
+            roundtriprelay.await?;
             relay.close().await;
             drop(relay);
             task.abort();
@@ -215,10 +215,10 @@ async fn production_phaze_turn_renews_allocation_and_peer_permissions() -> anyho
             }} #[allow(unreachable_code)] Ok::<(),io::Error>(())
         });
         let relay=Relay::allocate("127.0.0.1",address.port(),Carrier::Udp,"phaze-fixture","fixture-only-password").await?;
-        roundtrip(&relay).await?;assert_eq!(permission.load(Ordering::Relaxed),1);
+        roundtriprelay.await?;assert_eq!(permission.load(Ordering::Relaxed),1);
         tokio::time::timeout(Duration::from_secs(135),async { while refresh.load(Ordering::Relaxed)<1 || permission.load(Ordering::Relaxed)<2 {tokio::time::sleep(Duration::from_millis(250)).await;} }).await?;
         assert!(refresh.load(Ordering::Relaxed)>=1);assert!(permission.load(Ordering::Relaxed)>=2);
-        roundtrip(&relay).await?;relay.close().await;drop(relay);proxy.abort();server.close().await?;
+        roundtriprelay.await?;relay.close().await;drop(relay);proxy.abort();server.close().await?;
         Ok::<_,anyhow::Error>(())
     }).await??;
     Ok(())

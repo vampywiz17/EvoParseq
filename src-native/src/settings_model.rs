@@ -583,17 +583,19 @@ mod vsr_tests {
     }
     #[test]
     fn network_only_save_preserves_unavailable_gpu_and_non_network_preferences() {
-        let mut saved = Settings::default();
-        saved.video_gpu = Some(GpuPreference {
-            name: "Offline fixture GPU".into(),
-            vendor_id: 0x1002,
-            device_id: 7,
-            subsystem_id: 0,
-            revision: 0,
-            luid: 9,
-        });
-        saved.prefer_hevc = true;
-        saved.experimental_chroma_444 = true;
+        let saved = Settings {
+            video_gpu: Some(GpuPreference {
+                name: "Offline fixture GPU".into(),
+                vendor_id: 0x1002,
+                device_id: 7,
+                subsystem_id: 0,
+                revision: 0,
+                luid: 9,
+            }),
+            prefer_hevc: true,
+            experimental_chroma_444: true,
+            ..Default::default()
+        };
         let mut form = Form::new(saved.clone(), Some(0x1002));
         form.network_only = true;
         form.gpu_selection = None;
