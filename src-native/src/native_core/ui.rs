@@ -293,6 +293,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                         1 => "Phaze",
                         _ => "",
                     };
+                    let old_font = SelectObject(draw.hDC, f.font);
                     DrawTextW(
                         draw.hDC,
                         wide(label).as_ptr(),
@@ -300,6 +301,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                         &mut rect,
                         DT_LEFT | DT_VCENTER | DT_SINGLELINE,
                     );
+                    SelectObject(draw.hDC, old_font);
                     return 1;
                 }
                 if draw_wordmark(lp, f) || draw_button(lp) {
@@ -645,7 +647,7 @@ pub fn choose(
                 | CBS_HASSTRINGS as u32,
             layout::SERVICE_CHOICE,
         );
-        crate::connection_settings_ui::controls::combo(f.service_choice);
+        crate::connection_settings_ui::controls::combo_background(f.service_choice, FIELD);
         SendMessageW(f.service_choice, CB_SETITEMHEIGHT, usize::MAX, 28);
         for name in ["Parsec", "Phaze"] {
             SendMessageW(

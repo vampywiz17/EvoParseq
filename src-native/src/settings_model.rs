@@ -190,7 +190,7 @@ impl Form {
     pub fn availability(&mut self) -> Availability {
         let vendor = self.gpu_vendor();
         let chroma_allowed = vendor.is_some_and(full_chroma_vendor_allowed);
-        if !self.phaze && !chroma_allowed {
+        if !chroma_allowed {
             self.values.experimental_chroma_444 = false;
         }
         let relay = !self.values.stun_only;
@@ -613,7 +613,7 @@ mod vsr_tests {
     }
     #[test]
     fn service_policy_keeps_local_media_controls_and_excludes_unwired_protocols() {
-        let mut form = form();
+        let mut form = Form::new(Settings::default(), Some(0x10de));
         for phaze in [false, true] {
             form.phaze = phaze;
             assert!(form.supports(Feature::Common));
@@ -662,10 +662,7 @@ mod vsr_tests {
             serde_json::to_value(&saved.video_gpu).unwrap()
         );
         assert_eq!(actual.audio_min_buffer_ms, 30);
-        assert_eq!(
-            actual.experimental_chroma_444,
-            saved.experimental_chroma_444
-        );
+        assert!(!actual.experimental_chroma_444);
         assert!(actual.force_relay);
         assert_eq!(actual.turn_urls.len(), 1);
     }

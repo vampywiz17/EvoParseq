@@ -78,6 +78,17 @@ pub mod desktop {
 }
 
 pub mod settings {
+    /// Compact the service's Network page when Parsec-only rows are absent.
+    #[cfg(windows)]
+    pub fn phaze_network_y(y: i32, transport_extra: i32) -> i32 {
+        if y >= 938 + transport_extra {
+            y - 196 - transport_extra
+        } else if y >= 344 && y < 844 + transport_extra {
+            y - 102
+        } else {
+            y
+        }
+    }
     #[cfg(target_os = "linux")]
     pub const WIDTH: i32 = 820;
     pub const BODY: i32 = 16;

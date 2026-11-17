@@ -11,9 +11,12 @@ const BAR: i32 = 16;
 const SUBCLASS: usize = 1;
 
 pub unsafe fn combo(hwnd: HWND) {
-    SetWindowSubclass(hwnd, Some(combo_proc), SUBCLASS, 0);
+    combo_background(hwnd, FIELD);
 }
-unsafe fn combo_paint(hwnd: HWND, dc: HDC) {
+pub unsafe fn combo_background(hwnd: HWND, background: u32) {
+    SetWindowSubclass(hwnd, Some(combo_proc), SUBCLASS, background as usize);
+}
+unsafe fn combo_paint(hwnd: HWND, dc: HDC, background: u32) {
     let mut info: COMBOBOXINFO = std::mem::zeroed();
     info.cbSize = std::mem::size_of::<COMBOBOXINFO>() as u32;
     if GetComboBoxInfo(hwnd, &mut info) == 0 {
@@ -21,7 +24,7 @@ unsafe fn combo_paint(hwnd: HWND, dc: HDC) {
     }
     let mut rect: RECT = std::mem::zeroed();
     GetClientRect(hwnd, &mut rect);
-    let brush = CreateSolidBrush(FIELD);
+    let brush = CreateSolidBrush(background);
     FillRect(dc, &info.rcButton, brush);
     DeleteObject(brush);
     let edge = CreateSolidBrush(0x00444444);
@@ -52,18 +55,18 @@ unsafe extern "system" fn combo_proc(
     wp: WPARAM,
     lp: LPARAM,
     id: usize,
-    _: usize,
+    background: usize,
 ) -> LRESULT {
     let result = DefSubclassProc(hwnd, msg, wp, lp);
     match msg {
         WM_NCDESTROY => {
             RemoveWindowSubclass(hwnd, Some(combo_proc), id);
         }
-        WM_PRINT | WM_PRINTCLIENT => combo_paint(hwnd, wp as HDC),
+        WM_PRINT | WM_PRINTCLIENT => combo_paint(hwnd, wp as HDC, background as u32),
         WM_PAINT | WM_ENABLE | WM_SETFOCUS | WM_KILLFOCUS | WM_LBUTTONDOWN | WM_LBUTTONUP
         | WM_MOUSEMOVE | WM_CAPTURECHANGED | CB_SETCURSEL => {
             let dc = GetDC(hwnd);
-            combo_paint(hwnd, dc);
+            combo_paint(hwnd, dc, background as u32);
             ReleaseDC(hwnd, dc);
         }
         _ => {}

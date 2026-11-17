@@ -1019,7 +1019,13 @@ unsafe fn layout(hwnd: HWND) {
     GetClientRect(hwnd, &mut client);
     let cloudflare = SendMessageW(GetDlgItem(hwnd, PROVIDER as i32), CB_GETCURSEL, 0, 0) == 1;
     let footer = match page.model.active_tab {
-        Tab::Network => 1056 + BUD_EXTRA,
+        Tab::Network => {
+            if page.model.phaze {
+                860
+            } else {
+                1056 + BUD_EXTRA
+            }
+        }
         Tab::Audio => {
             if page.model.phaze {
                 532
@@ -1057,6 +1063,11 @@ unsafe fn layout(hwnd: HWND) {
             && item.tab.is_none_or(|tab| tab == page.model.active_tab)
             && (item.group == 0 || item.group == if cloudflare { CLOUDFLARE } else { CUSTOM });
         let mut r = item.rect;
+        if page.model.phaze && item.tab == Some(Tab::Network) {
+            let top = crate::app_style::settings::phaze_network_y(r.top, BUD_EXTRA);
+            r.bottom += top - r.top;
+            r.top = top;
+        }
         let id = GetDlgCtrlID(item.hwnd) as usize;
         let new_top = match id {
             NOTICE => Some(footer),
