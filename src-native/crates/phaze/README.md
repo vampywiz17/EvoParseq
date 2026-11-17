@@ -20,8 +20,8 @@ not a production cryptographic dependency recommendation.
 - Service authentication, optional 2FA, authorized online host discovery and logout.
 - Bounded authenticated WebSocket offer/answer; host approval is preserved.
 - Direct IPv4/IPv6 UDP candidate probing with authenticated STUN.
-- Periodic authenticated Binding keepalive with bounded, one-use transaction IDs;
-  a static video image is not treated as a dead peer while keepalive replies arrive.
+- Protected peer heartbeat (cd 03, no payload) every 200 ms. Heartbeats are
+  handled separately from reliable media frames; a static image is not a dead peer.
 - DTLS 1.2/CID with fresh ephemeral identity, mutual certificate handshake and
   mandatory signaling-fingerprint pinning before application requests.
 - Output-list reception, selection of the primary active output and H.264 request.
@@ -33,7 +33,7 @@ not a production cryptographic dependency recommendation.
 The Rust proof received the real host output list and decoded one H.264 picture.
 A user-confirmed Windows GUI test displayed H.264 8-bit 4:2:0 through the existing
 Media Foundation pipeline. That initial GUI session subsequently timed out.
-Periodic Binding keepalive is under live validation. Sustained playback, remote
+The required protected peer heartbeat is now under live validation. Sustained playback, remote
 routing under loss and the full native congestion/retransmission behavior are
 not yet validated.
 

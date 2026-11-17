@@ -2,6 +2,21 @@ use anyhow::{bail, ensure, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 type Received = (Vec<Vec<u8>>, Option<Vec<u8>>);
+/// Protected peer heartbeat: separate from ordinary reliable/application frames.
+pub const HEARTBEAT: [u8; 2] = [0xcd, 3];
+pub enum Envelope<'a> {
+    Close,
+    Reliable(&'a [u8]),
+    Heartbeat,
+}
+pub fn envelope(bytes: &[u8]) -> Option<Envelope<'_>> {
+    match bytes {
+        [0xcd, 1, ..] => Some(Envelope::Close),
+        [0xcd, 2, payload @ ..] => Some(Envelope::Reliable(payload)),
+        [0xcd, 3, ..] => Some(Envelope::Heartbeat),
+        _ => None,
+    }
+}
 const MAX_FRAME: usize = 16 * 1024 * 1024;
 #[derive(Serialize, Debug)]
 pub struct Output {
@@ -261,4 +276,19 @@ fn outgoing_acknowledgments_and_bounded_retry_state() -> Result<()> {
     bad[10..18].copy_from_slice(&u64::MAX.to_le_bytes());
     assert!(sender.receive(&bad).is_err());
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn protected_heartbeat_is_not_reliable_or_application_data() {
+    assert_eq!(HEARTBEAT, [0xcd, 3]);
+    assert!(matches!(envelope(&HEARTBEAT), Some(Envelope::Heartbeat)));
+    assert!(matches!(envelope(&[0xcd, 1]), Some(Envelope::Close)));
+    match envelope(&[0xcd, 2, 1, 9]) {
+        Some(Envelope::Reliable(payload)) => assert_eq!(payload, [1, 9]),
+        _ => panic!("Reliable envelope was not recognized"),
+    }
+    for bytes in [&[][..], &[0xcd][..], &[0, 3][..], &[0xcd, 4][..]] {
+        assert!(envelope(bytes).is_none());
+    }
 }
