@@ -89,7 +89,7 @@ impl evoparseq_phaze::Sink for View {
     fn traffic(&mut self, received: u64, sent: u64) {
         self.received = received;
         self.sent = sent;
-        self.publish("Connected (Phaze, experimental)");
+        self.publish("connected");
     }
     fn selected(&mut self, output: u32) {
         use super::session_model::{Notification, View as _};
@@ -581,6 +581,42 @@ mod tests {
             view.traffic(2048, 1024);
             assert!(view.authenticated);
             assert_eq!((view.received, view.sent), (2048, 1024));
+            // Exercise the actual publisher -> shared rates -> cards boundary.
+            // GPU counters here are synthetic; no decoder/hardware claim is made.
+            let mut before = window
+                .stats
+                .read()
+                .context("Missing first telemetry sample")?;
+            view.traffic(127048, 63524);
+            let mut current = window
+                .stats
+                .read()
+                .context("Missing second telemetry sample")?;
+            before.at = current.at - Duration::from_secs(1);
+            for (sample, frames) in [(&mut before, 0), (&mut current, 60)] {
+                let video = sample.video.as_mut().unwrap();
+                video.decoder_initialized = true;
+                video.frames_decoded = frames;
+            }
+            let mut rates = crate::stats::Rates::default();
+            rates.update(&before);
+            let values = rates.update(&current);
+            assert_eq!(values.incoming, Some(1.0));
+            assert_eq!(values.outgoing, Some(0.5));
+            assert_eq!(values.fps, Some(60.0));
+            let timing = window.stats.host_timing.snapshot(view.generation);
+            let cards = crate::stats_view::Presentation::new(
+                &current,
+                &values,
+                (None, None, None),
+                None,
+                &timing,
+            )
+            .cards;
+            assert!(cards.contains(&("Decoded video", "60.0 fps".into())));
+            assert!(cards.contains(&("Incoming traffic", "1.0 Mbps".into())));
+            assert!(cards.contains(&("Outgoing traffic", "0.5 Mbps".into())));
+            assert!(cards.contains(&("Connection RTT", "—".into())));
             window.events.drain();
             let video = crate::session_preferences::Video {
                 bandwidth_mbps: Some(40),
