@@ -59,6 +59,18 @@ image IDs (opcode 19) feed the shared Win32 cursor owner. Visibility updates
 retain the last shape and leave pointer capture and positioning independent.
 Color images use the existing PNG/RGBA path.
 Monochrome images preserve both cursor masks and their hotspot.
+An unknown cached shape triggers a bounded opcode-20 cache refresh request.
+
+Windows receives peer state, controller changes and the host's disconnect
+reason. The session Guests menu uses the latest host-reported state for control
+transfer and revocation, guest removal, and approval or rejection of offers.
+Ctrl+Alt+Del uses the existing overlay action and shortcut. These controls require
+host-reported administrator access and the host still authorizes the request.
+Carrier submission indicates that the request was sent.
+
+Phaze opcode 14 also carries bidirectional UTF-8 text clipboard messages.
+Windows reuses the local focus, ownership and echo checks. Clipboard sends are
+limited to 16 KiB to leave space for input in the reliable window.
 
 Video decode/presentation remains on the existing Windows backend. Audio and input
 need user validation with a real host; synthetic tests cannot establish actual
@@ -223,7 +235,7 @@ feedback contains two smoothed bounds in bytes per second. Short, incomplete
 or coalesced samples without enough usable intervals produce no estimate.
 This transport measurement is separate from the requested encoder limit and
 from the received encoded payload rate.
-Host resolution/rotation/constant-FPS, display refresh requests, secure attention,
+Host resolution/rotation/constant-FPS, display refresh requests,
 additional simultaneous displays and USB forwarding remain unavailable until
 implemented. The official product's support does not establish our client support.
 
@@ -242,6 +254,10 @@ Retransmitted commands are excluded following the ambiguity rule described in
 [RFC 6298 section 3](https://www.rfc-editor.org/rfc/rfc6298.html#section-3).
 Reliable commands retain the existing 250 ms retry interval and 20-retry budget
 per packet. Sending fresh input does not consume another packet's retry budget.
+An individual type-2 ACK carries the retry marker, exact packet sequence and
+contiguous receive frontier. Retries increment the packet's marker, and duplicate
+or retried packets can elicit this ACK without filling a hole or reporting a new
+bandwidth sample. Retransmissions are excluded from RTT sampling.
 Duplicate ACKs do not refresh the sample. It expires after ten seconds without a
 new eligible ACK, so an idle connection can show N/A. The measurement includes
 local/carrier scheduling and host ACK delay; it is not host-reported telemetry,

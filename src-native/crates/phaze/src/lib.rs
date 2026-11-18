@@ -3,6 +3,7 @@
 //! belong to the embedding application. Unknown media/control formats are ignored.
 mod audio;
 mod bandwidth;
+mod control;
 mod cursor;
 mod datagram;
 mod input;
@@ -11,6 +12,7 @@ pub mod turn;
 mod wire;
 use anyhow::{bail, ensure, Context, Result};
 pub use audio::AudioCodec;
+pub use control::{ClientControl, PeerState, MAX_CLIPBOARD_BYTES};
 pub use cursor::{CursorFormat, CursorImage};
 pub use datagram::Datagram;
 use futures_util::{SinkExt, StreamExt};
@@ -209,6 +211,11 @@ pub trait Sink {
     fn cursor_visibility(&mut self, _visible: bool) {}
     fn cursor_image(&mut self, _image: CursorImage<'_>) {}
     fn bandwidth_feedback_started(&mut self) {}
+    fn peer_state(&mut self, _local_id: u32, _state: PeerState) {}
+    fn host_flags(&mut self, _flags: u32) {}
+    fn controller(&mut self, _id: u32) {}
+    fn clipboard_text(&mut self, _text: &str) {}
+    fn control_sent(&mut self, _control: &ClientControl, _sent: bool) {}
     /// DTLS carrier bytes, excluding TURN encapsulation and handshake traffic.
     fn traffic(&mut self, _received: u64, _sent: u64) {}
     /// Local reliable-command ACK round trip, including peer ACK scheduling.
@@ -220,7 +227,12 @@ pub trait Sink {
     /// Audio payload bytes are measured before decoding; headers are excluded.
     fn audio(&mut self, pcm: &[i16], codec: AudioCodec, payload_bytes: usize) -> Result<()>;
     /// Drain the application's existing event queue. False closes the session.
-    fn poll(&mut self, output: Option<u32>, input: &mut Vec<Input>) -> Result<bool>;
+    fn poll(
+        &mut self,
+        output: Option<u32>,
+        input: &mut Vec<Input>,
+        controls: &mut Vec<ClientControl>,
+    ) -> Result<bool>;
 }
 /// Experimental direct UDP session. Video, PCM audio and input reuse the
 /// embedding client's backends. No automatic Parsec fallback occurs.

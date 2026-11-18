@@ -159,10 +159,14 @@ struct Pending {
 const RETRY_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_RETRIES: u8 = 20;
 impl Reliable {
+    pub fn fits(&self, len: usize, limit: usize) -> bool {
+        self.outgoing.len() + len.div_ceil(1170) <= limit
+    }
+
     pub fn frame(&mut self, payload: &[u8]) -> Result<Vec<Vec<u8>>> {
         ensure!(payload.len() <= MAX_FRAME, "Outgoing frame too large");
         ensure!(
-            self.outgoing.len() + payload.len().div_ceil(1170) <= 64,
+            self.fits(payload.len(), 64),
             "Outgoing reliable window exceeded"
         );
         let count = payload.len().div_ceil(1170);
@@ -215,8 +219,10 @@ impl Reliable {
                 packet.retries < MAX_RETRIES,
                 "Phaze reliable command acknowledgment timed out"
             );
+            let retry = packet.retries + 1;
+            packet.bytes[1] = retry;
             send(&packet.bytes)?;
-            packet.retries += 1;
+            packet.retries = retry;
             packet.last_sent = Some(now);
         }
         Ok(())
@@ -233,6 +239,29 @@ impl Reliable {
     pub(crate) fn receive_at(&mut self, b: &[u8], now: Instant) -> Result<Received> {
         if b.is_empty() {
             bail!("Empty reliable packet")
+        }
+        if b[0] == 2 {
+            ensure!(b.len() >= 18, "Invalid individual acknowledgment length");
+            let seq = u64::from_le_bytes(b[2..10].try_into().unwrap());
+            let frontier = u64::from_le_bytes(b[10..18].try_into().unwrap());
+            ensure!(
+                seq < self.tx_next && frontier <= self.tx_next,
+                "Acknowledgment outside sent window"
+            );
+            // A late duplicate or retransmission ACK covers one packet and
+            // the contiguous receive frontier. A replaced transmission is
+            // never used for an RTT sample.
+            if let Some(packet) = self.outgoing.get(&seq) {
+                if let Some(elapsed) = packet
+                    .last_sent
+                    .filter(|_| b[1] == 0 && packet.retries == 0)
+                    .and_then(|sent| now.checked_duration_since(sent))
+                {
+                    self.rtt = Some((now, elapsed));
+                }
+                self.outgoing.retain(|&id, _| id != seq && id >= frontier);
+            }
+            return Ok((Vec::new(), None));
         }
         if matches!(b[0], 3 | 4) {
             ensure!(
@@ -305,7 +334,8 @@ impl Reliable {
                 self.ack_bitmap |= 1 << (anchor - seq);
             }
         }
-        if seq >= self.next && !self.packets.contains_key(&seq) {
+        let duplicate = seq < self.next || self.packets.contains_key(&seq);
+        if !duplicate {
             ensure!(self.buffered + len <= MAX_FRAME, "Reassembly memory limit");
             self.buffered += len;
             self.packets.insert(seq, b[..len].to_vec());
@@ -345,6 +375,13 @@ impl Reliable {
             frames.push(frame);
         }
         let feedback = self.bandwidth.take_feedback();
+        if feedback.is_none() && (duplicate || b[1] != 0) {
+            let mut ack = Vec::with_capacity(18);
+            ack.extend([2, b[1]]);
+            ack.extend(seq.to_le_bytes());
+            ack.extend(self.frontier.to_le_bytes());
+            return Ok((frames, Some(ack)));
+        }
         Ok((frames, self.ack(feedback)))
     }
 
@@ -486,8 +523,10 @@ fn retries_follow_each_command_during_continuous_input() -> Result<()> {
             resent.push(packet.to_vec());
             Ok(())
         })?;
+        previous[1] = 1;
         assert_eq!(resent, [previous.clone()]);
-        let (_, ack) = receiver.receive(&previous)?;
+        let (_, ack) = receiver.receive(&resent[0])?;
+        assert_eq!(ack.as_ref().unwrap()[..2], [2, 1]);
         sender.receive_at(&ack.unwrap(), at)?;
         assert_eq!(sender.pending().count(), 1);
         previous = next;
@@ -499,6 +538,31 @@ fn retries_follow_each_command_during_continuous_input() -> Result<()> {
         sender.retry_due(at, |_| Ok(()))?;
     }
     assert!(sender.retry_due(at + RETRY_INTERVAL, |_| Ok(())).is_err());
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn individual_acknowledges_a_retry_without_covering_a_gap() -> Result<()> {
+    let at = Instant::now();
+    let mut sender = Reliable::default();
+    let mut receiver = Reliable::default();
+    let first = sender.frame(b"first")?.remove(0);
+    let mut second = sender.frame(b"second")?.remove(0);
+    sender.transmitted(at);
+    second[1] = 2;
+    let (frames, ack) = receiver.receive_at(&second, at)?;
+    assert!(frames.is_empty());
+    let ack = ack.unwrap();
+    assert_eq!(ack, [2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    assert!(sender.receive_at(&ack[..17], at).is_err());
+    sender.receive_at(&ack, at)?;
+    assert_eq!(sender.pending().collect::<Vec<_>>(), [first.as_slice()]);
+    assert_eq!(sender.rtt(at), None);
+    let (frames, ack) = receiver.receive_at(&first, at)?;
+    assert_eq!(frames, [b"first".to_vec(), b"second".to_vec()]);
+    sender.receive_at(&ack.unwrap(), at)?;
+    assert_eq!(sender.pending().count(), 0);
     Ok(())
 }
 

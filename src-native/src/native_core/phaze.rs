@@ -3,6 +3,7 @@ use super::account::Session;
 #[cfg(test)]
 #[path = "phaze_turn.rs"]
 mod turn_research;
+use crate::platform::Desktop as _;
 use crate::{
     connection_settings::Manager,
     window::{Event, Window},
@@ -11,7 +12,7 @@ use anyhow::{Context, Result};
 use std::{
     collections::VecDeque,
     sync::{atomic::Ordering, Arc},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub(super) fn block_on<T>(future: impl std::future::Future<Output = Result<T>>) -> Result<T> {
@@ -35,6 +36,8 @@ struct View {
     raw_audio: bool,
     audio_codec: Option<evoparseq_phaze::AudioCodec>,
     authenticated: bool,
+    last_clipboard: String,
+    pending_clipboard: Option<crate::clipboard_sync::Pending>,
     video: crate::video_windows::Pipeline,
     generation: u64,
     inspector: crate::video_stream::Inspector,
@@ -111,6 +114,63 @@ impl View {
     }
 }
 impl evoparseq_phaze::Sink for View {
+    fn peer_state(&mut self, local_id: u32, state: evoparseq_phaze::PeerState) {
+        let mut peers = self
+            .window
+            .session
+            .phaze_peers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        peers.local_id = Some(local_id);
+        peers.state = state;
+    }
+    fn host_flags(&mut self, flags: u32) {
+        crate::event_log::record(
+            "INFO",
+            "phaze_host_capabilities",
+            serde_json::json!({"usb_available": flags & 16 != 0}),
+        );
+    }
+    fn controller(&mut self, id: u32) {
+        self.window
+            .session
+            .phaze_peers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .controller = Some(id);
+    }
+    fn clipboard_text(&mut self, text: &str) {
+        let desktop = crate::platform_windows::NativeDesktop(self.window.handle() as usize);
+        crate::clipboard_sync::receive(
+            &mut self.last_clipboard,
+            &mut self.pending_clipboard,
+            text,
+            self.window.clipboard_allowed(),
+            Instant::now(),
+            |value| desktop.write_text(value),
+        );
+    }
+    fn control_sent(&mut self, control: &evoparseq_phaze::ClientControl, sent: bool) {
+        use super::session_model::{Notification, Status, View as _};
+        use evoparseq_phaze::ClientControl;
+        match control {
+            ClientControl::Clipboard(text) => {
+                if sent {
+                    self.last_clipboard.clone_from(text);
+                }
+            }
+            ClientControl::SecureAttention => self.window.notify(Notification::Status(if sent {
+                Status::AttentionSent
+            } else {
+                Status::AttentionFailed
+            })),
+            _ => self.window.notify(Notification::Status(if sent {
+                Status::ControlSent
+            } else {
+                Status::Failed
+            })),
+        }
+    }
     fn raw_audio(&self) -> bool {
         self.raw_audio
     }
@@ -278,8 +338,10 @@ impl evoparseq_phaze::Sink for View {
         &mut self,
         output: Option<u32>,
         commands: &mut Vec<evoparseq_phaze::Input>,
+        controls: &mut Vec<evoparseq_phaze::ClientControl>,
     ) -> Result<bool> {
-        use evoparseq_phaze::Input;
+        use super::session_model::{Command, Notification, Status, View as _};
+        use evoparseq_phaze::{ClientControl, Input, MAX_CLIPBOARD_BYTES};
         if self.window.closing.load(Ordering::Acquire) || self.window.stop.stopped() {
             return Ok(false);
         }
@@ -294,6 +356,23 @@ impl evoparseq_phaze::Sink for View {
             anyhow::bail!("Phaze video failed: {stage}");
         }
         self.window.events.take_batch(&mut self.events);
+        let desktop = crate::platform_windows::NativeDesktop(self.window.handle() as usize);
+        if self
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::Clipboard | Event::Focus(false)))
+        {
+            self.pending_clipboard = None;
+        }
+        if self.pending_clipboard.is_some() {
+            crate::clipboard_sync::retry(
+                &mut self.last_clipboard,
+                &mut self.pending_clipboard,
+                self.window.clipboard_allowed(),
+                Instant::now(),
+                |value| desktop.write_text(value),
+            );
+        }
         while let Some(event) = self.events.pop_front() {
             match event {
                 Event::Shortcut(crate::input::Shortcut::Disconnect)
@@ -308,8 +387,48 @@ impl evoparseq_phaze::Sink for View {
                     commands.push(Input::Release);
                     self.window.toggle_input_detached();
                 }
+                Event::Clipboard => {
+                    self.window.take_clipboard_event();
+                    if output.is_some() && self.window.clipboard_allowed() {
+                        if let Some(text) = desktop.read_text().filter(|text| {
+                            text.len() <= MAX_CLIPBOARD_BYTES && text != &self.last_clipboard
+                        }) {
+                            controls.push(ClientControl::Clipboard(text));
+                        }
+                    }
+                }
+                Event::NativeSession(Command::SecureAttention)
+                | Event::PhazeControl(ClientControl::SecureAttention) => {
+                    let control = ClientControl::SecureAttention;
+                    if self
+                        .window
+                        .session
+                        .phaze_peers
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .allows(&control)
+                    {
+                        controls.push(control);
+                    } else {
+                        self.window
+                            .notify(Notification::Status(Status::AttentionFailed));
+                    }
+                }
+                Event::PhazeControl(control) => {
+                    if self
+                        .window
+                        .session
+                        .phaze_peers
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .allows(&control)
+                    {
+                        controls.push(control);
+                    } else {
+                        self.window.result(false);
+                    }
+                }
                 Event::NativeSession(command) => {
-                    use super::session_model::{Command, View as _};
                     let result = (|| -> Result<()> {
                         match command {
                             Command::Apply(video) => {
@@ -473,6 +592,8 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         raw_audio: saved.allow_raw_audio,
         audio_codec: None,
         authenticated: false,
+        last_clipboard: String::new(),
+        pending_clipboard: None,
         video,
         generation,
         inspector,
@@ -685,6 +806,8 @@ mod tests {
                 raw_audio: false,
                 audio_codec: None,
                 authenticated: false,
+                last_clipboard: String::new(),
+                pending_clipboard: None,
                 inspector: Default::default(),
                 audio: None,
                 keys: Default::default(),
@@ -779,7 +902,8 @@ mod tests {
                 .events
                 .push(Event::NativeSession(Command::Apply(video.clone())));
             let mut commands = Vec::new();
-            assert!(view.poll(Some(7), &mut commands)?);
+            let mut controls = Vec::new();
+            assert!(view.poll(Some(7), &mut commands, &mut controls)?);
             let (id, config) = view.stream_request().context("Missing stream update")?;
             assert_eq!((id, config.mbps, config.fps), (7, 40, 144));
             assert_eq!(view.sent_video_config, Some(Default::default()));
@@ -808,12 +932,12 @@ mod tests {
             window
                 .events
                 .push(Event::NativeSession(Command::SelectDisplay("99".into())));
-            assert!(view.poll(Some(7), &mut commands)?);
+            assert!(view.poll(Some(7), &mut commands, &mut controls)?);
             assert!(view.stream_request().is_none());
             window
                 .events
                 .push(Event::NativeSession(Command::SelectDisplay("8".into())));
-            assert!(view.poll(Some(7), &mut commands)?);
+            assert!(view.poll(Some(7), &mut commands, &mut controls)?);
             assert_eq!(view.stream_request(), Some((8, config)));
             assert_eq!(commands.last(), Some(&Input::Release));
             view.stream_request_sent(8, config);
@@ -827,18 +951,18 @@ mod tests {
                     ..video.clone()
                 },
             )));
-            assert!(view.poll(Some(8), &mut commands)?);
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
             assert!(view.stream_request().is_none());
             assert_eq!(manager.view().0.native_core.video, video);
             window
                 .events
                 .push(Event::NativeSession(Command::HideButton));
-            assert!(view.poll(Some(8), &mut commands)?);
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
             assert!(manager.native_session_button_hidden());
             window
                 .events
                 .push(Event::NativeSession(Command::Disconnect));
-            assert!(!view.poll(Some(8), &mut commands)?);
+            assert!(!view.poll(Some(8), &mut commands, &mut controls)?);
         }
         std::fs::remove_dir_all(directory)?;
         Ok(())

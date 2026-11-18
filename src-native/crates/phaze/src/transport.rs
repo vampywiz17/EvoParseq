@@ -522,6 +522,7 @@ pub async fn run(
     heartbeat_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut selected_output = None;
     let mut input = Vec::new();
+    let mut controls = Vec::new();
     let mut deferred_motion = None;
     let mut outputs_available = Vec::new();
     let (mut received, mut sent) = (0u64, 0u64);
@@ -539,6 +540,7 @@ pub async fn run(
         );
         let mut stream_request = None;
         let mut bandwidth_ack_sent = false;
+        let mut controls_sent = 0;
         tokio::select! {
             _=heartbeat_timer.tick()=>{
                 c.send(&wire::HEARTBEAT).map_err(|_|anyhow::anyhow!("Phaze heartbeat send failed"))?;
@@ -546,7 +548,7 @@ pub async fn run(
             _=tick.tick()=>{
                 if c.next_timeout().is_some_and(|t|start.elapsed()>=t){c.on_timeout(start.elapsed());}
                 input.clear();
-                let running=sink.poll(selected_output,&mut input);
+                let running=sink.poll(selected_output,&mut input,&mut controls);
                 if !matches!(running,Ok(true)) {
                     release_and_close(&mut c,&mut reliable,&socket,peer).await;
                     return running.map(|_|());
@@ -587,6 +589,15 @@ pub async fn run(
                         }
                         for p in reliable.frame(&command.encode(output))? { send(&mut c,&p)?; }
                     }
+                }
+                for control in &controls {
+                    let Some(frame) = control.encode().filter(|frame| reliable.fits(frame.len(), 48)) else {
+                        break;
+                    };
+                    for packet in reliable.frame(&frame)? {
+                        send(&mut c, &packet)?;
+                    }
+                    controls_sent += 1;
                 }
             },
             r=socket.recv_from(&mut buf)=>{
@@ -634,6 +645,7 @@ pub async fn run(
             }
             for frame in frames {
                 match frame.first() {
+                    Some(1) if frame.len() == 5 => sink.host_flags(wire::be(&frame, 1)),
                     Some(2) => {
                         let outputs = wire::outputs(&frame[1..])?;
                         sink.outputs(&outputs);
@@ -674,14 +686,35 @@ pub async fn run(
                             sink.cursor_image(image);
                         }
                     }
+                    Some(14) => match crate::control::decode(&frame[1..]) {
+                        Some(crate::control::HostControl::Clipboard(text)) => {
+                            sink.clipboard_text(text)
+                        }
+                        Some(crate::control::HostControl::Peers(state)) => {
+                            sink.peer_state(own_cid, state)
+                        }
+                        Some(crate::control::HostControl::Removed(code)) => {
+                            bail!("Phaze host ended the session (reason {code})");
+                        }
+                        None => {}
+                    },
+                    Some(17) if frame.len() == 5 => sink.controller(wire::be(&frame, 1)),
                     _ => {}
                 }
+            }
+        }
+        if reliable.pending().count() < 48 && cursors.take_refresh_request() {
+            for packet in reliable.frame(&[20])? {
+                send(&mut c, &packet)?;
             }
         }
         reliable.retry_due(Instant::now(), |packet| send(&mut c, packet))?;
         let transmission_started = Instant::now();
         sent = sent.saturating_add(flush(&mut c, &socket, peer).await?);
         reliable.transmitted(transmission_started);
+        for (index, control) in controls.drain(..).enumerate() {
+            sink.control_sent(&control, index < controls_sent);
+        }
         if bandwidth_ack_sent && !bandwidth_reported {
             bandwidth_reported = true;
             sink.bandwidth_feedback_started();

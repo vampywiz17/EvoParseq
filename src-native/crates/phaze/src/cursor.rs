@@ -38,9 +38,22 @@ pub(crate) struct Cursors {
     shapes: VecDeque<Shape>,
     bytes: usize,
     active: Option<u32>,
+    refresh_pending: bool,
+    refresh_sent: bool,
 }
 
 impl Cursors {
+    pub fn take_refresh_request(&mut self) -> bool {
+        if !std::mem::take(&mut self.refresh_pending) {
+            return false;
+        }
+        self.refresh_sent = true;
+        self.shapes.clear();
+        self.bytes = 0;
+        self.active = None;
+        true
+    }
+
     pub fn receive(&mut self, frame: &[u8]) -> Option<CursorImage<'_>> {
         let (&opcode, body) = frame.split_first()?;
         let id = match opcode {
@@ -75,6 +88,8 @@ impl Cursors {
                     bytes: bytes.to_vec(),
                 });
                 self.active = None;
+                self.refresh_pending = false;
+                self.refresh_sent = false;
                 id
             }
             19 if body.len() == 4 => crate::wire::be(body, 0),
@@ -83,7 +98,10 @@ impl Cursors {
         if self.active == Some(id) {
             return None;
         }
-        let shape = self.shapes.iter().find(|shape| shape.id == id)?;
+        let Some(shape) = self.shapes.iter().find(|shape| shape.id == id) else {
+            self.refresh_pending = !self.refresh_sent;
+            return None;
+        };
         self.active = Some(id);
         Some(CursorImage {
             format: shape.format,
@@ -129,4 +147,10 @@ fn cursor_update_and_cached_reference_preserve_shape_and_hotspot() {
     assert_eq!(cursors.receive(&cached).unwrap().bytes, [0x80, 0x40]);
     assert!(cursors.receive(&cached).is_none());
     assert!(cursors.receive(&[19, 0, 0, 0, 9]).is_none());
+    assert!(cursors.take_refresh_request());
+    assert!(cursors.receive(&cached).is_none());
+    assert!(!cursors.take_refresh_request());
+    assert!(cursors.receive(&first).is_some());
+    assert!(cursors.receive(&[19, 0, 0, 0, 9]).is_none());
+    assert!(cursors.take_refresh_request());
 }

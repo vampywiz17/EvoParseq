@@ -13,6 +13,8 @@ use std::sync::{
 #[derive(Clone, Debug)]
 pub enum Event {
     NativeSession(Command),
+    #[cfg(windows)]
+    PhazeControl(evoparseq_phaze::ClientControl),
     Shortcut(crate::input::Shortcut),
     // Resize is a notification; the view supplies current dimensions.
     Size,
@@ -111,11 +113,56 @@ pub use crate::session_preferences::HostVideo;
 #[derive(Default)]
 pub struct State {
     pub phaze: AtomicBool,
+    #[cfg(windows)]
+    pub phaze_peers: Mutex<PhazePeers>,
     pub host_video: Mutex<HostVideo>,
     pub display_resolution: Mutex<crate::session_preferences::Resolution>,
     pub displays: Mutex<Displays>,
     pub video_pending: AtomicBool,
     pub hid_primary_ready: AtomicBool,
+}
+
+#[cfg(windows)]
+#[derive(Default)]
+pub struct PhazePeers {
+    pub local_id: Option<u32>,
+    pub controller: Option<u32>,
+    pub state: evoparseq_phaze::PeerState,
+}
+
+#[cfg(windows)]
+impl PhazePeers {
+    pub fn admin(&self) -> bool {
+        self.state
+            .guests
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|guest| Some(guest.id) == self.local_id && guest.admin)
+    }
+
+    pub fn allows(&self, control: &evoparseq_phaze::ClientControl) -> bool {
+        use evoparseq_phaze::ClientControl;
+        if !self.admin() {
+            return false;
+        }
+        let guests = self.state.guests.as_deref().unwrap_or_default();
+        match control {
+            ClientControl::SecureAttention => true,
+            ClientControl::SetControl(id) => *id == 0 || guests.iter().any(|guest| guest.id == *id),
+            ClientControl::RemoveGuest(id) => {
+                Some(*id) != self.local_id && guests.iter().any(|guest| guest.id == *id)
+            }
+            ClientControl::RespondToOffer { attempt_id, .. } => self
+                .state
+                .offers
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .any(|offer| offer.attempt_id == *attempt_id),
+            ClientControl::Clipboard(_) => false,
+        }
+    }
 }
 impl State {
     pub fn supported_video(&self, mut video: Video) -> Video {
@@ -140,6 +187,42 @@ impl State {
 mod tests {
     use super::*;
     use crate::native_core::profile::Resolution;
+
+    #[cfg(windows)]
+    #[test]
+    fn phaze_actions_require_current_admin_and_host_targets() {
+        use evoparseq_phaze::ClientControl;
+        let mut peers = PhazePeers {
+            local_id: Some(1),
+            state: serde_json::from_value(serde_json::json!({
+                "guests": [
+                    {"id":1,"user_name":"Admin","admin":true,"has_control":true},
+                    {"id":2,"user_name":"Guest","admin":false,"has_control":false}
+                ],
+                "offers":[{"attempt_id":"offer","user_name":"Pending"}]
+            }))
+            .unwrap(),
+            ..Default::default()
+        };
+        assert!(peers.allows(&ClientControl::SecureAttention));
+        assert!(peers.allows(&ClientControl::SetControl(2)));
+        assert!(peers.allows(&ClientControl::SetControl(0)));
+        assert!(!peers.allows(&ClientControl::SetControl(55)));
+        assert!(!peers.allows(&ClientControl::RemoveGuest(1)));
+        assert!(peers.allows(&ClientControl::RemoveGuest(2)));
+        assert!(peers.allows(&ClientControl::RespondToOffer {
+            attempt_id: "offer".into(),
+            accept: true
+        }));
+        assert!(!peers.allows(&ClientControl::RespondToOffer {
+            attempt_id: "old".into(),
+            accept: true
+        }));
+        peers.local_id = Some(2);
+        assert!(!peers.allows(&ClientControl::SecureAttention));
+        peers.local_id = None;
+        assert!(!peers.allows(&ClientControl::SetControl(1)));
+    }
 
     #[test]
     fn service_switch_keeps_local_controls_without_reusing_unsupported_host_options() {

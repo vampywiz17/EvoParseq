@@ -24,6 +24,7 @@ use windows_sys::Win32::{
 pub const OPEN: usize = 4600;
 pub const OPEN_SHORTCUT: usize = 4610;
 const ADD_SCREEN: usize = 4618;
+const PHAZE_GUESTS: usize = 4621;
 const SECONDARY_FULLSCREEN: usize = 4619;
 const SECONDARY_INPUT: usize = 4620;
 const APPLY: usize = 4602;
@@ -67,6 +68,7 @@ impl Status {
             Self::AttentionSent => 5,
             Self::AttentionFailed => 6,
             Self::RequestSent => 7,
+            Self::ControlSent => 8,
         }
     }
     fn from_message(value: usize) -> Self {
@@ -78,6 +80,7 @@ impl Status {
             5 => Self::AttentionSent,
             6 => Self::AttentionFailed,
             7 => Self::RequestSent,
+            8 => Self::ControlSent,
             _ => Self::Failed,
         }
     }
@@ -250,7 +253,19 @@ fn post_displays(window: &crate::window::Window, selected: bool) {
 }
 
 unsafe fn update_metrics(hwnd: HWND, panel: &mut Panel) {
-    let sample = (&*panel.window)
+    let window = &*panel.window;
+    if window.session.phaze.load(Ordering::Acquire) {
+        let peers = window
+            .session
+            .phaze_peers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        EnableWindow(
+            GetDlgItem(hwnd, SECURE_ATTENTION as i32),
+            i32::from(peers.admin()),
+        );
+    }
+    let sample = window
         .stats
         .read()
         .filter(|s| s.at.elapsed() < std::time::Duration::from_secs(3));
@@ -264,6 +279,114 @@ unsafe fn update_metrics(hwnd: HWND, panel: &mut Panel) {
         wide(&metrics(sample.as_ref(), &values)).as_ptr(),
     );
     update_timing_hint(hwnd, panel);
+}
+
+unsafe fn phaze_guests_menu(hwnd: HWND, window: &crate::window::Window) {
+    use evoparseq_phaze::ClientControl;
+    let menu = CreatePopupMenu();
+    if menu.is_null() {
+        return;
+    }
+    let mut items = Vec::new();
+    {
+        let peers = window
+            .session
+            .phaze_peers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut item = |label: &str, action: Option<ClientControl>| {
+            items.push(action);
+            AppendMenuW(
+                menu,
+                MF_STRING
+                    | if items.last().is_some_and(Option::is_some) {
+                        0
+                    } else {
+                        MF_GRAYED
+                    },
+                items.len(),
+                wide(label).as_ptr(),
+            );
+        };
+        let display_name = |name: &str| {
+            name.chars()
+                .filter(|ch| !ch.is_control())
+                .take(64)
+                .collect::<String>()
+                .replace('&', "&&")
+        };
+        let admin = peers.admin();
+        for guest in peers.state.guests.as_deref().unwrap_or_default() {
+            let name = display_name(&guest.user_name);
+            let active = peers
+                .controller
+                .map_or(guest.has_control, |id| id == guest.id);
+            item(
+                &if active {
+                    format!("{name} (in control)")
+                } else {
+                    name.clone()
+                },
+                None,
+            );
+            if admin {
+                item(
+                    if active {
+                        "Revoke control"
+                    } else {
+                        "Give control"
+                    },
+                    Some(ClientControl::SetControl(if active { 0 } else { guest.id })),
+                );
+                if Some(guest.id) != peers.local_id {
+                    item("Remove guest", Some(ClientControl::RemoveGuest(guest.id)));
+                }
+            }
+        }
+        for offer in peers.state.offers.as_deref().unwrap_or_default() {
+            item(
+                &format!("Join request from {}", display_name(&offer.user_name)),
+                None,
+            );
+            if admin {
+                for (label, accept) in [("Allow", true), ("Decline", false)] {
+                    item(
+                        label,
+                        Some(ClientControl::RespondToOffer {
+                            attempt_id: offer.attempt_id.clone(),
+                            accept,
+                        }),
+                    );
+                }
+            }
+        }
+        if peers.state.guests.as_ref().is_none_or(Vec::is_empty)
+            && peers.state.offers.as_ref().is_none_or(Vec::is_empty)
+        {
+            item("No guest information", None);
+        }
+    }
+    let mut point = POINT::default();
+    GetCursorPos(&mut point);
+    let selected = TrackPopupMenu(
+        menu,
+        TPM_RETURNCMD | TPM_NONOTIFY,
+        point.x,
+        point.y,
+        0,
+        hwnd,
+        null(),
+    );
+    DestroyMenu(menu);
+    if let Some(Some(action)) = usize::try_from(selected)
+        .ok()
+        .and_then(|id| id.checked_sub(1))
+        .and_then(|index| items.into_iter().nth(index))
+    {
+        window
+            .events
+            .push(crate::window::Event::PhazeControl(action));
+    }
 }
 unsafe fn update_timing_hint(hwnd: HWND, panel: &Panel) {
     let window = &*panel.window;
@@ -467,6 +590,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             WM_COMMAND => {
                 match wp & 0xffff {
                     ADD_SCREEN => super::multi_display::add_menu(&*p.window),
+                    PHAZE_GUESTS => phaze_guests_menu(hwnd, &*p.window),
                     SECONDARY_FULLSCREEN => {
                         let window = &*p.window;
                         window.set_fullscreen(!window.native_fullscreen());
@@ -903,12 +1027,13 @@ pub unsafe fn toggle(
         0,
         [24, 199, 240, 44],
     );
+    let phaze = window.session.phaze.load(Ordering::Acquire);
     control(
         hwnd,
         p,
         "BUTTON",
-        "Add screen",
-        ADD_SCREEN,
+        if phaze { "Guests" } else { "Add screen" },
+        if phaze { PHAZE_GUESTS } else { ADD_SCREEN },
         BS_OWNERDRAW as u32 | WS_TABSTOP,
         [274, 208, 120, 28],
     );
@@ -1149,6 +1274,7 @@ mod tests {
             (5, Status::AttentionSent),
             (6, Status::AttentionFailed),
             (7, Status::RequestSent),
+            (8, Status::ControlSent),
         ] {
             assert_eq!(status.message(), code);
             assert_eq!(Status::from_message(code), status);

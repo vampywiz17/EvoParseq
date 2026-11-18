@@ -33,6 +33,8 @@ pub enum Status {
     RequestSent,
     AttentionSent,
     AttentionFailed,
+    #[cfg(windows)]
+    ControlSent,
 }
 
 impl Status {
@@ -45,6 +47,8 @@ impl Status {
             Self::RequestSent => "Video settings request sent. See Connection stats → Video.",
             Self::AttentionSent => "Ctrl+Alt+Del requested from the host.",
             Self::AttentionFailed => "Could not send Ctrl+Alt+Del. See the event log.",
+            #[cfg(windows)]
+            Self::ControlSent => "Request sent to the host.",
         }
     }
 }

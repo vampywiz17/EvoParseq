@@ -402,7 +402,10 @@ impl Displays {
                         screen.window.toggle_input_detached();
                         screen.window.native_toggle_overlay();
                     }
-                    Event::NativeSession(_) | Event::Shortcut(_) | Event::Clipboard => {}
+                    Event::NativeSession(_)
+                    | Event::PhazeControl(_)
+                    | Event::Shortcut(_)
+                    | Event::Clipboard => {}
                     Event::Focus(false) if self.owns_input() => {
                         *screen.input.lock().unwrap_or_else(|e| e.into_inner()) =
                             Default::default();
