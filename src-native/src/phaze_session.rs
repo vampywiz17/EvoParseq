@@ -108,8 +108,13 @@ impl Stream {
         self.pending.take()
     }
 
-    pub fn request_sent(&mut self, config: VideoConfig) {
+    pub fn request_sent(&mut self, output: u32, config: VideoConfig) {
         self.sent = Some(config);
+        crate::event_log::record(
+            "INFO",
+            "phaze_stream_request_sent",
+            serde_json::json!({"output":output,"maximum_mbps":config.mbps,"fps":config.fps}),
+        );
     }
 
     pub fn sent(&self) -> Option<VideoConfig> {
@@ -144,6 +149,14 @@ impl Stream {
     pub fn payload_bytes(&self) -> Option<u64> {
         self.payload_bytes
     }
+}
+
+pub fn log_bandwidth_feedback(lower_rate: f64, upper_rate: f64) {
+    crate::event_log::record(
+        "INFO",
+        "phaze_bandwidth_feedback_started",
+        serde_json::json!({"lower_bytes_per_second":lower_rate,"upper_bytes_per_second":upper_rate}),
+    );
 }
 
 #[derive(Default)]

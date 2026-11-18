@@ -103,6 +103,17 @@ impl VideoConfig {
         Ok(b)
     }
 }
+
+pub(crate) fn ack_bandwidth(ack: &[u8]) -> Option<(f64, f64)> {
+    if ack.len() != 50 || ack[0] != 4 {
+        return None;
+    }
+    Some((
+        f64::from_le_bytes(ack[34..42].try_into().unwrap()),
+        f64::from_le_bytes(ack[42..50].try_into().unwrap()),
+    ))
+}
+
 pub fn hello(raw_audio: bool) -> Vec<u8> {
     let mut b = vec![18];
     b.extend(u32::from(raw_audio).to_be_bytes());
@@ -548,8 +559,8 @@ fn a_measured_train_extends_ack_without_advancing_sequence_for_probes() -> Resul
             assert_eq!(ack.len(), 50);
             assert_eq!(ack[0], 4);
             assert_eq!(&ack[10..18], &5u64.to_le_bytes());
-            for field in [&ack[34..42], &ack[42..50]] {
-                let estimate = f64::from_le_bytes(field.try_into().unwrap());
+            let (lower_rate, upper_rate) = ack_bandwidth(&ack).unwrap();
+            for estimate in [lower_rate, upper_rate] {
                 assert!((estimate - 5_920_000.0).abs() < 0.01);
             }
             sender.receive(&ack)?;

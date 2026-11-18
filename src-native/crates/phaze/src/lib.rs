@@ -216,7 +216,8 @@ pub trait Sink {
     fn cursor_visibility(&mut self, _visible: bool) {}
     fn cursor_output_changed(&mut self) {}
     fn cursor_image(&mut self, _image: CursorImage<'_>) {}
-    fn bandwidth_feedback_started(&mut self) {}
+    /// The carrier accepted the first bandwidth feedback ACK. Rates are in bytes per second.
+    fn bandwidth_feedback_started(&mut self, _lower_rate: f64, _upper_rate: f64) {}
     fn peer_state(&mut self, _local_id: u32, _state: PeerState) {}
     fn host_flags(&mut self, _flags: u32) {}
     fn controller(&mut self, _id: u32) {}

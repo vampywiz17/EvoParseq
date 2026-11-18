@@ -1,7 +1,7 @@
 //! MediaCodec/AAudio/D-pad platform binding for the shared Phaze session.
 use crate::{account, audio_android, phaze_client, stream::Request};
 use anyhow::Result;
-use evoparseq_phaze::{ClientControl, Input, VideoConfig};
+use evoparseq_phaze::{ClientControl, Input};
 use serde_json::{json, Value};
 use std::{
     collections::VecDeque,
@@ -28,7 +28,7 @@ pub fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result
     let pcm = crate::audio_stream::DecodedPcm::stereo(prefs.audio.maximum());
     let receiver = pcm.receiver();
     audio.attach(receiver.clone())?;
-    let options = prefs.host_request()?;
+    let config = prefs.phaze_video_config()?;
     let mut client = phaze_client::Client::new(
         Adapter {
             stop,
@@ -45,14 +45,10 @@ pub fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result
             started: Instant::now(),
             sampled: Instant::now(),
             received: 0,
+            video_payload_bytes: 0,
             frames: 0,
         },
-        VideoConfig {
-            hevc: prefs.video > 0,
-            chroma_444: false,
-            mbps: options.bandwidth_mbps.unwrap_or(20),
-            fps: options.fps.unwrap_or(60),
-        },
+        config,
         pcm,
         prefs.audio.pcm,
     );
@@ -95,6 +91,7 @@ struct Adapter<'a> {
     started: Instant,
     sampled: Instant,
     received: u64,
+    video_payload_bytes: u64,
     frames: u64,
 }
 
@@ -159,7 +156,7 @@ impl phaze_client::Platform for Adapter<'_> {
                 / 1_000_000.;
             let fps = video.submitted.saturating_sub(self.frames) as f64 / elapsed.as_secs_f64();
             let rtt = state.rtt.map(|rtt| rtt.as_secs_f64() * 1000.);
-            let overlay = crate::overlay::metrics(
+            let mut overlay = crate::overlay::metrics(
                 Some(fps),
                 rtt,
                 rate,
@@ -168,6 +165,19 @@ impl phaze_client::Platform for Adapter<'_> {
                 video.height,
                 video.depth,
             );
+            let payload_bytes = state.stream.payload_bytes();
+            let payload_mbps = payload_bytes.map(|bytes| {
+                bytes.saturating_sub(self.video_payload_bytes) as f64 * 8.0
+                    / elapsed.as_secs_f64()
+                    / 1_000_000.0
+            });
+            if let Some(sent) = state.stream.sent() {
+                overlay["video_request"] =
+                    format!("Requested max {} Mbit/s · {} FPS", sent.mbps, sent.fps).into();
+            }
+            if let Some(mbps) = payload_mbps {
+                overlay["video_payload_rate"] = format!("{mbps:.1} Mbit/s video").into();
+            }
             *self.status.lock().unwrap_or_else(|e| e.into_inner()) = json!({
                 "state": if video.submitted > 0 { "Streaming" } else { "Connecting…" },
                 "ended": false, "video": video, "audio": self.receiver.snapshot(),
@@ -176,6 +186,7 @@ impl phaze_client::Platform for Adapter<'_> {
             });
             self.sampled = now;
             self.received = state.received;
+            self.video_payload_bytes = payload_bytes.unwrap_or(0);
             self.frames = video.submitted;
         }
         Ok(true)

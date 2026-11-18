@@ -163,6 +163,12 @@ internal fun StreamScreen(model: TvModel, host: Host, close: () -> Unit) {
                     color=Color.White,fontSize=13.sp,maxLines=1,overflow=TextOverflow.Ellipsis)
             }
             if (metrics != null) Text(metrics.optString("format"),color=Color(0xFFA8BED7),fontSize=12.sp,lineHeight=16.sp)
+            if (metrics?.has("video_request") == true) {
+                val request = metrics.getString("video_request")
+                val rate = metrics.optString("video_payload_rate")
+                Text(if (rate.isEmpty()) request else "$request | $rate",
+                    color=Color(0xFFA8BED7),fontSize=12.sp,lineHeight=16.sp)
+            }
             val displayHz = activity.window.decorView.display?.refreshRate
             Text("Display ${displayHz?.let { String.format(java.util.Locale.ROOT, "%.2f", it) } ?: "N/A"} Hz | Catch-up skips ${video?.optLong("skipped", 0) ?: 0}",
                 color=Color(0xFFA8BED7),fontSize=12.sp,lineHeight=16.sp)

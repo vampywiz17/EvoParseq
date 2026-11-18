@@ -205,12 +205,8 @@ impl evoparseq_phaze::Sink for View {
     fn rtt(&mut self, elapsed: Option<Duration>) {
         self.rtt = elapsed;
     }
-    fn bandwidth_feedback_started(&mut self) {
-        crate::event_log::record(
-            "INFO",
-            "phaze_bandwidth_feedback_started",
-            serde_json::json!({}),
-        );
+    fn bandwidth_feedback_started(&mut self, lower_rate: f64, upper_rate: f64) {
+        crate::phaze_session::log_bandwidth_feedback(lower_rate, upper_rate);
     }
     fn cursor_visibility(&mut self, visible: bool) {
         self.window
@@ -246,12 +242,7 @@ impl evoparseq_phaze::Sink for View {
     }
     fn stream_request_sent(&mut self, output: u32, config: evoparseq_phaze::VideoConfig) {
         use super::session_model::{Notification, Status, View as _};
-        self.stream.request_sent(config);
-        crate::event_log::record(
-            "INFO",
-            "phaze_stream_request_sent",
-            serde_json::json!({"output":output,"maximum_mbps":config.mbps,"fps":config.fps}),
-        );
+        self.stream.request_sent(output, config);
         self.window
             .session
             .displays
@@ -386,7 +377,7 @@ impl evoparseq_phaze::Sink for View {
             match event {
                 Event::Shortcut(crate::input::Shortcut::Disconnect)
                 | Event::NativeSession(super::session_model::Command::Disconnect) => {
-                    return Ok(false)
+                    return Ok(false);
                 }
                 Event::Shortcut(crate::input::Shortcut::Fullscreen) => {
                     self.window.set_fullscreen(!self.window.native_fullscreen())
@@ -901,7 +892,7 @@ mod tests {
 
             use evoparseq_phaze::{ClientControl, CursorFormat, CursorImage};
             view.host_flags(16);
-            view.bandwidth_feedback_started();
+            view.bandwidth_feedback_started(750_000.0, 875_000.0);
             view.video_recovery_sent(8);
             view.cursor_visibility(false);
             view.cursor_output_changed();

@@ -211,11 +211,38 @@ impl Preferences {
         }
         .parse()
     }
+
+    #[cfg(any(target_os = "android", test))]
+    pub fn phaze_video_config(&self) -> Result<evoparseq_phaze::VideoConfig> {
+        let video = self.host_request()?;
+        Ok(evoparseq_phaze::VideoConfig {
+            hevc: self.video > 0,
+            chroma_444: false,
+            mbps: video.bandwidth_mbps.unwrap_or(20),
+            fps: video.fps.unwrap_or(60),
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_tv_limits_are_encoded_in_the_phaze_stream_request() -> Result<()> {
+        let mut saved = Preferences::default();
+        saved.select(
+            "bandwidth",
+            BANDWIDTH_CHOICES.iter().position(|v| *v == "50").unwrap(),
+        )?;
+        saved.select("fps", FPS_CHOICES.iter().position(|v| *v == "120").unwrap())?;
+        let restored = Preferences::parse(&serde_json::to_string(&saved)?)?;
+        let request = restored.phaze_video_config()?.request(7)?;
+        assert_eq!(request[0], 3);
+        assert_eq!(&request[9..13], &50u32.to_be_bytes());
+        assert_eq!(&request[13..17], &120u32.to_be_bytes());
+        Ok(())
+    }
 
     #[test]
     fn phaze_uses_tv_presets_without_exposing_unavailable_parsec_modes() {

@@ -107,8 +107,11 @@ impl<P: Platform> Sink for Client<P> {
         self.platform.take_recovery()
     }
     fn stream_request_sent(&mut self, output: u32, config: VideoConfig) {
-        self.state.stream.request_sent(config);
+        self.state.stream.request_sent(output, config);
         self.platform.stream_request_sent(output, config);
+    }
+    fn bandwidth_feedback_started(&mut self, lower_rate: f64, upper_rate: f64) {
+        phaze_session::log_bandwidth_feedback(lower_rate, upper_rate);
     }
     fn stage(&mut self, stage: &'static str) {
         self.platform.stage(stage);
