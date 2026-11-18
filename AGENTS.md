@@ -16,6 +16,12 @@ The user's standing requirement is to keep current and future development standa
 
 - BUD is authorized only as an explicit alternative. WebRTC remains the default. BUD integration must not alter the existing WebRTC connection/signaling, ICE/STUN/TURN selection, transport timers, SCTP reliability/ordering or settings behavior. Isolate the BUD adapter, credentials and lifecycle; use only deliberate, reviewed common interfaces. A BUD failure must not silently fall back or change the selected transport. Preserve the working WebRTC TURN/TCP and TURN/TLS routes, especially for restricted networks. Validate both transports independently before exposing a usable BUD option.
 
+## Pull requests and Gitar OSS review
+
+- Keep one open GitHub pull request into `dev` for each active feature branch. Use `codex/phaze-protocol` → `dev` for Phaze and push follow-up changes to the same feature branch.
+- Keep an open `dev` → `main` pull request for the next stable release. Merge it only with explicit release approval after the required checks pass. Open the next pull request when new release changes are available.
+- Use Gitar OSS for review and suggestions only. Keep automatic fixes and other Gitar write automation disabled. Leave auto-apply opt-ins such as `gitar-managed` off the pull requests and do not ask Gitar to apply fixes. Codex assesses the findings, implements warranted fixes, and verifies them in GitHub CI.
+
 ## UI and platform boundaries for future development
 
 ### Desktop GUI parity (standing user requirement)
