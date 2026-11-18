@@ -32,6 +32,7 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_signIn(
     email: JString,
     password: JString,
     tfa: JString,
+    phaze: jni::sys::jboolean,
 ) -> jstring {
     let result = (|| -> anyhow::Result<Value> {
         let login = account::Login {
@@ -43,7 +44,12 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_signIn(
             .lock()
             .map_err(|_| anyhow::anyhow!("Account unavailable."))?;
         anyhow::ensure!(slot.is_none(), "Sign out before signing in again.");
-        *slot = Some(Arc::new(account::login(&login)?));
+        let service = if phaze != 0 {
+            account::Service::Phaze
+        } else {
+            account::Service::Parsec
+        };
+        *slot = Some(Arc::new(account::login_service(&login, service)?));
         Ok(json!({"ok":true}))
     })();
     reply(
@@ -65,7 +71,8 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_rememberSession(
         let session = slot
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sign in first"))?;
-        let token = env.byte_array_from_slice(session.token().as_bytes())?;
+        let saved = session.saved_token();
+        let token = env.byte_array_from_slice(saved.as_bytes())?;
         env.call_method(&vault, "save", "([B)V", &[JValue::Object(token.as_ref())])?;
         session.remembered();
         Ok(json!({"ok":true}))
@@ -85,11 +92,11 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_restoreSession(
 ) -> jstring {
     let result = (|| -> anyhow::Result<Value> {
         anyhow::ensure!(
-            env.get_array_length(&token)? <= 4096,
+            env.get_array_length(&token)? <= 4102,
             "Invalid saved sign-in"
         );
         let bytes = Zeroizing::new(env.convert_byte_array(&token)?);
-        let session = Session::from_token(std::str::from_utf8(&bytes)?)?;
+        let session = Session::from_saved(std::str::from_utf8(&bytes)?)?;
         let mut slot = SESSION
             .lock()
             .map_err(|_| anyhow::anyhow!("Account unavailable"))?;

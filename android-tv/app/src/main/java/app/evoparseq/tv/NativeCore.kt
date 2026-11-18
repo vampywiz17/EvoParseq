@@ -7,7 +7,7 @@ internal object NativeCore {
     external fun flushDiagnostics(): String
     external fun checkUpdate(installed: String, prerelease: Boolean): String
     external fun downloadUpdate(destination: String): String
-    external fun signIn(email: String, password: String, tfa: String): String
+    external fun signIn(email: String, password: String, tfa: String, phaze: Boolean): String
     external fun rememberSession(vault: SessionVault): String
     external fun restoreSession(token: ByteArray): String
     external fun startLocalSetup(ip: String): String

@@ -188,6 +188,52 @@ pub struct NativeReceiver {
     state: Arc<Mutex<State>>,
 }
 
+/// Input for audio that the session protocol already decoded.
+#[cfg(not(windows))]
+pub struct DecodedPcm {
+    receiver: NativeReceiver,
+    budget: usize,
+}
+
+#[cfg(not(windows))]
+impl DecodedPcm {
+    pub fn stereo(maximum_ms: u32) -> Self {
+        Self {
+            receiver: NativeReceiver {
+                state: Arc::new(Mutex::new(State::default())),
+            },
+            budget: maximum_ms.clamp(1, 500) as usize * 96,
+        }
+    }
+
+    pub fn receiver(&self) -> NativeReceiver {
+        self.receiver.clone()
+    }
+
+    pub fn submit(&self, samples: &[i16], codec: &'static str) {
+        if samples.is_empty() || samples.len() > PCM_SAMPLES || !samples.len().is_multiple_of(2) {
+            return;
+        }
+        let mut state = self
+            .receiver
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut buffer = state
+            .callback
+            .as_mut()
+            .and_then(|callback| callback.recycled())
+            .or_else(|| state.free_pcm.pop())
+            .unwrap_or_default();
+        buffer.clear();
+        buffer.extend_from_slice(samples);
+        state.report.layout = Some(Layout::STEREO);
+        state.report.codec = Some(codec);
+        state.report.packets_decoded += 1;
+        stage_pcm(&mut state, buffer, self.budget);
+    }
+}
+
 fn snapshot(shared: &Mutex<State>) -> Snapshot {
     let state = shared.lock().unwrap_or_else(|e| e.into_inner());
     let mut report = state.report.clone();

@@ -1,5 +1,5 @@
 //! Windows adapter only: independent Rust protocol -> existing media and input backends.
-use super::account::Session;
+use super::account::{phaze_runtime as block_on, Session};
 #[cfg(test)]
 #[path = "phaze_turn.rs"]
 mod turn_research;
@@ -9,20 +9,13 @@ use crate::{
     phaze_session::{self, normalized, Stream},
     window::{Event, Window},
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::{
     collections::VecDeque,
     sync::{atomic::Ordering, Arc},
     time::{Duration, Instant},
 };
 
-pub(super) fn block_on<T>(future: impl std::future::Future<Output = Result<T>>) -> Result<T> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("Could not initialize Phaze runtime")?
-        .block_on(future)
-}
 struct View {
     window: Arc<Window>,
     manager: Arc<Manager>,
@@ -708,6 +701,7 @@ fn translate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
     use evoparseq_phaze::{Input, Keyboard};
     #[test]
     fn offline_session_controls_reuse_preferences_and_validate_advertised_outputs() -> Result<()> {

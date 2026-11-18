@@ -150,8 +150,8 @@ internal class TvModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun signIn(email: String, password: String, code: String) = request {
-        val reply = JSONObject(NativeCore.signIn(email, password, code))
+    fun signIn(email: String, password: String, code: String, phaze: Boolean) = request {
+        val reply = JSONObject(NativeCore.signIn(email, password, code, phaze))
         val ok = reply.optBoolean("ok")
         val feedback = if (ok) JSONObject(NativeCore.rememberSession(vault)).optString("error") else reply.optString("error")
         return@request { signedIn = ok; message = feedback }

@@ -22,6 +22,14 @@ impl Service {
         }
     }
 }
+pub fn phaze_runtime<T>(future: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("Could not initialize Phaze runtime")?
+        .block_on(future)
+}
+
 pub struct Login {
     pub email: String,
     pub password: zeroize::Zeroizing<String>,
@@ -74,9 +82,8 @@ impl Session {
     pub fn revoke(&self) {
         self.remembered();
         if self.service == Service::Phaze {
-            #[cfg(windows)]
             {
-                let result = super::phaze::block_on(async {
+                let result = phaze_runtime(async {
                     evoparseq_phaze::Session::from_token(self.token())?
                         .revoke()
                         .await
@@ -187,9 +194,8 @@ pub fn login_service(login: &Login, service: Service) -> Result<Session> {
     if service == Service::Parsec {
         return self::login(login);
     }
-    #[cfg(windows)]
     {
-        let remote = super::phaze::block_on(evoparseq_phaze::login(
+        let remote = phaze_runtime(evoparseq_phaze::login(
             &login.email,
             &login.password,
             &login.tfa,
@@ -201,8 +207,6 @@ pub fn login_service(login: &Login, service: Service) -> Result<Session> {
             .store(true, std::sync::atomic::Ordering::Release);
         Ok(session)
     }
-    #[cfg(not(windows))]
-    anyhow::bail!("Phaze is currently available only in the Windows client.")
 }
 pub fn login(login: &Login) -> Result<Session> {
     ensure!(
@@ -325,9 +329,8 @@ impl std::error::Error for ExpiredSession {}
 
 pub fn hosts(session: &Session) -> Result<Vec<Host>> {
     if session.service() == Service::Phaze {
-        #[cfg(windows)]
         {
-            return super::phaze::block_on(evoparseq_phaze::hosts(
+            return phaze_runtime(evoparseq_phaze::hosts(
                 &evoparseq_phaze::Session::from_token(session.token())?,
             ))
             .map_err(|error| {
@@ -352,8 +355,6 @@ pub fn hosts(session: &Session) -> Result<Vec<Host>> {
                     .collect()
             });
         }
-        #[cfg(not(windows))]
-        anyhow::bail!("Phaze is currently available only in the Windows client.");
     }
     // Audited pinned core's desktop discovery endpoint; no credentials in URL.
     let client = reqwest::blocking::Client::builder()

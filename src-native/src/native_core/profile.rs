@@ -39,10 +39,6 @@ impl Profile {
         let raw = STANDARD.decode(&self.encrypted_session)?;
         let plain = zeroize::Zeroizing::new(crate::secure_storage::protect(&raw, false)?);
         let session = super::account::Session::from_saved(std::str::from_utf8(&plain)?)?;
-        #[cfg(not(windows))]
-        if session.service() == super::account::Service::Phaze {
-            return Ok(None);
-        }
         Ok((session.service() == self.service).then_some(session))
     }
     pub fn encrypted(token: &str) -> Result<String> {
@@ -52,8 +48,10 @@ impl Profile {
 
 impl super::sign_in::SessionStore for crate::connection_settings::Manager {
     fn save(&self, email: &str, token: &str) -> Result<()> {
+        let service = super::account::Session::from_saved(token)?.service();
         let blob = Profile::encrypted(token)?;
         self.update_native(|profile| {
+            profile.service = service;
             profile.email = email.into();
             profile.encrypted_session = blob;
         })

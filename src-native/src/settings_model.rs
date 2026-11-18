@@ -202,7 +202,7 @@ impl Form {
     }
     pub fn audio_format_labels(&self) -> [&'static str; 2] {
         if self.phaze {
-            ["AAC-LC", "Uncompressed PCM"]
+            crate::app_style::settings::PHAZE_AUDIO_FORMATS
         } else {
             BinaryChoice::AudioCodec.labels()
         }
@@ -216,11 +216,7 @@ impl Form {
     }
     pub fn route_labels(&self) -> &'static [&'static str] {
         if self.phaze {
-            &[
-                "Direct UDP (default)",
-                "Direct UDP (LAN / VPN)",
-                "Force TURN relay",
-            ]
+            &crate::app_style::settings::PHAZE_ROUTES
         } else {
             &RouteMode::LABELS
         }

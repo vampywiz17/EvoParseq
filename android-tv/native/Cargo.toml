@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2021"
 publish = false
 license = "MIT"
-rust-version = "1.90"
+rust-version = "1.95"
 
 # Shared sources contain Windows-only feature-gated BUD/HID helpers. Accept
 # the cfg name without enabling those helpers; Android uses its own BUD adapter.
@@ -15,6 +15,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("bud", "de
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+evoparseq-phaze = { path = "../../src-native/crates/phaze" }
 evoparseq-bud = { path = "../../src-native/crates/bud" }
 anyhow = "1"
 serde_json = "1.0.154"

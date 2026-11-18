@@ -163,11 +163,12 @@ private fun TvApp(model: TvModel) {
 @Composable
 private fun SignIn(model: TvModel, first: FocusRequester, settings: () -> Unit) {
     var email by rememberSaveable { mutableStateOf("") }
+    var phaze by rememberSaveable { mutableStateOf(false) }
     // Secrets deliberately do not use rememberSaveable / SavedStateHandle.
     var password by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize()) {
-        Text("Sign in to your Parsec account", style = MaterialTheme.typography.headlineSmall)
+        Text(if (phaze) "Sign in to your Phaze account" else "Sign in to your Parsec account", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
         // The heading stays above the scroll viewport. D-pad/IME focus may move
         // the form, but cannot leave a half-clipped heading below the app header.
@@ -175,6 +176,9 @@ private fun SignIn(model: TvModel, first: FocusRequester, settings: () -> Unit) 
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Independent client · not affiliated with Parsec/Unity.\n" +
                 "Sign-in is encrypted on this TV. Your password and two-factor code are not saved.")
+            Button(onClick = { phaze = !phaze }, enabled = !model.busy) {
+                Text(if (phaze) "Service: Phaze" else "Service: Parsec")
+            }
             AccountField("Email", email, { if (it.length <= 320) email = it },
                 KeyboardType.Email, modifier = Modifier.focusRequester(first))
             AccountField("Password", password, { if (it.length <= 4096) password = it },
@@ -183,7 +187,7 @@ private fun SignIn(model: TvModel, first: FocusRequester, settings: () -> Unit) 
                 KeyboardType.NumberPassword, secret = true, done = true)
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Button(onClick = {
-                    model.signIn(email, password, code)
+                    model.signIn(email, password, code, phaze)
                     // Keep the password only in this unsaved form while retrying an
                     // expired 2FA code. Leaving the form/signing in drops the fields.
                     code = ""

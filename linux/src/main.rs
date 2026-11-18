@@ -95,6 +95,11 @@ mod native_loop;
 pub mod native_wire;
 #[cfg(test)]
 mod network_tests;
+#[path = "../../src-native/src/phaze_client.rs"]
+mod phaze_client;
+mod phaze_linux;
+#[path = "../../src-native/src/phaze_session.rs"]
+pub(crate) mod phaze_session;
 #[path = "../../src-native/src/native_core/picker.rs"]
 mod picker;
 mod playback;
@@ -124,7 +129,7 @@ use zeroize::Zeroizing;
 
 enum Command {
     Restore,
-    SignIn(account::Login, bool),
+    SignIn(account::Login, account::Service, bool),
     Refresh,
     SignOut,
     Stream(
@@ -153,6 +158,7 @@ struct Desktop {
     replies: mpsc::Receiver<Reply>,
     settings: Arc<connection_settings::Manager>,
     remember_login: bool,
+    service: account::Service,
     email: String,
     password: Zeroizing<String>,
     tfa: Zeroizing<String>,
@@ -195,7 +201,7 @@ fn account_worker(
             Command::Restore => settings.view().0.native_core.session().map(|saved| {
                 form.session = saved.map(Arc::new);
             }).map_err(|_| anyhow::anyhow!("Could not unlock the saved sign-in. Sign in again or unlock your desktop keyring.")),
-            Command::SignIn(login, remember) => account::login(&login).map(|new_session| {
+            Command::SignIn(login, service, remember) => account::login_service(&login, service).map(|new_session| {
                 form.email = login.email.trim().into();
                 form.remember_login = remember;
                 form.accept(Arc::new(new_session), settings.as_ref(), |reason| {
@@ -623,6 +629,7 @@ fn main() -> anyhow::Result<()> {
                         replies,
                         settings: settings.clone(),
                         remember_login: restore,
+                        service: saved.native_core.service,
                         email: saved.native_core.email.clone(),
                         password: Zeroizing::default(),
                         tfa: Zeroizing::default(),

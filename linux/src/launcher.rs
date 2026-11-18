@@ -64,6 +64,12 @@ impl Desktop {
                 },
                 std::sync::atomic::Ordering::Release,
             );
+            let phaze = self.service == account::Service::Phaze;
+            let mode = if phaze {
+                connection::Mode::Phaze
+            } else {
+                self.transport
+            };
             let hevc = saved.prefer_hevc && context.hevc;
             self.decoder = Some(crate::video_vulkan::Decoder::new(
                 context,
@@ -72,7 +78,9 @@ impl Desktop {
             let playback = crate::playback::Playback::new(ctx.clone());
             playback.set_hevc(hevc);
             playback.set_ten_bit(
-                hevc && saved.experimental_ten_bit
+                !phaze
+                    && hevc
+                    && saved.experimental_ten_bit
                     && self.video_context.as_ref().is_some_and(|c| c.hevc10),
             );
             self.desktop_input.session(&playback);
@@ -86,7 +94,7 @@ impl Desktop {
                 .set_hidden(self.settings.native_session_button_hidden());
             self.fitted_stream = None;
             self.playback = Some(playback.clone());
-            let telemetry = crate::telemetry::Session::new(self.transport);
+            let telemetry = crate::telemetry::Session::new(mode);
             telemetry
                 .displays
                 .hevc
@@ -105,7 +113,7 @@ impl Desktop {
                 Some(self.settings.clone());
             self.telemetry = Some(telemetry.clone());
             self.metrics = Default::default();
-            self.send(Command::Stream(peer, self.transport, playback, telemetry));
+            self.send(Command::Stream(peer, mode, playback, telemetry));
         }
     }
 
@@ -227,6 +235,37 @@ impl Desktop {
                             }
                         }
                     } else {
+                        label(
+                            ui,
+                            r(d::SERVICE_LABEL),
+                            "Service",
+                            d::BODY as f32,
+                            color(app_style::TEXT),
+                        );
+                        ui.scope_builder(
+                            egui::UiBuilder::new().max_rect(r(d::SERVICE_CHOICE)),
+                            |ui| {
+                                egui::ComboBox::from_id_salt("service")
+                                    .width(446.)
+                                    .selected_text(if self.service == account::Service::Phaze {
+                                        "Phaze"
+                                    } else {
+                                        "Parsec"
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut self.service,
+                                            account::Service::Parsec,
+                                            "Parsec",
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.service,
+                                            account::Service::Phaze,
+                                            "Phaze",
+                                        );
+                                    });
+                            },
+                        );
                         let mut submit = false;
                         for (i, text) in app_style::LOGIN_FIELDS.iter().enumerate() {
                             label(
@@ -261,7 +300,7 @@ impl Desktop {
                                 password: std::mem::take(&mut self.password),
                                 tfa: std::mem::take(&mut self.tfa),
                             };
-                            self.send(Command::SignIn(login, self.remember_login));
+                            self.send(Command::SignIn(login, self.service, self.remember_login));
                         }
                     }
                 });
@@ -319,6 +358,7 @@ mod tests {
                 std::env::temp_dir().join("evoparseq-ui-fixture-absent.json"),
             ),
             remember_login: false,
+            service: account::Service::Parsec,
             email: String::new(),
             password: Default::default(),
             tfa: Default::default(),
