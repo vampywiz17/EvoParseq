@@ -30,6 +30,8 @@ struct View {
     sent: u64,
     rtt: Option<Duration>,
     audio_bytes: u64,
+    video_payload_bytes: Option<u64>,
+    sent_video_config: Option<evoparseq_phaze::VideoConfig>,
     raw_audio: bool,
     audio_codec: Option<evoparseq_phaze::AudioCodec>,
     authenticated: bool,
@@ -64,6 +66,10 @@ impl View {
                 sent: self.authenticated.then_some(self.sent),
                 rtt_ms: self.rtt.map(|elapsed| elapsed.as_secs_f64() * 1000.0),
                 audio_bytes: self.audio_bytes,
+                video_payload_bytes: self.video_payload_bytes,
+                phaze_video_request: self
+                    .sent_video_config
+                    .map(|config| (config.mbps, config.fps)),
                 audio_ready: self.audio.is_some(),
                 audio_codec: self.audio_codec.map(|codec| codec.label()),
                 audio_layout: self
@@ -101,8 +107,14 @@ impl evoparseq_phaze::Sink for View {
     fn rtt(&mut self, elapsed: Option<Duration>) {
         self.rtt = elapsed;
     }
-    fn selected(&mut self, output: u32) {
-        use super::session_model::{Notification, View as _};
+    fn stream_request_sent(&mut self, output: u32, config: evoparseq_phaze::VideoConfig) {
+        use super::session_model::{Notification, Status, View as _};
+        self.sent_video_config = Some(config);
+        crate::event_log::record(
+            "INFO",
+            "phaze_stream_request_sent",
+            serde_json::json!({"output":output,"maximum_mbps":config.mbps,"fps":config.fps}),
+        );
         self.window
             .session
             .displays
@@ -110,8 +122,8 @@ impl evoparseq_phaze::Sink for View {
             .unwrap_or_else(|e| e.into_inner())
             .current = Some(output.to_string());
         self.window.notify(Notification::DisplaySelected);
-        // Accepted locally and sent; no host confirmation or requested-value telemetry is invented.
-        self.window.finished(false);
+        self.window
+            .notify(Notification::Status(Status::RequestSent));
     }
     fn stage(&mut self, stage: &'static str) {
         if stage == "dtls_authenticated" {
@@ -157,6 +169,10 @@ impl evoparseq_phaze::Sink for View {
         );
     }
     fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()> {
+        if !encoded.is_empty() {
+            let bytes = self.video_payload_bytes.get_or_insert(0);
+            *bytes = bytes.saturating_add(encoded.len() as u64);
+        }
         if reset {
             self.video.encoder_rebuilt();
             self.inspector = Default::default();
@@ -386,6 +402,8 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         sent: 0,
         rtt: None,
         audio_bytes: 0,
+        video_payload_bytes: None,
+        sent_video_config: None,
         raw_audio: saved.allow_raw_audio,
         audio_codec: None,
         authenticated: false,
@@ -594,6 +612,8 @@ mod tests {
                 sent: 0,
                 rtt: None,
                 audio_bytes: 0,
+                video_payload_bytes: None,
+                sent_video_config: None,
                 raw_audio: false,
                 audio_codec: None,
                 authenticated: false,
@@ -614,7 +634,7 @@ mod tests {
                 primary: id == 7,
             };
             view.outputs(&[output(7), output(8)]);
-            view.selected(7);
+            view.stream_request_sent(7, view.config);
             view.stage("dtls_authenticated");
             view.traffic(2048, 1024);
             assert!(view.authenticated);
@@ -625,6 +645,8 @@ mod tests {
                 .stats
                 .read()
                 .context("Missing first telemetry sample")?;
+            before.video_payload_bytes = Some(4_000);
+            view.video_payload_bytes = Some(129_000);
             view.traffic(127048, 63524);
             let mut current = window
                 .stats
@@ -642,6 +664,7 @@ mod tests {
             assert_eq!(values.incoming, Some(1.0));
             assert_eq!(values.outgoing, Some(0.5));
             assert_eq!(values.fps, Some(60.0));
+            assert_eq!(values.video_payload_mbps, Some(1.0));
             let timing = window.stats.host_timing.snapshot(view.generation);
             let cards = crate::stats_view::Presentation::new(
                 &current,
@@ -689,6 +712,28 @@ mod tests {
             assert!(view.poll(Some(7), &mut commands)?);
             let (id, config) = view.stream_request().context("Missing stream update")?;
             assert_eq!((id, config.mbps, config.fps), (7, 40, 144));
+            assert_eq!(view.sent_video_config, Some(Default::default()));
+            view.stream_request_sent(id, config);
+            view.traffic(127048, 63524);
+            let measured = window
+                .stats
+                .read()
+                .context("Missing stream request sample")?;
+            let video_stats = crate::stats_view::Presentation::new(
+                &measured,
+                &values,
+                (None, None, None),
+                None,
+                &timing,
+            )
+            .select(crate::stats_view::Tab::Video);
+            for (label, value) in [
+                ("Requested maximum bitrate", "40.0 Mbps"),
+                ("Requested frame rate", "144.0 fps"),
+                ("Received video payload bitrate", "1.0 Mbps"),
+            ] {
+                assert!(video_stats.rows.contains(&(label.into(), value.into())));
+            }
             assert_eq!(manager.view().0.native_core.video, video);
             window
                 .events
@@ -701,7 +746,7 @@ mod tests {
             assert!(view.poll(Some(7), &mut commands)?);
             assert_eq!(view.stream_request(), Some((8, config)));
             assert_eq!(commands.last(), Some(&Input::Release));
-            view.selected(8);
+            view.stream_request_sent(8, config);
             assert_eq!(
                 window.session.displays.lock().unwrap().current.as_deref(),
                 Some("8")

@@ -202,6 +202,10 @@ The existing session overlay handles bitrate/FPS requests, advertised active
 output selection, local fullscreen/immersive input, volume/mute, settings and
 stats. Output switching stops the old stream (opcode 4 + output ID) before
 requesting the new one. A sent request is not labeled host-confirmed.
+The Video tab distinguishes the last sent bitrate/FPS request from measured
+decoded FPS and received compressed video payload bitrate. The latter counts
+reassembled encoded bytes, excluding message headers, padding and transport
+overhead. The event log records the requested values after carrier submission.
 Host resolution/rotation/constant-FPS, display refresh requests, secure attention,
 additional simultaneous displays and USB forwarding remain unavailable until
 implemented. The official product's support does not establish our client support.

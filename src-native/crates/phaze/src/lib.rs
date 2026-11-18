@@ -201,7 +201,8 @@ pub trait Sink {
     fn stream_request(&mut self) -> Option<(u32, VideoConfig)> {
         None
     }
-    fn selected(&mut self, _output: u32) {}
+    /// The carrier accepted a stream request for sending.
+    fn stream_request_sent(&mut self, _output: u32, _config: VideoConfig) {}
     /// DTLS carrier bytes, excluding TURN encapsulation and handshake traffic.
     fn traffic(&mut self, _received: u64, _sent: u64) {}
     /// Local reliable-command ACK round trip, including peer ACK scheduling.

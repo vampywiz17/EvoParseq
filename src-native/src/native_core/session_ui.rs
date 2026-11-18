@@ -66,6 +66,7 @@ impl Status {
             Self::Unconfirmed => 4,
             Self::AttentionSent => 5,
             Self::AttentionFailed => 6,
+            Self::RequestSent => 7,
         }
     }
     fn from_message(value: usize) -> Self {
@@ -76,6 +77,7 @@ impl Status {
             4 => Self::Unconfirmed,
             5 => Self::AttentionSent,
             6 => Self::AttentionFailed,
+            7 => Self::RequestSent,
             _ => Self::Failed,
         }
     }
@@ -1146,6 +1148,7 @@ mod tests {
             (4, Status::Unconfirmed),
             (5, Status::AttentionSent),
             (6, Status::AttentionFailed),
+            (7, Status::RequestSent),
         ] {
             assert_eq!(status.message(), code);
             assert_eq!(Status::from_message(code), status);

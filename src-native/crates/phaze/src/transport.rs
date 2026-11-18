@@ -535,6 +535,7 @@ pub async fn run(
             video_received || app_started.elapsed() < Duration::from_secs(20),
             "Phaze first video timed out"
         );
+        let mut stream_request = None;
         tokio::select! {
             _=heartbeat_timer.tick()=>{
                 c.send(&wire::HEARTBEAT).map_err(|_|anyhow::anyhow!("Phaze heartbeat send failed"))?;
@@ -556,7 +557,8 @@ pub async fn run(
                         }
                     }
                     for p in reliable.frame(&config.request(output)?)? { send(&mut c,&p)?; }
-                    selected_output=Some(output); sink.selected(output);
+                    selected_output=Some(output);
+                    stream_request=Some((output,config));
                 }
                 if let Some(output)=selected_output {
                     for command in input.drain(..) {
@@ -620,12 +622,13 @@ pub async fn run(
                                 .find(|o| o.active && o.primary)
                                 .or_else(|| outputs.iter().find(|o| o.active))
                                 .context("Phaze host has no active display")?;
-                            for p in reliable.frame(&sink.video_config().request(output.id)?)? {
+                            let config = sink.video_config();
+                            for p in reliable.frame(&config.request(output.id)?)? {
                                 send(&mut c, &p)?;
                             }
                             selected_output = Some(output.id);
                             requested = true;
-                            sink.selected(output.id);
+                            stream_request = Some((output.id, config));
                             sink.stage("video_requested");
                         }
                         outputs_available = outputs;
@@ -661,6 +664,9 @@ pub async fn run(
         let transmission_started = Instant::now();
         sent = sent.saturating_add(flush(&mut c, &socket, peer).await?);
         reliable.transmitted(transmission_started);
+        if let Some((output, config)) = stream_request {
+            sink.stream_request_sent(output, config);
+        }
         if reported.elapsed() >= Duration::from_millis(500) {
             sink.rtt(reliable.rtt(Instant::now()));
             sink.traffic(received, sent);

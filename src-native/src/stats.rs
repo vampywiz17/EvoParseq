@@ -35,6 +35,9 @@ pub struct Sample {
     pub received: Option<u64>,
     pub sent: Option<u64>,
     pub audio_bytes: u64,
+    pub video_payload_bytes: Option<u64>,
+    /// Last Phaze request submitted to the carrier (maximum Mbps, FPS).
+    pub phaze_video_request: Option<(u32, u32)>,
     pub audio_ready: bool,
     pub audio_codec: Option<&'static str>,
     pub audio_layout: Option<crate::audio_layout::Layout>,
@@ -69,6 +72,8 @@ impl Default for Sample {
             received: None,
             sent: None,
             audio_bytes: 0,
+            video_payload_bytes: None,
+            phaze_video_request: None,
             audio_ready: false,
             audio_codec: None,
             audio_layout: None,
@@ -328,6 +333,7 @@ pub struct Values {
     pub present_fps: Option<f64>,
     pub recent_timing_ms: [Option<f64>; 8],
     pub audio: Option<f64>,
+    pub video_payload_mbps: Option<f64>,
 }
 impl Rates {
     pub fn update(&mut self, sample: &Sample) -> Values {
@@ -352,6 +358,11 @@ impl Rates {
                 };
                 result.incoming = rate(sample.received, old.received, 8.0 / 1e6);
                 result.outgoing = rate(sample.sent, old.sent, 8.0 / 1e6);
+                result.video_payload_mbps = rate(
+                    sample.video_payload_bytes,
+                    old.video_payload_bytes,
+                    8.0 / 1e6,
+                );
                 result.audio = rate(
                     Some(sample.audio_bytes),
                     Some(old.audio_bytes),

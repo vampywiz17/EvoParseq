@@ -458,6 +458,23 @@ fn rows_with_missing(
     #[cfg(not(feature = "bud"))]
     webrtc_network_rows(s, &mut row);
     row(crate::app_style::forms::STAT_VIDEO, String::new());
+    if s.phaze {
+        row(
+            "Requested maximum bitrate",
+            number(
+                s.phaze_video_request.map(|(mbps, _)| f64::from(mbps)),
+                "Mbps",
+            ),
+        );
+        row(
+            "Requested frame rate",
+            number(s.phaze_video_request.map(|(_, fps)| f64::from(fps)), "fps"),
+        );
+        row(
+            "Received video payload bitrate",
+            number(values.video_payload_mbps.filter(|_| recent_fresh), "Mbps"),
+        );
+    }
     let video = s.video.as_ref();
     row(
         crate::app_style::forms::STAT_CODEC,
