@@ -526,6 +526,8 @@ pub async fn run(
     let mut outputs_available = Vec::new();
     let (mut received, mut sent) = (0u64, 0u64);
     let mut reported = Instant::now();
+    let mut arrival = reported;
+    let mut bandwidth_reported = false;
     loop {
         ensure!(
             last_heartbeat.elapsed() < Duration::from_secs(20),
@@ -536,6 +538,7 @@ pub async fn run(
             "Phaze first video timed out"
         );
         let mut stream_request = None;
+        let mut bandwidth_ack_sent = false;
         tokio::select! {
             _=heartbeat_timer.tick()=>{
                 c.send(&wire::HEARTBEAT).map_err(|_|anyhow::anyhow!("Phaze heartbeat send failed"))?;
@@ -599,6 +602,7 @@ pub async fn run(
                     continue
                 }
                 received=received.saturating_add(n as u64);
+                arrival=Instant::now();
                 c.set_now(start.elapsed());
                 c.feed(&buf[..n]).map_err(|_|anyhow::anyhow!("Phaze DTLS record rejected"))?;
             }
@@ -623,9 +627,10 @@ pub async fn run(
                 Some(wire::Envelope::Reliable(payload)) => payload,
                 None => continue,
             };
-            let (frames, ack) = reliable.receive(payload)?;
+            let (frames, ack) = reliable.receive_at(payload, arrival)?;
             if let Some(ack) = ack {
                 send(&mut c, &ack)?;
+                bandwidth_ack_sent |= ack[0] == 4;
             }
             for frame in frames {
                 match frame.first() {
@@ -672,6 +677,10 @@ pub async fn run(
         let transmission_started = Instant::now();
         sent = sent.saturating_add(flush(&mut c, &socket, peer).await?);
         reliable.transmitted(transmission_started);
+        if bandwidth_ack_sent && !bandwidth_reported {
+            bandwidth_reported = true;
+            sink.bandwidth_feedback_started();
+        }
         if let Some((output, config)) = stream_request {
             sink.stream_request_sent(output, config);
         }

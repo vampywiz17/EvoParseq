@@ -214,6 +214,13 @@ The Video tab distinguishes the last sent bitrate/FPS request from measured
 decoded FPS and received compressed video payload bitrate. The latter counts
 reassembled encoded bytes, excluding message headers, padding and transport
 overhead. The event log records the requested values after carrier submission.
+The client also reports observed packet-train bandwidth in extended Phaze
+feedback. It measures complete long fragment groups and host padding probes,
+using positive spacing between consecutive packets of the same size. The
+feedback contains two smoothed bounds in bytes per second. Short, incomplete
+or coalesced samples without enough usable intervals produce no estimate.
+This transport measurement is separate from the requested encoder limit and
+from the received encoded payload rate.
 Host resolution/rotation/constant-FPS, display refresh requests, secure attention,
 additional simultaneous displays and USB forwarding remain unavailable until
 implemented. The official product's support does not establish our client support.

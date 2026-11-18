@@ -145,6 +145,7 @@ pub struct Reliable {
     serial: u64,
     packets: BTreeMap<u64, Vec<u8>>,
     ack_bitmap: u64,
+    bandwidth: crate::bandwidth::Bandwidth,
     tx_next: u64,
     outgoing: BTreeMap<u64, Pending>,
     rtt: Option<(Instant, Duration)>,
@@ -225,10 +226,11 @@ impl Reliable {
             .filter(|(at, _)| now.saturating_duration_since(*at) < Duration::from_secs(10))
             .map(|(_, elapsed)| elapsed)
     }
-    pub fn receive(&mut self, b: &[u8]) -> Result<Received> {
+    #[cfg(test)]
+    fn receive(&mut self, b: &[u8]) -> Result<Received> {
         self.receive_at(b, Instant::now())
     }
-    fn receive_at(&mut self, b: &[u8], now: Instant) -> Result<Received> {
+    pub(crate) fn receive_at(&mut self, b: &[u8], now: Instant) -> Result<Received> {
         if b.is_empty() {
             bail!("Empty reliable packet")
         }
@@ -263,6 +265,17 @@ impl Reliable {
             }
             return Ok((Vec::new(), None));
         }
+        if b[0] == 6 {
+            let ack = if let Some(highest) = self.highest {
+                self.bandwidth.probe(b, highest, now);
+                self.bandwidth
+                    .take_feedback()
+                    .and_then(|sample| self.ack(Some(sample)))
+            } else {
+                None
+            };
+            return Ok((Vec::new(), ack));
+        }
         if !matches!(b[0], 1 | 5) {
             return Ok((Vec::new(), None));
         }
@@ -296,6 +309,9 @@ impl Reliable {
             ensure!(self.buffered + len <= MAX_FRAME, "Reassembly memory limit");
             self.buffered += len;
             self.packets.insert(seq, b[..len].to_vec());
+            if b[1] == 0 {
+                self.bandwidth.ordinary(seq, b.len(), now);
+            }
         }
         if seq == self.frontier {
             while self.packets.contains_key(&self.frontier) {
@@ -324,16 +340,27 @@ impl Reliable {
                 );
                 frame.extend(&part[14..]);
             }
+            self.bandwidth.complete_message(self.next, count);
             self.next += count;
             frames.push(frame);
         }
-        let mut ack = vec![3, 0];
+        let feedback = self.bandwidth.take_feedback();
+        Ok((frames, self.ack(feedback)))
+    }
+
+    fn ack(&mut self, feedback: Option<(f64, f64)>) -> Option<Vec<u8>> {
+        let anchor = self.highest?;
+        let mut ack = vec![if feedback.is_some() { 4 } else { 3 }, 0];
         ack.extend(self.serial.to_le_bytes());
         self.serial += 1;
         ack.extend(self.frontier.to_le_bytes());
-        ack.extend(self.highest.unwrap().to_le_bytes());
+        ack.extend(anchor.to_le_bytes());
         ack.extend(self.ack_bitmap.to_le_bytes());
-        Ok((frames, Some(ack)))
+        if let Some((low, high)) = feedback {
+            ack.extend(low.to_le_bytes());
+            ack.extend(high.to_le_bytes());
+        }
+        Some(ack)
     }
 }
 #[cfg(test)]
@@ -399,6 +426,46 @@ fn receive_frontier_releases_buffered_frames_and_keeps_ack_window() -> Result<()
     );
     let (_, ack) = receiver.receive(&first[0])?;
     assert_eq!(&ack.unwrap()[26..], &1u64.to_le_bytes());
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn a_measured_train_extends_ack_without_advancing_sequence_for_probes() -> Result<()> {
+    let start = Instant::now();
+    let mut sender = Reliable::default();
+    let mut receiver = Reliable::default();
+    let packets = sender.frame(&vec![9; 1170 * 5])?;
+    for (index, packet) in packets.iter().enumerate() {
+        let (_, ack) =
+            receiver.receive_at(packet, start + Duration::from_micros(index as u64 * 200))?;
+        assert_eq!(ack.unwrap()[0], 3);
+    }
+    let mut probe = vec![0; packets[0].len()];
+    probe[..5].copy_from_slice(&[6, 1, 7, 5, 0]);
+    probe[5..13].copy_from_slice(&4u64.to_le_bytes());
+    for i in 1..=7 {
+        probe[1] = i;
+        let (frames, ack) = receiver.receive_at(
+            &probe,
+            start + Duration::from_micros((4 + u64::from(i)) * 200),
+        )?;
+        assert!(frames.is_empty());
+        if i == 7 {
+            let ack = ack.unwrap();
+            assert_eq!(ack.len(), 50);
+            assert_eq!(ack[0], 4);
+            assert_eq!(&ack[10..18], &5u64.to_le_bytes());
+            for field in [&ack[34..42], &ack[42..50]] {
+                let estimate = f64::from_le_bytes(field.try_into().unwrap());
+                assert!((estimate - 5_920_000.0).abs() < 0.01);
+            }
+            sender.receive(&ack)?;
+            assert!(sender.pending().next().is_none());
+        } else {
+            assert!(ack.is_none());
+        }
+    }
     Ok(())
 }
 

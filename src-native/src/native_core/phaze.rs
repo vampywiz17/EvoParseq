@@ -130,6 +130,13 @@ impl evoparseq_phaze::Sink for View {
     fn rtt(&mut self, elapsed: Option<Duration>) {
         self.rtt = elapsed;
     }
+    fn bandwidth_feedback_started(&mut self) {
+        crate::event_log::record(
+            "INFO",
+            "phaze_bandwidth_feedback_started",
+            serde_json::json!({}),
+        );
+    }
     fn cursor_image(&mut self, image: evoparseq_phaze::CursorImage<'_>) {
         use crate::cursor::{Frame, Request};
         use evoparseq_phaze::CursorFormat;
