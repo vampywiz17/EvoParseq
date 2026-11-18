@@ -519,8 +519,6 @@ pub async fn run(
     let mut heartbeat_received = false;
     let mut heartbeat_timer = tokio::time::interval(Duration::from_millis(200));
     heartbeat_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut last_retry = Instant::now();
-    let mut retries = 0;
     let mut selected_output = None;
     let mut input = Vec::new();
     let mut outputs_available = Vec::new();
@@ -647,20 +645,7 @@ pub async fn run(
                 }
             }
         }
-        if reliable.pending().next().is_none() {
-            retries = 0;
-        } else if last_retry.elapsed() >= Duration::from_millis(250) {
-            ensure!(
-                retries < 20,
-                "Phaze reliable command acknowledgment timed out"
-            );
-            reliable.retransmitting();
-            for packet in reliable.pending() {
-                send(&mut c, packet)?;
-            }
-            retries += 1;
-            last_retry = Instant::now();
-        }
+        reliable.retry_due(Instant::now(), |packet| send(&mut c, packet))?;
         let transmission_started = Instant::now();
         sent = sent.saturating_add(flush(&mut c, &socket, peer).await?);
         reliable.transmitted(transmission_started);

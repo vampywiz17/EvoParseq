@@ -222,8 +222,9 @@ using the existing cumulative frontier and selective bitmap. Timing starts at
 carrier batch submission, committed only after a successful flush. Each ACK
 contributes at most one sample, from its newest newly acknowledged command.
 Retransmitted commands are excluded following the ambiguity rule described in
-[RFC 6298 section 3](https://www.rfc-editor.org/rfc/rfc6298.html#section-3);
-this does not change Phaze retransmission timers or implement TCP congestion control.
+[RFC 6298 section 3](https://www.rfc-editor.org/rfc/rfc6298.html#section-3).
+Reliable commands retain the existing 250 ms retry interval and 20-retry budget
+per packet. Sending fresh input does not consume another packet's retry budget.
 Duplicate ACKs do not refresh the sample. It expires after ten seconds without a
 new eligible ACK, so an idle connection can show N/A. The measurement includes
 local/carrier scheduling and host ACK delay; it is not host-reported telemetry,

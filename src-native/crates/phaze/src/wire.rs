@@ -152,9 +152,11 @@ pub struct Reliable {
 }
 struct Pending {
     bytes: Vec<u8>,
-    sent: Option<Instant>,
-    retransmitted: bool,
+    last_sent: Option<Instant>,
+    retries: u8,
 }
+const RETRY_INTERVAL: Duration = Duration::from_millis(250);
+const MAX_RETRIES: u8 = 20;
 impl Reliable {
     pub fn frame(&mut self, payload: &[u8]) -> Result<Vec<Vec<u8>>> {
         ensure!(payload.len() <= MAX_FRAME, "Outgoing frame too large");
@@ -178,8 +180,8 @@ impl Reliable {
                 self.tx_next,
                 Pending {
                     bytes: b.clone(),
-                    sent: None,
-                    retransmitted: false,
+                    last_sent: None,
+                    retries: 0,
                 },
             );
             self.tx_next += 1;
@@ -193,14 +195,30 @@ impl Reliable {
     /// Commit timestamps only after the carrier successfully flushed the batch.
     pub fn transmitted(&mut self, started: Instant) {
         for packet in self.outgoing.values_mut() {
-            packet.sent.get_or_insert(started);
+            packet.last_sent.get_or_insert(started);
         }
     }
-    pub fn retransmitting(&mut self) {
-        // Karn's rule: an ACK cannot identify which transmission it acknowledges.
+    pub fn retry_due(
+        &mut self,
+        now: Instant,
+        mut send: impl FnMut(&[u8]) -> Result<()>,
+    ) -> Result<()> {
         for packet in self.outgoing.values_mut() {
-            packet.retransmitted = true;
+            if !packet
+                .last_sent
+                .is_some_and(|sent| now.saturating_duration_since(sent) >= RETRY_INTERVAL)
+            {
+                continue;
+            }
+            ensure!(
+                packet.retries < MAX_RETRIES,
+                "Phaze reliable command acknowledgment timed out"
+            );
+            send(&packet.bytes)?;
+            packet.retries += 1;
+            packet.last_sent = Some(now);
         }
+        Ok(())
     }
     pub fn rtt(&self, now: Instant) -> Option<Duration> {
         self.rtt
@@ -232,8 +250,9 @@ impl Reliable {
                     || anchor
                         .checked_sub(*seq)
                         .is_some_and(|d| d < 64 && bitmap & (1 << d) != 0);
-                if acknowledged && !packet.retransmitted {
-                    latest_sent = latest_sent.max(packet.sent);
+                // Karn's rule: an ACK cannot identify which transmission it acknowledges.
+                if acknowledged && packet.retries == 0 {
+                    latest_sent = latest_sent.max(packet.last_sent);
                 }
                 !acknowledged
             });
@@ -385,6 +404,39 @@ fn receive_frontier_releases_buffered_frames_and_keeps_ack_window() -> Result<()
 
 #[cfg(test)]
 #[test]
+fn retries_follow_each_command_during_continuous_input() -> Result<()> {
+    let start = Instant::now();
+    let mut sender = Reliable::default();
+    let mut receiver = Reliable::default();
+    let mut previous = sender.frame(b"first motion")?.remove(0);
+    sender.transmitted(start);
+    for step in 1..=u32::from(MAX_RETRIES) + 1 {
+        let at = start + RETRY_INTERVAL * step;
+        let next = sender.frame(b"next motion")?.remove(0);
+        sender.transmitted(at);
+        let mut resent = Vec::new();
+        sender.retry_due(at, |packet| {
+            resent.push(packet.to_vec());
+            Ok(())
+        })?;
+        assert_eq!(resent, [previous.clone()]);
+        let (_, ack) = receiver.receive(&previous)?;
+        sender.receive_at(&ack.unwrap(), at)?;
+        assert_eq!(sender.pending().count(), 1);
+        previous = next;
+    }
+
+    let mut at = start + RETRY_INTERVAL * (u32::from(MAX_RETRIES) + 1);
+    for _ in 0..MAX_RETRIES {
+        at += RETRY_INTERVAL;
+        sender.retry_due(at, |_| Ok(()))?;
+    }
+    assert!(sender.retry_due(at + RETRY_INTERVAL, |_| Ok(())).is_err());
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
 fn ack_rtt_handles_selective_cumulative_duplicate_and_expired_samples() -> Result<()> {
     let start = Instant::now();
     let mut sender = Reliable::default();
@@ -431,8 +483,7 @@ fn ack_rtt_ignores_retries_unsent_packets_and_invalid_feedback() -> Result<()> {
     let mut receiver = Reliable::default();
     let packets = sender.frame(b"retry")?;
     sender.transmitted(start);
-    sender.retransmitting();
-    sender.transmitted(start + Duration::from_millis(250));
+    sender.retry_due(start + Duration::from_millis(250), |_| Ok(()))?;
     let (_, ack) = receiver.receive(&packets[0])?;
     sender.receive_at(&ack.unwrap(), start + Duration::from_millis(300))?;
     assert_eq!(sender.rtt(start + Duration::from_millis(300)), None);
