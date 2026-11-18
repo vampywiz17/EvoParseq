@@ -140,12 +140,19 @@ impl Control {
             let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
             match event["id"].as_u64() {
                 Some(11) => {
-                    if host.config.receive(payload).is_ok() {
+                    let valid = host.config.receive(payload).is_ok();
+                    if valid {
                         host.revision = host.revision.wrapping_add(1);
                         host.windows = host.config.windows_host();
-                        if self.outstanding_video_queries > 0 {
-                            self.outstanding_video_queries -= 1;
-                            if let Some(pending) = &mut self.secondary {
+                    }
+                    if self.outstanding_video_queries > 0 {
+                        self.outstanding_video_queries -= 1;
+                        if let Some(pending) = &mut self.secondary {
+                            if pending.earlier_replies == Some(0) && !valid {
+                                self.secondary = None;
+                                host.pending = false;
+                                host.status = crate::session_controls::Status::Failed.text().into();
+                            } else {
                                 pending.earlier_replies = pending
                                     .earlier_replies
                                     .and_then(|count| count.checked_sub(1));
@@ -948,12 +955,10 @@ mod command_tests {
             assert!(session.host.lock().unwrap().pending);
 
             let mut earlier = cache.clone();
-            for fps in [40, 50] {
-                earlier["video"][0]["encoderFPS"] = fps.into();
-                control.receive(&reply(&earlier), &session);
-                control.confirm(&session, |_| panic!("earlier query reply caused a write"));
-                assert!(session.host.lock().unwrap().pending);
-            }
+            earlier["video"][0]["encoderFPS"] = 50.into();
+            control.receive(&reply(&earlier), &session);
+            control.confirm(&session, |_| panic!("earlier query reply caused a write"));
+            assert!(session.host.lock().unwrap().pending);
 
             let mut fresh = cache;
             fresh["privateOption"] = 77.into();
@@ -988,6 +993,17 @@ mod command_tests {
                 session.host.lock().unwrap().status,
                 Status::Confirmed.text()
             );
+            assert!(!session.host.lock().unwrap().pending);
+
+            control
+                .command(command(), &session, (1920, 1080), |_| Ok(()))
+                .unwrap();
+            control.receive(&crate::control::text(17, 11, "{}").unwrap(), &session);
+            control.confirm(&session, |_| {
+                panic!("invalid refresh caused a cached write")
+            });
+            assert_eq!(control.outstanding_video_queries, 0);
+            assert_eq!(session.host.lock().unwrap().status, Status::Failed.text());
             assert!(!session.host.lock().unwrap().pending);
 
             control
