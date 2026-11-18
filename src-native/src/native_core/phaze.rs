@@ -138,7 +138,8 @@ impl evoparseq_phaze::Sink for View {
         );
     }
     fn cursor_visibility(&mut self, visible: bool) {
-        self.window.set_cursor(crate::cursor::Request::Visible(visible));
+        self.window
+            .set_cursor(crate::cursor::Request::Visible(visible));
         crate::event_log::record(
             "INFO",
             "phaze_cursor_visibility",
