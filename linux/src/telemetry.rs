@@ -4,7 +4,7 @@ use crate::{connection::Mode, stats, stats_view};
 use anyhow::Result;
 use bytes::Bytes;
 use std::{
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
     time::{Duration, Instant},
 };
 #[derive(Default)]
@@ -77,6 +77,13 @@ impl Session {
         true
     }
 }
+struct PendingResolution {
+    request: crate::host_video::ResolutionChange,
+    channel: Weak<crate::display_routes::Channel>,
+    revision: u64,
+    deadline: Instant,
+}
+
 #[derive(Default)]
 pub struct Control {
     timing: crate::frame_timing::Requests,
@@ -85,6 +92,7 @@ pub struct Control {
     primary_attempted: Option<String>,
     primary_revision: Option<(u64, u64)>,
     confirmation: Option<crate::host_video::Confirmation>,
+    secondary: Option<PendingResolution>,
     selection: Option<(String, u64, u64, Instant)>,
 }
 impl Control {
@@ -150,7 +158,9 @@ impl Control {
         if matches!(
             &command,
             Command::Apply(_) | Command::SelectDisplay(_) | Command::DisplayResolution { .. }
-        ) && (self.confirmation.is_some() || self.selection.is_some())
+        ) && (self.confirmation.is_some()
+            || self.selection.is_some()
+            || self.secondary.is_some())
         {
             return Ok(());
         }
@@ -196,20 +206,24 @@ impl Control {
                     resolution,
                     size,
                 } => {
-                    anyhow::ensure!(session.displays.get(stream).is_some(), "Display is closed");
-                    let frame = session
+                    use crate::host_video::{ResolutionChange, query};
+                    let channel = session
+                        .displays
+                        .get(stream)
+                        .ok_or_else(|| anyhow::anyhow!("Display is closed"))?;
+                    let request = ResolutionChange::new(stream, resolution, size)?;
+                    let revision = session
                         .host
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
-                        .config
-                        .resolution(stream, resolution, size)?;
-                    let confirmation = crate::host_video::Confirmation::resolution(
-                        &frame,
-                        stream,
-                        Instant::now(),
-                    )?;
-                    send(frame)?;
-                    self.confirmation = Some(confirmation);
+                        .revision;
+                    send(query()?)?;
+                    self.secondary = Some(PendingResolution {
+                        request,
+                        channel: Arc::downgrade(&channel),
+                        revision,
+                        deadline: Instant::now() + ResolutionChange::REFRESH_TIMEOUT,
+                    });
                     let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
                     host.pending = true;
                     host.status = Status::Waiting.text().into();
@@ -303,6 +317,7 @@ impl Control {
         if let Err(error) = result {
             self.selection = None;
             self.confirmation = None;
+            self.secondary = None;
             let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
             host.pending = false;
             host.status = error.to_string();
@@ -310,12 +325,37 @@ impl Control {
         Ok(()) // UI-command failure never tears down an otherwise working stream.
     }
     fn confirm(&mut self, session: &Session, mut send: impl FnMut(Bytes) -> Result<()>) {
-        if self.confirmation.is_none() && self.selection.is_none() {
+        if self.confirmation.is_none() && self.selection.is_none() && self.secondary.is_none() {
             return;
         }
         use crate::session_controls::Status;
         let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
+        if let Some(pending) = &self.secondary {
+            let same_window = session
+                .displays
+                .get(pending.request.stream)
+                .is_some_and(|channel| {
+                    std::ptr::eq(pending.channel.as_ptr(), Arc::as_ptr(&channel))
+                });
+            if !same_window || now >= pending.deadline {
+                self.secondary = None;
+                host.pending = false;
+                host.status = Status::Unconfirmed.text().into();
+            } else if host.revision != pending.revision {
+                let result = pending
+                    .request
+                    .write_after_refresh(&host.config, now, &mut send);
+                self.secondary = None;
+                match result {
+                    Ok(confirmation) => self.confirmation = Some(confirmation),
+                    Err(error) => {
+                        host.pending = false;
+                        host.status = error.to_string();
+                    }
+                }
+            }
+        }
         if let Some((id, revision, outputs, deadline)) = &self.selection {
             if now >= *deadline {
                 self.selection = None;
@@ -401,6 +441,7 @@ impl Control {
                     if self.primary_attempted.as_deref() != Some(id)
                         && self.confirmation.is_none()
                         && self.selection.is_none()
+                        && self.secondary.is_none()
                     {
                         self.primary_attempted = Some(id.to_owned());
                         let frame = host.config.select_output(id)?;
@@ -845,6 +886,99 @@ mod tests {
 #[cfg(test)]
 mod command_tests {
     use super::*;
+
+    #[test]
+    fn linux_secondary_resolution_patches_fresh_host_settings_and_confirms_the_right_display() {
+        use crate::session_controls::{Command, Status};
+        use crate::session_preferences::Resolution;
+
+        for mode in [Mode::Bud, Mode::WebRtc] {
+            let session = Session::new(mode);
+            let mut control = Control::default();
+            let ctx = eframe::egui::Context::default();
+            session.displays.open(1, &ctx).unwrap();
+            let command = || Command::DisplayResolution {
+                stream: 1,
+                resolution: Resolution::Fixed(1280, 720),
+                size: (1920, 1080),
+            };
+            let cache = serde_json::json!({"privateOption":42,"video":[
+                {"resolutionX":1920,"resolutionY":1080,"encoderFPS":30},
+                {"resolutionX":1920,"resolutionY":1080,"encoderFPS":30}
+            ]});
+            let reply = |value: &serde_json::Value| {
+                crate::control::text(17, 11, &value.to_string()).unwrap()
+            };
+            control.receive(&reply(&cache), &session);
+            let mut sent = Vec::new();
+            let mut send = |frame| {
+                sent.push(frame);
+                Ok(())
+            };
+            control
+                .command(command(), &session, (1920, 1080), &mut send)
+                .unwrap();
+            control.confirm(&session, |_| panic!("cached settings caused a host write"));
+            control.receive(&crate::control::text(17, 11, "{}").unwrap(), &session);
+            control.confirm(&session, |_| panic!("invalid host reply caused a write"));
+            assert_eq!(sent, [crate::host_video::query().unwrap()]);
+            assert!(session.host.lock().unwrap().pending);
+
+            let mut fresh = cache;
+            fresh["privateOption"] = 77.into();
+            fresh["video"][0]["encoderFPS"] = 60.into();
+            fresh["video"][1]["encoderFPS"] = 90.into();
+            control.receive(&reply(&fresh), &session);
+            let mut sent = Vec::new();
+            control.confirm(&session, |frame| {
+                sent.push(frame);
+                Ok(())
+            });
+            assert_eq!(sent.len(), 1);
+            let actual: serde_json::Value =
+                serde_json::from_slice(&sent[0][13..sent[0].len() - 1]).unwrap();
+            let mut expected = fresh.clone();
+            expected["video"][1]["resolutionX"] = 1280.into();
+            expected["video"][1]["resolutionY"] = 720.into();
+            assert_eq!(actual, expected);
+            assert!(session.host.lock().unwrap().pending);
+
+            fresh["video"][0]["resolutionX"] = 1280.into();
+            fresh["video"][0]["resolutionY"] = 720.into();
+            control.receive(&reply(&fresh), &session);
+            control.confirm(&session, |frame| {
+                assert_eq!(frame, crate::host_video::query().unwrap());
+                Ok(())
+            });
+            assert!(session.host.lock().unwrap().pending);
+            control.receive(&reply(&expected), &session);
+            control.confirm(&session, |_| panic!("confirmed change sent another frame"));
+            assert_eq!(
+                session.host.lock().unwrap().status,
+                Status::Confirmed.text()
+            );
+            assert!(!session.host.lock().unwrap().pending);
+
+            control
+                .command(command(), &session, (1920, 1080), |_| Ok(()))
+                .unwrap();
+            control.secondary.as_mut().unwrap().deadline = Instant::now();
+            control.confirm(&session, |_| panic!("expired request sent a frame"));
+            assert!(!session.host.lock().unwrap().pending);
+
+            control
+                .command(command(), &session, (1920, 1080), |_| Ok(()))
+                .unwrap();
+            session.displays.close(1);
+            session.displays.open(1, &ctx).unwrap();
+            control.receive(&reply(&expected), &session);
+            control.confirm(&session, |_| {
+                panic!("closed display's request affected its replacement")
+            });
+            assert!(!session.host.lock().unwrap().pending);
+        }
+    }
+
     #[test]
     fn linux_overlay_apply_preserves_other_streams_and_invalid_requests_do_not_disconnect() {
         let session = Session::new(Mode::Bud);

@@ -22,6 +22,48 @@ pub enum Verification {
     Confirmed,
     TimedOut,
 }
+
+/// A secondary display change must patch a fresh, complete host reply.
+#[cfg(any(windows, target_os = "linux"))]
+pub struct ResolutionChange {
+    pub stream: usize,
+    pub resolution: Resolution,
+    size: (u32, u32),
+}
+#[cfg(any(windows, target_os = "linux"))]
+impl ResolutionChange {
+    pub const REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
+
+    pub fn new(stream: usize, resolution: Resolution, size: (u32, u32)) -> Result<Self> {
+        ensure!(
+            (1..3).contains(&stream),
+            "Invalid additional display stream"
+        );
+        Video {
+            resolution,
+            ..Default::default()
+        }
+        .validate()?;
+        Ok(Self {
+            stream,
+            resolution,
+            size,
+        })
+    }
+
+    pub fn write_after_refresh(
+        &self,
+        config: &Config,
+        now: Instant,
+        send: impl FnOnce(bytes::Bytes) -> Result<()>,
+    ) -> Result<Confirmation> {
+        let frame = config.resolution(self.stream, self.resolution, self.size)?;
+        let confirmation = Confirmation::resolution(&frame, self.stream, now)?;
+        send(frame)?;
+        Ok(confirmation)
+    }
+}
+
 impl Confirmation {
     pub fn new(frame: &[u8], now: Instant) -> Result<Self> {
         let value: Value = serde_json::from_slice(&frame[13..frame.len() - 1])?;
