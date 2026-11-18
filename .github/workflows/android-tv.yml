@@ -109,6 +109,13 @@ jobs:
             fi
           done
           test -s dist/android-tv/OPUS-LICENSE.txt
+          for symphonia in "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/symphonia-core-0.6.1; do
+            if [ -f "$symphonia/LICENSE" ]; then
+              cp "$symphonia/LICENSE" dist/android-tv/SYMPHONIA-MPL-2.0.txt
+            fi
+          done
+          test -s dist/android-tv/SYMPHONIA-MPL-2.0.txt
+          cp src-native/crates/phaze/SYMPHONIA-NOTICE.txt dist/android-tv/
           cp src-native/crates/bud/vendor/lowlat-client/LICENSE dist/android-tv/LOWLAT-LICENSE.txt
           git rev-parse HEAD > dist/android-tv/SOURCE.txt
           sha256sum dist/android-tv/EvoParseq-TV.apk > dist/android-tv/SHA256.txt

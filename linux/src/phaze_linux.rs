@@ -62,7 +62,10 @@ pub fn run(
         };
         tokio::select! {
             biased;
-            result = client.connect(account.token(), peer, servers, || Vec::new()) => result,
+            result = client.connect(account.token(), peer, servers, || {
+                rustls_native_certs::load_native_certs()
+                    .certs.into_iter().map(|cert| cert.as_ref().to_vec()).collect()
+            }) => result,
             result = stopped => result,
         }
     })?;
