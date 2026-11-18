@@ -39,6 +39,7 @@ struct View {
     audio: Option<Arc<crate::audio_windows::Playback>>,
     keys: evoparseq_phaze::Keyboard,
     events: VecDeque<Event>,
+    input_logged: [u8; 4],
     route: &'static str,
     carrier: &'static str,
 }
@@ -291,13 +292,38 @@ impl evoparseq_phaze::Sink for View {
                         self.window.result(true);
                     }
                 }
-                event => translate(
-                    event,
-                    &mut self.keys,
-                    self.window.presented_viewport(),
-                    output.is_some() && self.window.native_input_allowed(),
-                    commands,
-                )?,
+                event => {
+                    let kind = match &event {
+                        Event::Motion(..) | Event::RelativeMotion(..) => Some((0, "motion")),
+                        Event::Button(true, ..) => Some((1, "button")),
+                        Event::Scroll(..) => Some((2, "scroll")),
+                        Event::Key(true, ..) => Some((3, "keyboard")),
+                        _ => None,
+                    };
+                    let viewport = self.window.presented_viewport();
+                    let allowed = output.is_some() && self.window.native_input_allowed();
+                    let before = commands.len();
+                    translate(event, &mut self.keys, viewport, allowed, commands)?;
+                    if let Some((index, kind)) = kind {
+                        let queued = commands.len() != before;
+                        let bit = 1 << u8::from(queued);
+                        if self.input_logged[index] & bit == 0 && crate::event_log::enabled() {
+                            self.input_logged[index] |= bit;
+                            crate::event_log::record(
+                                "INFO",
+                                "phaze_input_dispatch",
+                                serde_json::json!({
+                                    "kind":kind,
+                                    "queued":queued,
+                                    "output_selected":output.is_some(),
+                                    "input_allowed":allowed,
+                                    "viewport_available":viewport.is_some(),
+                                    "input_detached":self.window.input_detached(),
+                                }),
+                            );
+                        }
+                    }
+                }
             }
         }
         Ok(true)
@@ -369,6 +395,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         audio: None,
         keys: Default::default(),
         events: VecDeque::new(),
+        input_logged: [0; 4],
         route: "Direct",
         carrier: "direct UDP",
     };
@@ -574,6 +601,7 @@ mod tests {
                 audio: None,
                 keys: Default::default(),
                 events: VecDeque::new(),
+                input_logged: [0; 4],
                 route: "Direct",
                 carrier: "direct UDP",
             };
