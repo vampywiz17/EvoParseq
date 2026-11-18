@@ -71,7 +71,7 @@ pub fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result
         };
         tokio::select! {
             biased;
-            result = client.connect(session.token(), &peer, servers, || Vec::new()) => result,
+            result = client.connect(session.token(), &peer, servers, Vec::new) => result,
             result = stopped => result,
         }
     });
