@@ -66,9 +66,23 @@ pub fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result
             }
             Ok(())
         };
+        let connect = async {
+            if servers.is_none() && prefs.logging {
+                if let Some(socket) =
+                    crate::phaze_rx_trace::enable(evoparseq_phaze::direct_socket()?)
+                {
+                    return client
+                        .connect_direct_via(session.token(), &peer, socket)
+                        .await;
+                }
+            }
+            client
+                .connect(session.token(), &peer, servers, Vec::new)
+                .await
+        };
         tokio::select! {
             biased;
-            result = client.connect(session.token(), &peer, servers, Vec::new) => result,
+            result = connect => result,
             result = stopped => result,
         }
     });

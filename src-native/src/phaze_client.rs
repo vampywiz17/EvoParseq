@@ -92,6 +92,17 @@ impl<P: Platform> Client<P> {
             evoparseq_phaze::connect(&remote, peer, self).await
         }
     }
+
+    #[cfg(target_os = "android")]
+    pub async fn connect_direct_via(
+        &mut self,
+        token: &str,
+        peer: &str,
+        socket: impl evoparseq_phaze::Datagram,
+    ) -> Result<()> {
+        let remote = evoparseq_phaze::Session::from_token(token)?;
+        evoparseq_phaze::connect_via(&remote, peer, self, socket).await
+    }
 }
 
 impl<P: Platform> Sink for Client<P> {

@@ -15,6 +15,7 @@ pub use audio::AudioCodec;
 pub use control::{ClientControl, PeerState, MAX_CLIPBOARD_BYTES};
 pub use cursor::{CursorFormat, CursorImage};
 pub use datagram::Datagram;
+pub use transport::local_socket as direct_socket;
 use futures_util::{SinkExt, StreamExt};
 pub use input::{Input, Keyboard};
 use serde::Deserialize;
