@@ -42,11 +42,32 @@ struct View {
     keys: evoparseq_phaze::Keyboard,
     events: VecDeque<Event>,
     input_logged: [u8; 4],
+    interval_motion: u32,
+    interval_pictures: u32,
     route: &'static str,
     carrier: &'static str,
 }
 impl View {
     fn publish(&self, state: &str) {
+        let video = self.video.snapshot();
+        if state == "connected" && video.decoder_initialized && crate::event_log::enabled() {
+            crate::event_log::record(
+                "INFO",
+                "phaze_video_flow",
+                serde_json::json!({
+                    "motion_commands":self.interval_motion,
+                    "received_pictures":self.interval_pictures,
+                    "decoded_total":video.frames_decoded,
+                    "presented_total":video.frames_presented,
+                    "dropped_total":video.frames_dropped,
+                    "skipped_display_total":video.display_updates_skipped,
+                    "decode_queue_depth":video.queue_depth,
+                    "present_busy_total":video.presentations_busy,
+                    "present_interval_ms":video.local_timing.present_interval.latest_ms,
+                    "present_interval_peak_ms":video.local_timing.present_interval.peak_ms,
+                }),
+            );
+        }
         self.window.stats.publish(
             self.generation,
             crate::stats::Sample {
@@ -59,7 +80,7 @@ impl View {
                     "Not reported"
                 }
                 .into(),
-                video: Some(self.video.snapshot()),
+                video: Some(video),
                 codec: self.inspector.snapshot().codec,
                 hevc_advertised: self.config.hevc,
                 received: self.authenticated.then_some(self.received),
@@ -103,6 +124,8 @@ impl evoparseq_phaze::Sink for View {
         self.received = received;
         self.sent = sent;
         self.publish("connected");
+        self.interval_motion = 0;
+        self.interval_pictures = 0;
     }
     fn rtt(&mut self, elapsed: Option<Duration>) {
         self.rtt = elapsed;
@@ -179,6 +202,7 @@ impl evoparseq_phaze::Sink for View {
             self.inspector.enable_hevc(self.config.hevc);
         }
         if let Some(info) = self.inspector.receive(encoded) {
+            self.interval_pictures += u32::from(info.picture);
             self.video.submit(encoded, info);
         }
         Ok(())
@@ -322,6 +346,9 @@ impl evoparseq_phaze::Sink for View {
                     translate(event, &mut self.keys, viewport, allowed, commands)?;
                     if let Some((index, kind)) = kind {
                         let queued = commands.len() != before;
+                        if index == 0 && queued {
+                            self.interval_motion += 1;
+                        }
                         let bit = 1 << u8::from(queued);
                         if self.input_logged[index] & bit == 0 && crate::event_log::enabled() {
                             self.input_logged[index] |= bit;
@@ -414,6 +441,8 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         keys: Default::default(),
         events: VecDeque::new(),
         input_logged: [0; 4],
+        interval_motion: 0,
+        interval_pictures: 0,
         route: "Direct",
         carrier: "direct UDP",
     };
@@ -622,6 +651,8 @@ mod tests {
                 keys: Default::default(),
                 events: VecDeque::new(),
                 input_logged: [0; 4],
+                interval_motion: 0,
+                interval_pictures: 0,
                 route: "Direct",
                 carrier: "direct UDP",
             };

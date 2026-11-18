@@ -1,6 +1,6 @@
 use anyhow::{bail, ensure, Result};
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 type Received = (Vec<Vec<u8>>, Option<Vec<u8>>);
 /// Protected peer heartbeat: separate from ordinary reliable/application frames.
@@ -137,11 +137,14 @@ fn nal_types(b: &[u8]) -> Vec<u8> {
 }
 #[derive(Default)]
 pub struct Reliable {
+    /// First packet of the next message to deliver.
     next: u64,
+    /// First missing packet. This can advance before a fragmented message is complete.
+    frontier: u64,
     highest: Option<u64>,
     serial: u64,
     packets: BTreeMap<u64, Vec<u8>>,
-    seen: BTreeSet<u64>,
+    ack_bitmap: u64,
     tx_next: u64,
     outgoing: BTreeMap<u64, Pending>,
     rtt: Option<(Instant, Duration)>,
@@ -256,12 +259,29 @@ impl Reliable {
             seq < self.next.saturating_add(16384),
             "Sequence outside bounded receive window"
         );
-        self.highest = Some(self.highest.map_or(seq, |x| x.max(seq)));
-        self.seen.insert(seq);
+        let anchor = self.highest.unwrap_or(seq);
+        if seq > anchor {
+            self.ack_bitmap = self
+                .ack_bitmap
+                .checked_shl((seq - anchor).min(64) as u32)
+                .unwrap_or(0)
+                | 1;
+            self.highest = Some(seq);
+        } else {
+            self.highest = Some(anchor);
+            if anchor - seq < 64 {
+                self.ack_bitmap |= 1 << (anchor - seq);
+            }
+        }
         if seq >= self.next && !self.packets.contains_key(&seq) {
             ensure!(self.buffered + len <= MAX_FRAME, "Reassembly memory limit");
             self.buffered += len;
             self.packets.insert(seq, b[..len].to_vec());
+        }
+        if seq == self.frontier {
+            while self.packets.contains_key(&self.frontier) {
+                self.frontier += 1;
+            }
         }
         let mut frames = Vec::new();
         while let Some(first) = self.packets.get(&self.next) {
@@ -271,7 +291,7 @@ impl Reliable {
                 self.next += 1;
                 continue;
             }
-            if !(0..count).all(|i| self.packets.contains_key(&(self.next + i))) {
+            if self.frontier - self.next < count {
                 break;
             }
             let mut frame = Vec::new();
@@ -288,26 +308,12 @@ impl Reliable {
             self.next += count;
             frames.push(frame);
         }
-        let mut frontier = self.next;
-        while self.packets.contains_key(&frontier) {
-            frontier += 1
-        }
-        let anchor = self.highest.unwrap();
-        let mut bitmap = 0u64;
-        for d in 0..64 {
-            if let Some(s) = anchor.checked_sub(d) {
-                if self.seen.contains(&s) {
-                    bitmap |= 1 << d
-                }
-            }
-        }
-        self.seen.retain(|s| anchor.saturating_sub(*s) < 64);
         let mut ack = vec![3, 0];
         ack.extend(self.serial.to_le_bytes());
         self.serial += 1;
-        ack.extend(frontier.to_le_bytes());
-        ack.extend(anchor.to_le_bytes());
-        ack.extend(bitmap.to_le_bytes());
+        ack.extend(self.frontier.to_le_bytes());
+        ack.extend(self.highest.unwrap().to_le_bytes());
+        ack.extend(self.ack_bitmap.to_le_bytes());
         Ok((frames, Some(ack)))
     }
 }
@@ -341,6 +347,39 @@ fn wire_contracts() -> Result<()> {
         nal_types(&[0, 0, 0, 1, 0x67, 9, 0, 0, 1, 0x68]) == vec![7, 8],
         "NAL test"
     );
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn receive_frontier_releases_buffered_frames_and_keeps_ack_window() -> Result<()> {
+    let mut sender = Reliable::default();
+    let first = sender.frame(&vec![42; 3_000])?;
+    let later = sender.frame(b"later")?;
+    let mut receiver = Reliable::default();
+    let (frames, ack) = receiver.receive(&first[0])?;
+    assert!(frames.is_empty());
+    assert_eq!(&ack.unwrap()[10..18], &1u64.to_le_bytes());
+    for packet in [&later[0], &first[2]] {
+        let (frames, ack) = receiver.receive(packet)?;
+        assert!(frames.is_empty());
+        assert_eq!(&ack.unwrap()[10..18], &1u64.to_le_bytes());
+    }
+    let (frames, ack) = receiver.receive(&first[1])?;
+    assert_eq!(frames, [vec![42; 3_000], b"later".to_vec()]);
+    assert_eq!(
+        &ack.unwrap()[10..],
+        &[4u64, 3, 15].map(u64::to_le_bytes).concat()
+    );
+    let mut far = later[0].clone();
+    far[4..12].copy_from_slice(&67u64.to_le_bytes());
+    let (_, ack) = receiver.receive(&far)?;
+    assert_eq!(
+        &ack.unwrap()[10..],
+        &[4u64, 67, 1].map(u64::to_le_bytes).concat()
+    );
+    let (_, ack) = receiver.receive(&first[0])?;
+    assert_eq!(&ack.unwrap()[26..], &1u64.to_le_bytes());
     Ok(())
 }
 
