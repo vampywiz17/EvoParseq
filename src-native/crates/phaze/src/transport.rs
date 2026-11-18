@@ -568,13 +568,10 @@ pub async fn run(
                         deferred_motion = None;
                         sink.cursor_output_changed();
                     }
-                    if changing_output || recovering {
-                        if let Some(previous)=selected_output {
-                            let mut stop=vec![4]; stop.extend(u32::to_be_bytes(previous));
-                            for p in reliable.frame(&stop)? { send(&mut c,&p)?; }
-                        }
+                    let (stop, start) = wire::video_request(selected_output, output, config, recovering)?;
+                    for command in stop.as_ref().map(<[u8; 5]>::as_slice).into_iter().chain([start.as_slice()]) {
+                        for p in reliable.frame(command)? { send(&mut c,&p)?; }
                     }
-                    for p in reliable.frame(&config.request(output)?)? { send(&mut c,&p)?; }
                     selected_output=Some(output);
                     stream_request=update;
                     recovery_output = recovering.then_some(output);

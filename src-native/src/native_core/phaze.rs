@@ -51,6 +51,15 @@ struct View {
     carrier: &'static str,
 }
 impl View {
+    fn prepare_video_recovery(&mut self, fallback_420: bool) {
+        if fallback_420 {
+            self.config.chroma_444 = false;
+            if let Some((_, config)) = &mut self.pending {
+                config.chroma_444 = false;
+            }
+        }
+    }
+
     fn publish(&self, state: &str) {
         let video = self.video.snapshot();
         if state == "connected" && video.decoder_initialized && crate::event_log::enabled() {
@@ -192,12 +201,7 @@ impl evoparseq_phaze::Sink for View {
         let Some((_, fallback_420)) = self.video.take_keyframe_request() else {
             return false;
         };
-        if fallback_420 {
-            self.config.chroma_444 = false;
-            if let Some((_, config)) = &mut self.pending {
-                config.chroma_444 = false;
-            }
-        }
+        self.prepare_video_recovery(fallback_420);
         true
     }
     fn video_recovery_sent(&mut self, output: u32) {
@@ -994,6 +998,23 @@ mod tests {
                 .events
                 .push(Event::NativeSession(Command::Disconnect));
             assert!(!view.poll(Some(8), &mut commands, &mut controls)?);
+
+            // An idle decoder has no recovery to dispatch. A recovery that
+            // requires 4:2:0 updates both a reopen and a concurrent user request.
+            assert!(!view.take_video_recovery());
+            view.config.chroma_444 = true;
+            view.pending = Some((8, view.config));
+            view.prepare_video_recovery(false);
+            assert!(view.config.chroma_444);
+            view.prepare_video_recovery(true);
+            assert!(!view.config.chroma_444);
+            assert_eq!(view.stream_request(), Some((8, view.config)));
+            view.controller(42);
+            view.controller(42);
+            assert_eq!(
+                window.session.phaze_peers.lock().unwrap().controller,
+                Some(42)
+            );
         }
         std::fs::remove_dir_all(directory)?;
         Ok(())

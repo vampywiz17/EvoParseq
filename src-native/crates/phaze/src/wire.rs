@@ -109,6 +109,53 @@ pub fn hello(raw_audio: bool) -> Vec<u8> {
     b.extend(0u32.to_be_bytes()); // No virtual client display layout.
     b
 }
+
+pub(crate) fn video_request(
+    previous: Option<u32>,
+    output: u32,
+    config: VideoConfig,
+    recovering: bool,
+) -> Result<(Option<[u8; 5]>, Vec<u8>)> {
+    let start = config.request(output)?;
+    let stop = previous
+        .filter(|&previous| previous != output || recovering)
+        .map(|previous| {
+            let mut command = [4; 5];
+            command[1..].copy_from_slice(&previous.to_be_bytes());
+            command
+        });
+    Ok((stop, start))
+}
+
+#[cfg(test)]
+#[test]
+fn recovery_reopens_the_selected_output_without_changing_stream_settings() -> Result<()> {
+    let config = VideoConfig {
+        mbps: 50,
+        fps: 60,
+        ..Default::default()
+    };
+    let output = 0x12_34_56_78;
+    let start = config.request(output)?;
+    assert_eq!(
+        video_request(None, output, config, false)?,
+        (None, start.clone())
+    );
+    assert_eq!(
+        video_request(Some(output), output, config, false)?,
+        (None, start.clone())
+    );
+    assert_eq!(
+        video_request(Some(output), output, config, true)?,
+        (Some([4, 0x12, 0x34, 0x56, 0x78]), start.clone())
+    );
+    assert_eq!(
+        video_request(Some(1), output, config, false)?,
+        (Some([4, 0, 0, 0, 1]), start)
+    );
+    assert!(video_request(Some(output), output, VideoConfig { fps: 0, ..config }, true).is_err());
+    Ok(())
+}
 pub fn encoded(b: &[u8]) -> Result<&[u8]> {
     ensure!(b.len() >= 24, "Short video header");
     let n = be(b, 20) as usize;
