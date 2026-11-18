@@ -49,7 +49,6 @@ jobs:
           cat /tmp/evoparseq-turn-stdout.log
           exit 1
       - name: Check independent Phaze protocol
-        if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           cargo fmt --manifest-path src-native/crates/phaze/Cargo.toml -- --check
@@ -63,6 +62,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Phaze protocol tests failed' }
           cargo test --locked --manifest-path src-native/crates/phaze/Cargo.toml --target ${{ matrix.target }} -p rustls-rustcrypto
           if ($LASTEXITCODE -ne 0) { throw 'RustCrypto provider compatibility tests failed' }
+      - name: Check Phaze protocol for both Android TV ABIs
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-linux-android armv7-linux-androideabi
+          for target in aarch64-linux-android armv7-linux-androideabi; do
+            cargo check --locked --manifest-path src-native/crates/phaze/Cargo.toml --target "$target"
+          done
       - name: Check isolated adapters
         shell: pwsh
         run: |

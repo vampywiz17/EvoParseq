@@ -6,6 +6,7 @@ mod turn_research;
 use crate::platform::Desktop as _;
 use crate::{
     connection_settings::Manager,
+    phaze_session::{self, normalized, Stream},
     window::{Event, Window},
 };
 use anyhow::{Context, Result};
@@ -25,14 +26,11 @@ pub(super) fn block_on<T>(future: impl std::future::Future<Output = Result<T>>) 
 struct View {
     window: Arc<Window>,
     manager: Arc<Manager>,
-    config: evoparseq_phaze::VideoConfig,
-    pending: Option<(u32, evoparseq_phaze::VideoConfig)>,
+    stream: Stream,
     received: u64,
     sent: u64,
     rtt: Option<Duration>,
     audio_bytes: u64,
-    video_payload_bytes: Option<u64>,
-    sent_video_config: Option<evoparseq_phaze::VideoConfig>,
     raw_audio: bool,
     audio_codec: Option<evoparseq_phaze::AudioCodec>,
     authenticated: bool,
@@ -40,7 +38,6 @@ struct View {
     pending_clipboard: Option<crate::clipboard_sync::Pending>,
     video: crate::video_windows::Pipeline,
     generation: u64,
-    inspector: crate::video_stream::Inspector,
     audio: Option<Arc<crate::audio_windows::Playback>>,
     keys: evoparseq_phaze::Keyboard,
     events: VecDeque<Event>,
@@ -51,17 +48,9 @@ struct View {
     carrier: &'static str,
 }
 impl View {
-    fn prepare_video_recovery(&mut self, fallback_420: bool) {
-        if fallback_420 {
-            self.config.chroma_444 = false;
-            if let Some((_, config)) = &mut self.pending {
-                config.chroma_444 = false;
-            }
-        }
-    }
-
     fn publish(&self, state: &str) {
         let video = self.video.snapshot();
+        let stream = self.stream.video();
         if state == "connected" && video.decoder_initialized && crate::event_log::enabled() {
             crate::event_log::record(
                 "INFO",
@@ -93,23 +82,21 @@ impl View {
                 }
                 .into(),
                 video: Some(video),
-                codec: self.inspector.snapshot().codec,
-                hevc_advertised: self.config.hevc,
+                codec: stream.codec,
+                hevc_advertised: self.stream.config().hevc,
                 received: self.authenticated.then_some(self.received),
                 sent: self.authenticated.then_some(self.sent),
                 rtt_ms: self.rtt.map(|elapsed| elapsed.as_secs_f64() * 1000.0),
                 audio_bytes: self.audio_bytes,
-                video_payload_bytes: self.video_payload_bytes,
-                phaze_video_request: self
-                    .sent_video_config
-                    .map(|config| (config.mbps, config.fps)),
+                video_payload_bytes: self.stream.payload_bytes(),
+                phaze_video_request: self.stream.sent().map(|config| (config.mbps, config.fps)),
                 audio_ready: self.audio.is_some(),
                 audio_codec: self.audio_codec.map(|codec| codec.label()),
                 audio_layout: self
                     .audio
                     .as_ref()
                     .map(|_| crate::audio_layout::Layout::STEREO),
-                profile: self.inspector.snapshot().sps_profile_idc,
+                profile: stream.sps_profile_idc,
                 route: if self.authenticated {
                     self.route
                 } else {
@@ -192,16 +179,16 @@ impl evoparseq_phaze::Sink for View {
         self.raw_audio
     }
     fn video_config(&self) -> evoparseq_phaze::VideoConfig {
-        self.config
+        self.stream.config()
     }
     fn stream_request(&mut self) -> Option<(u32, evoparseq_phaze::VideoConfig)> {
-        self.pending.take()
+        self.stream.take_request()
     }
     fn take_video_recovery(&mut self) -> bool {
         let Some((_, fallback_420)) = self.video.take_keyframe_request() else {
             return false;
         };
-        self.prepare_video_recovery(fallback_420);
+        self.stream.prepare_recovery(fallback_420);
         true
     }
     fn video_recovery_sent(&mut self, output: u32) {
@@ -266,7 +253,7 @@ impl evoparseq_phaze::Sink for View {
     }
     fn stream_request_sent(&mut self, output: u32, config: evoparseq_phaze::VideoConfig) {
         use super::session_model::{Notification, Status, View as _};
-        self.sent_video_config = Some(config);
+        self.stream.request_sent(config);
         crate::event_log::record(
             "INFO",
             "phaze_stream_request_sent",
@@ -326,16 +313,10 @@ impl evoparseq_phaze::Sink for View {
         );
     }
     fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()> {
-        if !encoded.is_empty() {
-            let bytes = self.video_payload_bytes.get_or_insert(0);
-            *bytes = bytes.saturating_add(encoded.len() as u64);
-        }
         if reset {
             self.video.encoder_rebuilt();
-            self.inspector = Default::default();
-            self.inspector.enable_hevc(self.config.hevc);
         }
-        if let Some(info) = self.inspector.receive(encoded) {
+        if let Some(info) = self.stream.inspect(encoded, reset) {
             self.interval_pictures += u32::from(info.picture);
             self.video.submit(encoded, info);
         }
@@ -467,20 +448,7 @@ impl evoparseq_phaze::Sink for View {
                     let result = (|| -> Result<()> {
                         match command {
                             Command::Apply(video) => {
-                                video.validate()?;
-                                anyhow::ensure!(
-                                    video.resolution
-                                        == crate::session_preferences::Resolution::Host
-                                        && video.constant_fps.is_none()
-                                        && video.rotated.is_none(),
-                                    "Unsupported Phaze stream option"
-                                );
-                                let config = evoparseq_phaze::VideoConfig {
-                                    mbps: video.bandwidth_mbps.unwrap_or(self.config.mbps),
-                                    fps: video.fps.unwrap_or(self.config.fps),
-                                    ..self.config
-                                };
-                                config.validate()?;
+                                let config = self.stream.validate_update(&video)?;
                                 self.manager.update_native(|p| p.video = video.clone())?;
                                 self.window.set_input_state(crate::input_state::State {
                                     mode: video.mode(),
@@ -488,10 +456,7 @@ impl evoparseq_phaze::Sink for View {
                                     ..Default::default()
                                 });
                                 self.window.set_fullscreen(video.fullscreen);
-                                self.config = config;
-                                if let Some(output) = output {
-                                    self.pending = Some((output, config));
-                                }
+                                self.stream.apply(config, output);
                             }
                             Command::SelectDisplay(id) => {
                                 self.window
@@ -503,7 +468,7 @@ impl evoparseq_phaze::Sink for View {
                                 self.keys.reset();
                                 commands.clear();
                                 commands.push(Input::Release);
-                                self.pending = Some((id.parse()?, self.config));
+                                self.stream.select(id.parse()?);
                             }
                             Command::HideButton => {
                                 self.manager
@@ -521,7 +486,7 @@ impl evoparseq_phaze::Sink for View {
                             serde_json::json!({"reason":error.to_string()}),
                         );
                         self.window.result(false);
-                    } else if self.pending.is_none() {
+                    } else if !self.stream.pending() {
                         self.window.result(true);
                     }
                 }
@@ -606,24 +571,19 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         crate::video_output::DisplayCatchUpPolicy::Fixed,
     );
     let generation = window.stats.begin();
-    let mut inspector = crate::video_stream::Inspector::default();
-    inspector.enable_hevc(saved.prefer_hevc);
     let mut view = View {
         window: window.clone(),
         manager: manager.clone(),
-        config: evoparseq_phaze::VideoConfig {
+        stream: Stream::new(evoparseq_phaze::VideoConfig {
             hevc: saved.prefer_hevc,
             chroma_444: saved.prefer_hevc && saved.experimental_chroma_444,
             mbps: saved.native_core.video.bandwidth_mbps.unwrap_or(10),
             fps: saved.native_core.video.fps.unwrap_or(60),
-        },
-        pending: None,
+        }),
         received: 0,
         sent: 0,
         rtt: None,
         audio_bytes: 0,
-        video_payload_bytes: None,
-        sent_video_config: None,
         raw_audio: saved.allow_raw_audio,
         audio_codec: None,
         authenticated: false,
@@ -631,7 +591,6 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         pending_clipboard: None,
         video,
         generation,
-        inspector,
         audio: None,
         keys: Default::default(),
         events: VecDeque::new(),
@@ -676,69 +635,26 @@ async fn connect(
     if !manager.view().0.force_relay {
         return evoparseq_phaze::connect(remote, peer, view).await;
     }
-    use evoparseq_phaze::turn::{Carrier, Relay};
-    use webrtc::ice::url::{ProtoType, SchemeType, Url};
-    let configuration = manager.resolve_configuration().await?;
-    for server in configuration.ice_servers {
-        for raw in server.urls {
-            let url = Url::parse_url(&raw)?;
-            let (carrier, name) = match (url.scheme, url.proto) {
-                (SchemeType::Turn, ProtoType::Udp) => (Carrier::Udp, "TURN / UDP"),
-                (SchemeType::Turn, ProtoType::Tcp) => (Carrier::Tcp, "TURN / TCP"),
-                (SchemeType::Turns, ProtoType::Tcp) => (Carrier::Tls, "TURN / TLS"),
-                _ => continue,
-            };
+    phaze_session::connect_relay(
+        remote,
+        peer,
+        view,
+        manager.resolve_configuration().await?.ice_servers,
+        || {
+            rustls_native_certs::load_native_certs()
+                .certs
+                .into_iter()
+                .map(|cert| cert.as_ref().to_vec())
+                .collect()
+        },
+        |view, name, allocated| {
             view.carrier = name;
-            evoparseq_phaze::Sink::stage(view, "allocating_turn");
-            let trusted_roots: Vec<_> = if carrier == Carrier::Tls {
-                rustls_native_certs::load_native_certs()
-                    .certs
-                    .into_iter()
-                    .map(|c| c.as_ref().to_vec())
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            let relay = match Relay::allocate_trusted(
-                &url.host,
-                url.port,
-                carrier,
-                &server.username,
-                &server.credential,
-                &trusted_roots,
-            )
-            .await
-            {
-                Ok(relay) => relay,
-                Err(error) => {
-                    crate::event_log::record(
-                        "WARN",
-                        "phaze_turn_allocation_failed",
-                        serde_json::json!({"carrier":name,"reason":error.to_string()}),
-                    );
-                    continue;
-                }
-            };
-            view.route = "TURN";
-            view.carrier = name;
-            let result = evoparseq_phaze::connect_via(remote, peer, view, &relay).await;
-            relay.close().await;
-            return result;
-        }
-    }
-    anyhow::bail!(
-        "No configured TURN server could allocate a Phaze relay. Check the URL and credentials."
+            if allocated {
+                view.route = "TURN";
+            }
+        },
     )
-}
-
-fn normalized(viewport: Option<crate::viewport::Viewport>, x: i32, y: i32) -> Option<(i32, i32)> {
-    let viewport = viewport?;
-    let [left, top, right, bottom] = viewport.rect()?;
-    let axis = |v: i32, start: i32, end: i32| {
-        ((i64::from(v) - i64::from(start)) * 65535 / i64::from(end - start - 1).max(1))
-            .clamp(0, 65535) as i32
-    };
-    Some((axis(x, left, right), axis(y, top, bottom)))
+    .await
 }
 
 fn translate(
@@ -777,22 +693,8 @@ fn translate(
             y,
             relative: true,
         }),
-        Event::Button(down, button, x, y) if (0..=4).contains(&button) => {
-            if let Some((nx, ny)) = normalized(viewport, x, y) {
-                if down {
-                    commands.push(Input::Motion {
-                        x: nx,
-                        y: ny,
-                        relative: false,
-                    });
-                }
-                commands.push(Input::Button {
-                    button: [1, 3, 2, 4, 5][button as usize],
-                    x,
-                    y,
-                    down,
-                });
-            }
+        Event::Button(down, button, x, y) => {
+            phaze_session::button(viewport, down, button, x, y, commands);
         }
         Event::Scroll(x, y) => commands.push(Input::Scroll {
             x,
@@ -830,20 +732,16 @@ mod tests {
                 generation: window.stats.begin(),
                 window: window.clone(),
                 manager: manager.clone(),
-                config: Default::default(),
-                pending: None,
+                stream: Stream::new(Default::default()),
                 received: 0,
                 sent: 0,
                 rtt: None,
                 audio_bytes: 0,
-                video_payload_bytes: None,
-                sent_video_config: None,
                 raw_audio: false,
                 audio_codec: None,
                 authenticated: false,
                 last_clipboard: String::new(),
                 pending_clipboard: None,
-                inspector: Default::default(),
                 audio: None,
                 keys: Default::default(),
                 events: VecDeque::new(),
@@ -893,7 +791,7 @@ mod tests {
                 .read()
                 .context("Missing first telemetry sample")?;
             before.video_payload_bytes = Some(4_000);
-            view.video_payload_bytes = Some(129_000);
+            view.video(&[0; 129_000], false)?;
             view.traffic(127048, 63524);
             let mut current = window
                 .stats
@@ -958,7 +856,7 @@ mod tests {
             assert!(view.poll(Some(7), &mut commands, &mut controls)?);
             let (id, config) = view.stream_request().context("Missing stream update")?;
             assert_eq!((id, config.mbps, config.fps), (7, 40, 144));
-            assert_eq!(view.sent_video_config, Some(initial_config));
+            assert_eq!(view.stream.sent(), Some(initial_config));
             view.stream_request_sent(id, config);
             view.traffic(127048, 63524);
             let measured = window
@@ -1028,7 +926,7 @@ mod tests {
                 });
             }
             view.video(&[0, 0, 0, 1, 0x09, 0xf0], true)?;
-            assert_eq!(view.video_payload_bytes, Some(129_006));
+            assert_eq!(view.stream.payload_bytes(), Some(129_006));
             assert_eq!(view.interval_pictures, 0);
             view.control_sent(&ClientControl::Clipboard("fixture".into()), false);
             assert!(view.last_clipboard.is_empty());
@@ -1092,13 +990,19 @@ mod tests {
             // An idle decoder has no recovery to dispatch. A recovery that
             // requires 4:2:0 updates both a reopen and a concurrent user request.
             assert!(!view.take_video_recovery());
-            view.config.chroma_444 = true;
-            view.pending = Some((8, view.config));
-            view.prepare_video_recovery(false);
-            assert!(view.config.chroma_444);
-            view.prepare_video_recovery(true);
-            assert!(!view.config.chroma_444);
-            assert_eq!(view.stream_request(), Some((8, view.config)));
+            view.stream.apply(
+                evoparseq_phaze::VideoConfig {
+                    hevc: true,
+                    chroma_444: true,
+                    ..view.stream.config()
+                },
+                Some(8),
+            );
+            view.stream.prepare_recovery(false);
+            assert!(view.video_config().chroma_444);
+            view.stream.prepare_recovery(true);
+            assert!(!view.video_config().chroma_444);
+            assert_eq!(view.stream_request(), Some((8, view.video_config())));
             view.controller(42);
             view.controller(42);
             assert_eq!(

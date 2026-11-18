@@ -1,6 +1,7 @@
 # Experimental Phaze media/input and TURN investigation
 
-This work is confined to codex/phaze-protocol and the Windows adapter.
+This work is confined to `codex/phaze-protocol`. The Windows client exposes
+Phaze through the shared Rust protocol and session code.
 The protocol source is original Rust, derived from wire-format observations
 under authorized interoperability testing. No proprietary Phaze implementation
 body, SDK or binary is included. Public physical-key/button constants are described
@@ -272,3 +273,36 @@ unsent packets, sample expiry and the shared Windows stats adapter. Live RTT
 validation remains outstanding. Host encode time and other unparsed host
 telemetry remain unknown (N/A). The new controls
 and UI do not establish live HEVC, full chroma or display-switching success.
+
+## Flatpak and Android TV port assessment
+
+The protocol crate owns sign-in, discovery, DTLS, direct UDP and TURN carriers,
+reliable framing, AAC-LC/PCM decoding, and input and cursor messages. The common
+`phaze_session.rs` uses the existing Rust video inspector and owns stream
+preferences, request and recovery state, received payload counts, pointer
+coordinates, guest permissions, and TURN server selection. The Windows adapter
+uses this code now. Linux and Android still need application-level integration.
+
+| Area | Linux Flatpak | Android TV |
+| --- | --- | --- |
+| Account and connection | Extend the existing Rust account worker and desktop service selector. Reuse the desktop keyring and connection settings. | Route the current JNI sign-in and stream entry points through the shared service model. Keep the selector and D-pad focus in Compose, and keep protected sessions in Keystore. |
+| Video | Submit the same encoded slices and packet metadata to the existing Vulkan Video queue. Bind encoder resets and recovery to Linux playback. | Submit the same inputs to the MediaCodec/Surface pipeline. Map its reset, keyframe and surface lifecycle to the Phaze session. |
+| Audio | Connect the decoded 48 kHz stereo samples to the bounded PCM queue read by PipeWire. | Feed the same PCM path into the AAudio callback. |
+| Input and cursor | Adapt native Wayland events, cursor shapes and focus release. | Adapt Android key, mouse and focus events. Verify capture and release with the target TV hardware. |
+
+Both ports can use the existing bounded PCM handoff. A shared decoded-PCM
+entry point should accept the protocol's samples directly and avoid running
+them through an Opus decoder, re-encoding, or adding a second queue. TURN TLS
+uses bundled public roots in the protocol and can accept additional roots from
+the embedding platform. Each port must verify private-CA handling.
+
+Start with one active display, H.264 4:2:0, stereo audio, basic input, and
+direct UDP. Validate the same path through TURN UDP/TCP/TLS. Advertise HEVC
+only after the local backend and an actual Phaze stream are verified. The
+current Linux Vulkan HEVC backend supports Main/Main10 4:2:0. Android hardware
+capabilities vary by device. Phaze 4:4:4, simultaneous displays, USB forwarding
+and gamepad support each need independent validation before exposure.
+
+CI tests the protocol on Windows and Linux and checks that it compiles for
+Android ARM64 and ARMv7. Device streaming and Flatpak packaging are separate
+validation steps for the application integrations.

@@ -122,56 +122,15 @@ pub struct State {
     pub hid_primary_ready: AtomicBool,
 }
 
-#[cfg(windows)]
-#[derive(Default)]
-pub struct PhazePeers {
-    pub local_id: Option<u32>,
-    pub controller: Option<u32>,
-    pub state: evoparseq_phaze::PeerState,
-}
+pub use crate::phaze_session::PhazePeers;
 
-#[cfg(windows)]
-impl PhazePeers {
-    pub fn admin(&self) -> bool {
-        self.state
-            .guests
-            .as_deref()
-            .unwrap_or_default()
-            .iter()
-            .any(|guest| Some(guest.id) == self.local_id && guest.admin)
-    }
-
-    pub fn allows(&self, control: &evoparseq_phaze::ClientControl) -> bool {
-        use evoparseq_phaze::ClientControl;
-        if !self.admin() {
-            return false;
-        }
-        let guests = self.state.guests.as_deref().unwrap_or_default();
-        match control {
-            ClientControl::SecureAttention => true,
-            ClientControl::SetControl(id) => *id == 0 || guests.iter().any(|guest| guest.id == *id),
-            ClientControl::RemoveGuest(id) => {
-                Some(*id) != self.local_id && guests.iter().any(|guest| guest.id == *id)
-            }
-            ClientControl::RespondToOffer { attempt_id, .. } => self
-                .state
-                .offers
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .any(|offer| offer.attempt_id == *attempt_id),
-            ClientControl::Clipboard(_) => false,
-        }
-    }
-}
 impl State {
-    pub fn supported_video(&self, mut video: Video) -> Video {
+    pub fn supported_video(&self, video: Video) -> Video {
         if self.phaze.load(Ordering::Acquire) {
-            video.resolution = crate::session_preferences::Resolution::Host;
-            video.constant_fps = None;
-            video.rotated = None;
+            crate::phaze_session::supported_video(video)
+        } else {
+            video
         }
-        video
     }
     pub fn panel_video(&self, saved: Video) -> Video {
         self.supported_video(
