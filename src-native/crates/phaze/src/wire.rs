@@ -462,7 +462,15 @@ fn receive_frontier_releases_buffered_frames_and_keeps_ack_window() -> Result<()
         &[4u64, 67, 1].map(u64::to_le_bytes).concat()
     );
     let (_, ack) = receiver.receive(&first[0])?;
-    assert_eq!(&ack.unwrap()[26..], &1u64.to_le_bytes());
+    let ack = ack.unwrap();
+    assert_eq!(&ack[..2], &[2, 0]);
+    assert_eq!(&ack[2..], &[0u64, 4].map(u64::to_le_bytes).concat());
+    far[4..12].copy_from_slice(&68u64.to_le_bytes());
+    let (_, ack) = receiver.receive(&far)?;
+    assert_eq!(
+        &ack.unwrap()[10..],
+        &[4u64, 68, 3].map(u64::to_le_bytes).concat()
+    );
     Ok(())
 }
 

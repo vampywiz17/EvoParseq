@@ -145,7 +145,7 @@ impl evoparseq_phaze::Sink for View {
             &mut self.last_clipboard,
             &mut self.pending_clipboard,
             text,
-            self.window.clipboard_allowed(),
+            self.window.clipboard_write_allowed(),
             Instant::now(),
             |value| desktop.write_text(value),
         );
@@ -368,7 +368,7 @@ impl evoparseq_phaze::Sink for View {
             crate::clipboard_sync::retry(
                 &mut self.last_clipboard,
                 &mut self.pending_clipboard,
-                self.window.clipboard_allowed(),
+                self.window.clipboard_write_allowed(),
                 Instant::now(),
                 |value| desktop.write_text(value),
             );

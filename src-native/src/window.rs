@@ -798,13 +798,12 @@ impl Window {
                 .detached
     }
     pub fn clipboard_allowed(&self) -> bool {
+        self.clipboard_write_allowed() && unsafe { IsClipboardFormatAvailable(13) != 0 }
+    }
+    pub(crate) fn clipboard_write_allowed(&self) -> bool {
         // GetForegroundWindow is process-independent; GetFocus is UI-thread local.
         self.online
-            && unsafe {
-                GetForegroundWindow() == self.handle()
-                    && IsIconic(self.handle()) == 0
-                    && IsClipboardFormatAvailable(13) != 0
-            }
+            && unsafe { GetForegroundWindow() == self.handle() && IsIconic(self.handle()) == 0 }
             && self.video_ready.load(Ordering::Acquire)
             && self.video_visible.load(Ordering::Acquire)
             && !self.settings_open()
