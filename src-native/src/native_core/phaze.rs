@@ -44,7 +44,7 @@ struct View {
     audio: Option<Arc<crate::audio_windows::Playback>>,
     keys: evoparseq_phaze::Keyboard,
     events: VecDeque<Event>,
-    input_logged: [u8; 4],
+    input_logged: [Option<bool>; 4],
     interval_motion: u32,
     interval_pictures: u32,
     route: &'static str,
@@ -132,12 +132,20 @@ impl evoparseq_phaze::Sink for View {
         );
     }
     fn controller(&mut self, id: u32) {
-        self.window
+        let mut peers = self
+            .window
             .session
             .phaze_peers
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .controller = Some(id);
+            .unwrap_or_else(|e| e.into_inner());
+        if peers.controller != Some(id) {
+            peers.controller = Some(id);
+            crate::event_log::record(
+                "INFO",
+                "phaze_controller_changed",
+                serde_json::json!({"local_has_control": peers.local_id.map(|local| id == local)}),
+            );
+        }
     }
     fn clipboard_text(&mut self, text: &str) {
         let desktop = crate::platform_windows::NativeDesktop(self.window.handle() as usize);
@@ -179,6 +187,29 @@ impl evoparseq_phaze::Sink for View {
     }
     fn stream_request(&mut self) -> Option<(u32, evoparseq_phaze::VideoConfig)> {
         self.pending.take()
+    }
+    fn take_video_recovery(&mut self) -> bool {
+        let Some((_, fallback_420)) = self.video.take_keyframe_request() else {
+            return false;
+        };
+        if fallback_420 {
+            self.config.chroma_444 = false;
+            if let Some((_, config)) = &mut self.pending {
+                config.chroma_444 = false;
+            }
+        }
+        true
+    }
+    fn video_recovery_sent(&mut self, output: u32) {
+        crate::event_log::record(
+            "INFO",
+            "phaze_video_recovery_sent",
+            serde_json::json!({"output": output}),
+        );
+    }
+    fn cursor_output_changed(&mut self) {
+        self.window
+            .set_cursor(crate::cursor::Request::Visible(true));
     }
     fn traffic(&mut self, received: u64, sent: u64) {
         self.received = received;
@@ -507,9 +538,9 @@ impl evoparseq_phaze::Sink for View {
                         if index == 0 && queued {
                             self.interval_motion += 1;
                         }
-                        let bit = 1 << u8::from(queued);
-                        if self.input_logged[index] & bit == 0 && crate::event_log::enabled() {
-                            self.input_logged[index] |= bit;
+                        if self.input_logged[index] != Some(allowed) && crate::event_log::enabled()
+                        {
+                            self.input_logged[index] = Some(allowed);
                             crate::event_log::record(
                                 "INFO",
                                 "phaze_input_dispatch",
@@ -600,7 +631,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         audio: None,
         keys: Default::default(),
         events: VecDeque::new(),
-        input_logged: [0; 4],
+        input_logged: [None; 4],
         interval_motion: 0,
         interval_pictures: 0,
         route: "Direct",
@@ -812,7 +843,7 @@ mod tests {
                 audio: None,
                 keys: Default::default(),
                 events: VecDeque::new(),
-                input_logged: [0; 4],
+                input_logged: [None; 4],
                 interval_motion: 0,
                 interval_pictures: 0,
                 route: "Direct",

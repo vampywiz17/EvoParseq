@@ -57,6 +57,7 @@ A newer position replaces it. Releases and output changes clear it.
 Phaze host cursor visibility (opcode 6), cursor images (opcode 12), and cached
 image IDs (opcode 19) feed the shared Win32 cursor owner. Visibility updates
 retain the last shape and leave pointer capture and positioning independent.
+Only the selected display's visibility updates apply to the client window.
 Color images use the existing PNG/RGBA path.
 Monochrome images preserve both cursor masks and their hotspot.
 An unknown cached shape triggers a bounded opcode-20 cache refresh request.
@@ -224,6 +225,9 @@ The existing session overlay handles bitrate/FPS requests, advertised active
 output selection, local fullscreen/immersive input, volume/mute, settings and
 stats. Output switching stops the old stream (opcode 4 + output ID) before
 requesting the new one. A sent request is not labeled host-confirmed.
+On decoder recovery, the same stop/start sequence reopens the selected video
+stream on the existing connection to obtain a fresh reference chain. It uses
+the shared decoder recovery deadline and request rate limit.
 The Video tab distinguishes the last sent bitrate/FPS request from measured
 decoded FPS and received compressed video payload bitrate. The latter counts
 reassembled encoded bytes, excluding message headers, padding and transport

@@ -206,9 +206,15 @@ pub trait Sink {
     fn stream_request(&mut self) -> Option<(u32, VideoConfig)> {
         None
     }
+    /// Consume a pending decoder recovery when the selected stream can be reopened.
+    fn take_video_recovery(&mut self) -> bool {
+        false
+    }
+    fn video_recovery_sent(&mut self, _output: u32) {}
     /// The carrier accepted a stream request for sending.
     fn stream_request_sent(&mut self, _output: u32, _config: VideoConfig) {}
     fn cursor_visibility(&mut self, _visible: bool) {}
+    fn cursor_output_changed(&mut self) {}
     fn cursor_image(&mut self, _image: CursorImage<'_>) {}
     fn bandwidth_feedback_started(&mut self) {}
     fn peer_state(&mut self, _local_id: u32, _state: PeerState) {}

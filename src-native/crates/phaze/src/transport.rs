@@ -539,6 +539,7 @@ pub async fn run(
             "Phaze first video timed out"
         );
         let mut stream_request = None;
+        let mut recovery_output = None;
         let mut bandwidth_ack_sent = false;
         let mut controls_sent = 0;
         tokio::select! {
@@ -553,10 +554,21 @@ pub async fn run(
                     release_and_close(&mut c,&mut reliable,&socket,peer).await;
                     return running.map(|_|());
                 }
-                if let Some((output,config))=sink.stream_request() {
+                let recovering = selected_output.is_some()
+                    && reliable.pending().count() < 62
+                    && sink.take_video_recovery();
+                let update = sink.stream_request();
+                let request = update.or_else(|| {
+                    selected_output.filter(|_| recovering).map(|output| (output, sink.video_config()))
+                });
+                if let Some((output,config))=request {
                     ensure!(outputs_available.iter().any(|o: &wire::Output| o.id==output && o.active), "Phaze display is unavailable");
-                    if selected_output != Some(output) {
+                    let changing_output = selected_output != Some(output);
+                    if changing_output {
                         deferred_motion = None;
+                        sink.cursor_output_changed();
+                    }
+                    if changing_output || recovering {
                         if let Some(previous)=selected_output {
                             let mut stop=vec![4]; stop.extend(u32::to_be_bytes(previous));
                             for p in reliable.frame(&stop)? { send(&mut c,&p)?; }
@@ -564,7 +576,8 @@ pub async fn run(
                     }
                     for p in reliable.frame(&config.request(output)?)? { send(&mut c,&p)?; }
                     selected_output=Some(output);
-                    stream_request=Some((output,config));
+                    stream_request=update;
+                    recovery_output = recovering.then_some(output);
                 }
                 if let Some(output)=selected_output {
                     // A newer position supersedes a deferred position. A release
@@ -673,7 +686,9 @@ pub async fn run(
                         video_received |= !bytes.is_empty();
                     }
                     Some(6) => {
-                        if let Some(visible) = crate::cursor::visibility(&frame[1..]) {
+                        if let Some(visible) =
+                            crate::cursor::visibility(&frame[1..], selected_output)
+                        {
                             sink.cursor_visibility(visible);
                         }
                     }
@@ -721,6 +736,9 @@ pub async fn run(
         }
         if let Some((output, config)) = stream_request {
             sink.stream_request_sent(output, config);
+        }
+        if let Some(output) = recovery_output {
+            sink.video_recovery_sent(output);
         }
         if reported.elapsed() >= Duration::from_millis(500) {
             sink.rtt(reliable.rtt(Instant::now()));
