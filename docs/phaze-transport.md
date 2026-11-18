@@ -54,8 +54,10 @@ Both Windows clients use the same adjacent-movement merging and preserve
 click order. If the Phaze reliable window has at least 48 outstanding
 packets, the last absolute position in an input batch can wait for space.
 A newer position replaces it. Releases and output changes clear it.
-Phaze host cursor images (opcode 12) and cached image IDs (opcode 19) feed
-the shared Win32 cursor owner. Color images use the existing PNG/RGBA path.
+Phaze host cursor visibility (opcode 6), cursor images (opcode 12), and cached
+image IDs (opcode 19) feed the shared Win32 cursor owner. Visibility updates
+retain the last shape and leave pointer capture and positioning independent.
+Color images use the existing PNG/RGBA path.
 Monochrome images preserve both cursor masks and their hotspot.
 
 Video decode/presentation remains on the existing Windows backend. Audio and input

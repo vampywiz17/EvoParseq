@@ -206,6 +206,7 @@ pub trait Sink {
     }
     /// The carrier accepted a stream request for sending.
     fn stream_request_sent(&mut self, _output: u32, _config: VideoConfig) {}
+    fn cursor_visibility(&mut self, _visible: bool) {}
     fn cursor_image(&mut self, _image: CursorImage<'_>) {}
     fn bandwidth_feedback_started(&mut self) {}
     /// DTLS carrier bytes, excluding TURN encapsulation and handshake traffic.

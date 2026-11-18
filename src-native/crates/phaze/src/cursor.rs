@@ -5,6 +5,12 @@ const MAX_IMAGE: usize = 512 * 1024;
 const CACHE_ENTRIES: usize = 128;
 const CACHE_BYTES: usize = 4 * 1024 * 1024;
 
+pub(crate) fn visibility(body: &[u8]) -> Option<bool> {
+    // Output ID, hidden flag, and two coordinates. Visibility can be applied
+    // independently of cursor positioning or mouse capture.
+    Some(body.get(..13)?[4] == 0)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CursorFormat {
     Rgba,
@@ -86,6 +92,18 @@ impl Cursors {
             bytes: &shape.bytes,
         })
     }
+}
+
+#[cfg(test)]
+#[test]
+fn cursor_visibility_changes_without_a_new_image() {
+    let mut body = [0; 13];
+    body[3] = 2;
+    body[4] = 1;
+    assert_eq!(visibility(&body), Some(false));
+    assert_eq!(visibility(&body[..12]), None);
+    body[4] = 0;
+    assert_eq!(visibility(&body), Some(true));
 }
 
 #[cfg(test)]

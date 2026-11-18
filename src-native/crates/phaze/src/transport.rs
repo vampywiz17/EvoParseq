@@ -660,6 +660,11 @@ pub async fn run(
                         sink.video(bytes, flags & 1 != 0)?;
                         video_received |= !bytes.is_empty();
                     }
+                    Some(6) => {
+                        if let Some(visible) = crate::cursor::visibility(&frame[1..]) {
+                            sink.cursor_visibility(visible);
+                        }
+                    }
                     Some(7) => {
                         let (codec, pcm, payload_bytes) = audio.decode(&frame[1..])?;
                         sink.audio(pcm, codec, payload_bytes)?;
