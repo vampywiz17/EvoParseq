@@ -528,6 +528,7 @@ pub async fn run(
     let (mut received, mut sent) = (0u64, 0u64);
     let mut reported = Instant::now();
     let mut arrival = reported;
+    let mut kernel_arrival = None;
     let mut bandwidth_reported = false;
     loop {
         ensure!(
@@ -610,8 +611,8 @@ pub async fn run(
                     controls_sent += 1;
                 }
             },
-            r=socket.recv_from(&mut buf)=>{
-                let(n,src)=match r {
+            r=socket.recv_from_timed(&mut buf)=>{
+                let(n,src,kernel_ns)=match r {
                     Ok(v)=>v,
                     Err(err) if unreachable(&err)=>continue,
                     Err(_)=>bail!("Phaze UDP receive failed")
@@ -624,6 +625,7 @@ pub async fn run(
                 }
                 received=received.saturating_add(n as u64);
                 arrival=Instant::now();
+                kernel_arrival=kernel_ns;
                 c.set_now(start.elapsed());
                 c.feed(&buf[..n]).map_err(|_|anyhow::anyhow!("Phaze DTLS record rejected"))?;
             }
@@ -648,7 +650,7 @@ pub async fn run(
                 Some(wire::Envelope::Reliable(payload)) => payload,
                 None => continue,
             };
-            let (frames, ack) = reliable.receive_at(payload, arrival)?;
+            let (frames, ack) = reliable.receive_timed(payload, arrival, kernel_arrival)?;
             if let Some(ack) = ack {
                 send(&mut c, &ack)?;
                 if bandwidth_reported || bandwidth_feedback.is_none() {
@@ -726,6 +728,9 @@ pub async fn run(
         let transmission_started = Instant::now();
         sent = sent.saturating_add(flush(&mut c, &socket, peer).await?);
         reliable.transmitted(transmission_started);
+        if let Some(sample) = reliable.take_probe_timing() {
+            sink.bandwidth_probe_timing(sample);
+        }
         for (index, control) in controls.drain(..).enumerate() {
             sink.control_sent(&control, index < controls_sent);
         }

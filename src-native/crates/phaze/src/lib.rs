@@ -12,6 +12,7 @@ pub mod turn;
 mod wire;
 use anyhow::{bail, ensure, Context, Result};
 pub use audio::AudioCodec;
+pub use bandwidth::ProbeTiming;
 pub use control::{ClientControl, PeerState, MAX_CLIPBOARD_BYTES};
 pub use cursor::{CursorFormat, CursorImage};
 pub use datagram::Datagram;
@@ -219,6 +220,7 @@ pub trait Sink {
     fn cursor_image(&mut self, _image: CursorImage<'_>) {}
     /// The carrier accepted bandwidth feedback. Rates are in bytes per second.
     fn bandwidth_feedback_sent(&mut self, _lower_rate: f64, _upper_rate: f64, _first: bool) {}
+    fn bandwidth_probe_timing(&mut self, _sample: ProbeTiming) {}
     fn peer_state(&mut self, _local_id: u32, _state: PeerState) {}
     fn host_flags(&mut self, _flags: u32) {}
     fn controller(&mut self, _id: u32) {}

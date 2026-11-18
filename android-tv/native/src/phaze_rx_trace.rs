@@ -1,21 +1,16 @@
 //! Opt-in comparison of kernel and application receive times for direct Phaze.
 use evoparseq_phaze::Datagram;
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use std::{
     io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6},
     os::fd::AsRawFd,
-    sync::Mutex,
-    time::{Duration, Instant},
 };
 use tokio::{io::Interest, net::UdpSocket};
 
 // Linux UAPI SO_TIMESTAMPNS_NEW uses two i64 fields on both Android ABIs.
 const SO_TIMESTAMPNS_NEW: libc::c_int = 64;
 const SO_TIMESTAMPNS_OLD: libc::c_int = 35;
-const BURST_PACKETS: usize = 24;
-const MAX_BURSTS: u8 = 8;
 
 pub fn enable(socket: UdpSocket) -> Option<TracedSocket> {
     let mode = if set_timestamp_option(&socket, SO_TIMESTAMPNS_NEW) {
@@ -30,14 +25,7 @@ pub fn enable(socket: UdpSocket) -> Option<TracedSocket> {
         "phaze_android_rx_timestamping",
         json!({"kernel_timestamps_enabled": mode.is_some(), "mode": mode}),
     );
-    mode.map(|_| TracedSocket {
-        socket,
-        trace: Mutex::new(Trace {
-            next: Instant::now() + Duration::from_secs(5),
-            remaining: MAX_BURSTS,
-            samples: Vec::with_capacity(BURST_PACKETS),
-        }),
-    })
+    mode.map(|_| TracedSocket { socket })
 }
 
 fn set_timestamp_option(socket: &UdpSocket, option: libc::c_int) -> bool {
@@ -57,7 +45,6 @@ fn set_timestamp_option(socket: &UdpSocket, option: libc::c_int) -> bool {
 
 pub struct TracedSocket {
     socket: UdpSocket,
-    trace: Mutex<Trace>,
 }
 
 impl Datagram for TracedSocket {
@@ -74,82 +61,22 @@ impl Datagram for TracedSocket {
     }
 
     async fn recv_from(&self, data: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        let (len, peer, kernel_ns, read_at) = self
-            .socket
+        self.socket.recv_from(data).await
+    }
+
+    async fn recv_from_timed(
+        &self,
+        data: &mut [u8],
+    ) -> io::Result<(usize, SocketAddr, Option<i64>)> {
+        self.socket
             .async_io(Interest::READABLE, || {
                 receive(self.socket.as_raw_fd(), data)
             })
-            .await?;
-        if len >= 1000 {
-            if let Some(kernel_ns) = kernel_ns {
-                self.trace.lock().unwrap_or_else(|e| e.into_inner()).sample(
-                    &data[..len],
-                    kernel_ns,
-                    read_at,
-                );
-            }
-        }
-        Ok((len, peer))
+            .await
     }
 }
 
-struct Trace {
-    next: Instant,
-    remaining: u8,
-    samples: Vec<Sample>,
-}
-
-struct Sample {
-    kernel_ns: i64,
-    read_at: Instant,
-    size: usize,
-    tag: u64,
-}
-
-impl Trace {
-    fn sample(&mut self, data: &[u8], kernel_ns: i64, read_at: Instant) {
-        if self.remaining == 0 || read_at < self.next {
-            return;
-        }
-        // A short hash of the encrypted datagram prefix matches the host trace
-        // without writing any packet bytes to the Android diagnostic export.
-        let hash = Sha256::digest(&data[..24]);
-        self.samples.push(Sample {
-            kernel_ns,
-            read_at,
-            size: data.len(),
-            tag: u64::from_be_bytes(hash[..8].try_into().unwrap()),
-        });
-        if self.samples.len() == BURST_PACKETS {
-            let first = &self.samples[0];
-            let samples: Vec<_> = self
-                .samples
-                .iter()
-                .map(|sample| {
-                    json!({
-                        "tag": format!("{:016x}", sample.tag),
-                        "size": sample.size,
-                        "kernel_ns": sample.kernel_ns - first.kernel_ns,
-                        "read_ns": sample.read_at.duration_since(first.read_at).as_nanos() as u64,
-                    })
-                })
-                .collect();
-            crate::event_log::record(
-                "INFO",
-                "phaze_android_rx_timing",
-                json!({"samples":samples}),
-            );
-            self.samples.clear();
-            self.remaining -= 1;
-            self.next = read_at + Duration::from_secs(5);
-        }
-    }
-}
-
-fn receive(
-    fd: libc::c_int,
-    data: &mut [u8],
-) -> io::Result<(usize, SocketAddr, Option<i64>, Instant)> {
+fn receive(fd: libc::c_int, data: &mut [u8]) -> io::Result<(usize, SocketAddr, Option<i64>)> {
     // Aligned backing storage is required for cmsghdr and the sender address.
     let mut control = [0usize; 16];
     // All-zero is a valid initial value for these C output structures.
@@ -167,7 +94,6 @@ fn receive(
     message.msg_controllen = size_of_val(&control);
     // All writable pointers refer to the initialized storage above for this call.
     let len = unsafe { libc::recvmsg(fd, &mut message, 0) };
-    let read_at = Instant::now();
     if len < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -197,7 +123,7 @@ fn receive(
             ))
         }
     };
-    Ok((len as usize, address, timestamp(&message), read_at))
+    Ok((len as usize, address, timestamp(&message)))
 }
 
 fn timestamp(message: &libc::msghdr) -> Option<i64> {

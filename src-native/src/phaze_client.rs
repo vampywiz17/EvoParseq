@@ -14,6 +14,7 @@ pub trait Platform {
     fn outputs(&mut self, _outputs: &[Output]) {}
     fn stream_request_sent(&mut self, _output: u32, _config: VideoConfig) {}
     fn bandwidth_feedback_sent(&mut self, _lower_rate: f64, _upper_rate: f64) {}
+    fn bandwidth_probe_timing(&mut self, _sample: evoparseq_phaze::ProbeTiming) {}
     fn video(&mut self, encoded: &[u8], info: PacketInfo) -> Result<()>;
     fn reset_video(&mut self);
     fn take_recovery(&mut self) -> bool;
@@ -128,6 +129,9 @@ impl<P: Platform> Sink for Client<P> {
         }
         self.platform
             .bandwidth_feedback_sent(lower_rate, upper_rate);
+    }
+    fn bandwidth_probe_timing(&mut self, sample: evoparseq_phaze::ProbeTiming) {
+        self.platform.bandwidth_probe_timing(sample);
     }
     fn stage(&mut self, stage: &'static str) {
         self.platform.stage(stage);
