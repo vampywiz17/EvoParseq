@@ -13,17 +13,10 @@ use std::{
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
-struct DisplayResolution {
-    stream: usize,
-    resolution: crate::session_preferences::Resolution,
-    size: (u32, u32),
-    sent: bool,
-}
-
 #[derive(Default)]
 pub(super) struct HostSettings {
     config: host_video::Config,
-    secondary: Option<DisplayResolution>,
+    secondary: Option<host_video::ResolutionChange>,
     query_deadline: Option<Instant>,
     confirmation: Option<host_video::Confirmation>,
     pending: Option<Video>,
@@ -126,28 +119,13 @@ impl HostSettings {
         size: (u32, u32),
     ) -> Result<()> {
         ensure!(
-            (1..3).contains(&stream),
-            "Invalid additional display stream"
-        );
-        ensure!(
             !self.busy() && self.query_deadline.is_none() && self.outputs_deadline.is_none(),
             "Waiting for the previous host request"
         );
-        Video {
-            resolution,
-            ..Default::default()
-        }
-        .validate()?;
-        // Refresh the complete configuration before patching one stream. Never
-        // write a cached snapshot over another window's recent changes.
+        let request = host_video::ResolutionChange::new(stream, resolution, size)?;
         attempt.send(&host_video::query()?)?;
-        self.secondary = Some(DisplayResolution {
-            stream,
-            resolution,
-            size,
-            sent: false,
-        });
-        self.query_deadline = Some(Instant::now() + QUERY_TIMEOUT);
+        self.secondary = Some(request);
+        self.query_deadline = Some(Instant::now() + host_video::ResolutionChange::REFRESH_TIMEOUT);
         view.waiting();
         view.notify(Notification::DisplayResolution {
             stream,
@@ -157,29 +135,23 @@ impl HostSettings {
         Ok(())
     }
     fn send_secondary(&mut self, attempt: &Attempt, view: &impl View) {
-        let Some(request) = self.secondary.as_mut().filter(|r| !r.sent) else {
+        let Some(request) = self.secondary.as_ref() else {
             return;
         };
         let stream = request.stream;
-        let result = (|| -> Result<()> {
-            let frame = self
-                .config
-                .resolution(stream, request.resolution, request.size)?;
-            let confirmation =
-                host_video::Confirmation::resolution(&frame, stream, Instant::now())?;
-            attempt.send(&frame)?;
-            request.sent = true;
-            self.confirmation = Some(confirmation);
-            Ok(())
-        })();
+        let result =
+            request.write_after_refresh(&self.config, Instant::now(), |frame| attempt.send(&frame));
         crate::event_log::record(
             if result.is_ok() { "INFO" } else { "WARN" },
             "additional_display_resolution_requested",
             serde_json::json!({"stream":stream,"sent":result.is_ok()}),
         );
-        if result.is_err() {
-            self.finish_secondary(view, Status::Failed, false);
-            self.failed(view);
+        match result {
+            Ok(confirmation) => self.confirmation = Some(confirmation),
+            Err(_) => {
+                self.finish_secondary(view, Status::Failed, false);
+                self.failed(view);
+            }
         }
     }
     fn finish_secondary(&mut self, view: &impl View, status: Status, confirmed: bool) {
@@ -729,12 +701,14 @@ mod tests {
     fn secondary_resolution_owns_the_transaction_and_only_confirms_its_target() {
         let view = TestView::default();
         let mut settings = HostSettings {
-            secondary: Some(DisplayResolution {
-                stream: 2,
-                resolution: crate::session_preferences::Resolution::Fixed(1280, 720),
-                size: (1920, 1080),
-                sent: false,
-            }),
+            secondary: Some(
+                host_video::ResolutionChange::new(
+                    2,
+                    crate::session_preferences::Resolution::Fixed(1280, 720),
+                    (1920, 1080),
+                )
+                .unwrap(),
+            ),
             ..Default::default()
         };
         view.waiting();
@@ -755,12 +729,14 @@ mod tests {
                     resolution: Some(crate::session_preferences::Resolution::Fixed(1280, 720))
                 }
             )));
-        settings.secondary = Some(DisplayResolution {
-            stream: 1,
-            resolution: crate::session_preferences::Resolution::Host,
-            size: (1920, 1080),
-            sent: true,
-        });
+        settings.secondary = Some(
+            host_video::ResolutionChange::new(
+                1,
+                crate::session_preferences::Resolution::Host,
+                (1920, 1080),
+            )
+            .unwrap(),
+        );
         settings.query_deadline = Some(Instant::now());
         settings.cancel_secondary(&view);
         assert!(!settings.busy());
