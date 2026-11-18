@@ -118,10 +118,10 @@ impl Bandwidth {
             let start = end - (ordinary_count as u64 - 1);
             let arrivals = ordinary_arrivals(&self.recent, start, end)
                 .chain(train.arrivals[..probe_count].iter().copied());
-            if let Some((len, gap)) = train_gap(arrivals.clone()) {
-                if kernel_ns.is_some() {
-                    self.probe_timing = compare_probe(arrivals, len, ordinary_count, probe_count);
-                }
+            let gap = train_gap(arrivals.clone());
+            if let Some((len, gap)) = gap {
+                self.probe_timing = kernel_ns
+                    .and_then(|_| compare_probe(arrivals, len, ordinary_count, probe_count));
                 self.observe(end, len, gap);
             }
         }
