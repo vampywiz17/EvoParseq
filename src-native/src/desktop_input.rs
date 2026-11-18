@@ -201,7 +201,8 @@ mod pointing {
     pub enum Action {
         Key(i32, i32, bool),
         Motion(i32, i32, bool),
-        Button(i32, bool, i32, i32),
+        /// Physical order is left, right, middle, back, forward.
+        Button(i32, bool, i32, i32, bool),
         Scroll(i32, i32),
         Release,
     }
@@ -219,9 +220,10 @@ mod pointing {
                     Ok(())
                 }
                 Self::Motion(x, y, relative) => send(&header(3, i32::from(relative), x, y)),
-                Self::Button(button, down, x, y) => {
-                    let _ = (x, y); // Parsec sends pointer position separately.
-                    send(&header(1, button, i32::from(down), 0))
+                Self::Button(button, down, x, y, relative) => {
+                    let _ = (x, y, relative); // Parsec sends pointer position separately.
+                    let wire = [1, 3, 2, 4, 5][(button - 1) as usize];
+                    send(&header(1, wire, i32::from(down), 0))
                 }
                 Self::Scroll(x, y) => send(&header(2, x, y, 0)),
                 Self::Release => {
@@ -331,13 +333,15 @@ mod pointing {
             mut send: impl FnMut(Action) -> Result<()>,
         ) -> Result<()> {
             let mask = self.buttons | if self.drag { 1 } else { 0 } | extra;
-            for (bit, wire) in [(1, 1), (2, 3), (4, 2), (8, 4), (16, 5)] {
+            for button in 1..=5 {
+                let bit = 1 << (button - 1);
                 if (self.sent_buttons ^ mask) & bit != 0 {
                     send(Action::Button(
-                        wire,
+                        button,
                         mask & bit != 0,
                         self.x.round() as i32,
                         self.y.round() as i32,
+                        self.relative,
                     ))?;
                 }
             }

@@ -41,6 +41,8 @@ pub fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result
             events: VecDeque::new(),
             cursor: Default::default(),
             last_pointer: 0,
+            cursor_visible: true,
+            started: Instant::now(),
             sampled: Instant::now(),
             received: 0,
             frames: 0,
@@ -89,12 +91,18 @@ struct Adapter<'a> {
     events: VecDeque<crate::input_handoff::Event>,
     cursor: crate::gamepad_android::Output,
     last_pointer: u64,
+    cursor_visible: bool,
+    started: Instant,
     sampled: Instant,
     received: u64,
     frames: u64,
 }
 
 impl phaze_client::Platform for Adapter<'_> {
+    fn cursor_visibility(&mut self, visible: bool) {
+        self.cursor_visible = visible;
+    }
+
     fn video(&mut self, bytes: &[u8], info: crate::video_stream::PacketInfo) -> Result<()> {
         self.video.submit(bytes, info);
         Ok(())
@@ -121,6 +129,10 @@ impl phaze_client::Platform for Adapter<'_> {
         if let Some(error) = &video.error {
             anyhow::bail!("{error}");
         }
+        anyhow::ensure!(
+            video.submitted > 0 || now.duration_since(self.started) < Duration::from_secs(30),
+            "No Phaze video output received within 30 seconds"
+        );
         let size = (video.width, video.height);
         self.desktop.engine.geometry(size);
         self.inbox.take(&mut self.events)?;
@@ -130,7 +142,11 @@ impl phaze_client::Platform for Adapter<'_> {
             }
         }
         self.desktop.tick(size, input)?;
-        let pointer = self.desktop.engine.pointer();
+        let pointer = if self.cursor_visible {
+            self.desktop.engine.pointer()
+        } else {
+            0
+        };
         if pointer != self.last_pointer {
             self.cursor.pointer(pointer);
             self.last_pointer = pointer;

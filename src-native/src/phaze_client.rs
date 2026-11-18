@@ -35,7 +35,6 @@ pub struct State {
     pub sent: u64,
     pub rtt: Option<Duration>,
     pub audio_bytes: u64,
-    pub codec: Option<AudioCodec>,
     pub route: &'static str,
     pub carrier: &'static str,
 }
@@ -59,7 +58,6 @@ impl<P: Platform> Client<P> {
                 sent: 0,
                 rtt: None,
                 audio_bytes: 0,
-                codec: None,
                 route: "Direct",
                 carrier: "direct UDP",
             },
@@ -129,7 +127,6 @@ impl<P: Platform> Sink for Client<P> {
     }
     fn audio(&mut self, pcm: &[i16], codec: AudioCodec, payload_bytes: usize) -> Result<()> {
         self.state.audio_bytes = self.state.audio_bytes.saturating_add(payload_bytes as u64);
-        self.state.codec = Some(codec);
         self.pcm.submit(pcm, codec.label());
         Ok(())
     }
@@ -208,12 +205,24 @@ fn translate(action: Action, keys: &mut Keyboard, size: (u32, u32), commands: &m
             y: normal(y, size.1),
             relative: false,
         }),
-        Action::Button(button, down, x, y) => commands.push(Input::Button {
-            button: button as u8,
-            down,
-            x,
-            y,
-        }),
+        Action::Button(button, down, x, y, relative) => {
+            if down && !relative {
+                let position = Input::Motion {
+                    x: normal(x, size.0),
+                    y: normal(y, size.1),
+                    relative: false,
+                };
+                if commands.last() != Some(&position) {
+                    commands.push(position);
+                }
+            }
+            commands.push(Input::Button {
+                button: button as u8,
+                down,
+                x,
+                y,
+            });
+        }
         Action::Scroll(x, y) => commands.push(Input::Scroll {
             x,
             y: y.saturating_neg(),
@@ -222,5 +231,72 @@ fn translate(action: Action, keys: &mut Keyboard, size: (u32, u32), commands: &m
             keys.reset();
             commands.push(Input::Release);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linux_phaze_preserves_physical_mouse_buttons_and_positions_click_first() -> Result<()> {
+        let mut desktop = DesktopInput::default();
+        let mut commands = Vec::new();
+        let size = (101, 101);
+        desktop.event(Event::Focus(true), size, &mut commands)?;
+        for (mask, button) in [(2, 2), (4, 3)] {
+            commands.clear();
+            let pointer = crate::desktop_input::Pointer {
+                x: 50.,
+                y: 25.,
+                relative: false,
+                moved: true,
+                viewport: size,
+                buttons: 0,
+                wheel: (0, 0),
+            };
+            desktop.event(Event::Pointer(pointer), size, &mut commands)?;
+            commands.clear();
+            desktop.event(
+                Event::Pointer(crate::desktop_input::Pointer {
+                    buttons: mask,
+                    moved: false,
+                    ..pointer
+                }),
+                size,
+                &mut commands,
+            )?;
+            desktop.event(
+                Event::Pointer(crate::desktop_input::Pointer {
+                    moved: false,
+                    ..pointer
+                }),
+                size,
+                &mut commands,
+            )?;
+            assert_eq!(
+                commands,
+                [
+                    Input::Motion {
+                        x: 32767,
+                        y: 16383,
+                        relative: false
+                    },
+                    Input::Button {
+                        button,
+                        x: 50,
+                        y: 25,
+                        down: true
+                    },
+                    Input::Button {
+                        button,
+                        x: 50,
+                        y: 25,
+                        down: false
+                    },
+                ]
+            );
+        }
+        Ok(())
     }
 }

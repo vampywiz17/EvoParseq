@@ -229,10 +229,28 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_settings(
             crate::preferences::Preferences::parse(&current)?
         };
         let field = text(&mut env, &field)?;
+        let service = SESSION
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Account unavailable"))?
+            .as_ref()
+            .map_or(account::Service::Parsec, |session| session.service());
         if !field.is_empty() {
-            value.select(&field, usize::try_from(index)?)?;
+            let index = usize::try_from(index)?;
+            let view = value.view_for(service);
+            anyhow::ensure!(
+                view["rows"]
+                    .as_array()
+                    .is_some_and(|rows| rows.iter().any(|row| {
+                        row["key"] == field
+                            && row["choices"]
+                                .as_array()
+                                .is_some_and(|choices| index < choices.len())
+                    })),
+                "Unavailable TV setting"
+            );
+            value.select(&field, index)?;
         }
-        Ok(value.view())
+        Ok(value.view_for(service))
     })();
     // Local malformed settings must not leak their raw content to the screen.
     reply(

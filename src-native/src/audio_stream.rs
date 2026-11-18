@@ -611,6 +611,23 @@ impl Drop for Pipeline {
 mod tests {
     use super::*;
 
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_decoded_phaze_audio_uses_the_existing_callback_and_keeps_its_codec() {
+        let pcm = DecodedPcm::stereo(100);
+        let receiver = pcm.receiver();
+        let mut callback = receiver.callback_reader().unwrap();
+        pcm.submit(&[42, -42, 73, -73], "AAC-LC");
+        pcm.submit(&[1], "PCM s16le");
+        let mut output = [0; 4];
+        assert_eq!(callback.render(&mut output).frames, 2);
+        assert_eq!(output, [42, -42, 73, -73]);
+        let snapshot = receiver.snapshot();
+        assert_eq!(snapshot.codec, Some("AAC-LC"));
+        assert_eq!(snapshot.packets_decoded, 1);
+        assert_eq!(snapshot.layout, Some(Layout::STEREO));
+    }
+
     #[test]
     fn recovery_barrier_retires_staged_and_inflight_audio_without_stopping_decoder() {
         let pipeline = Pipeline::start_with_budget(Some(100));
