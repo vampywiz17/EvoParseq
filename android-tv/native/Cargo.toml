@@ -56,6 +56,13 @@ lto = "thin"
 codegen-units = 1
 opt-level = "s"
 
+# The Phaze DTLS packet path uses portable AES-GCM on 32-bit ARM.
+[profile.release.package.purecrypto]
+opt-level = 3
+
+[profile.release.package.evoparseq-phaze]
+opt-level = 3
+
 [patch."https://github.com/nomi-san/lowlat"]
 lowlat-core = { path = "../../src-native/crates/bud/vendor/lowlat-core" }
 lowlat-crypto = { path = "../../src-native/crates/bud/vendor/lowlat-crypto" }

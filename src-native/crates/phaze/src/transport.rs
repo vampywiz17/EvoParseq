@@ -311,8 +311,7 @@ fn datagram_cid(b: &[u8]) -> Option<[u8; 8]> {
     }
     None
 }
-fn outbound_batches(c: &mut Connection) -> Result<Vec<Vec<u8>>> {
-    let mut batches = Vec::new();
+fn collect_outbound(c: &mut Connection, batches: &mut Vec<Vec<u8>>) -> Result<()> {
     let mut batch = Vec::new();
     loop {
         let record = c
@@ -329,7 +328,11 @@ fn outbound_batches(c: &mut Connection) -> Result<Vec<Vec<u8>>> {
             );
             batches.push(std::mem::take(&mut batch));
         }
-        batch.extend(record);
+        if batch.is_empty() {
+            batch = record;
+        } else {
+            batch.extend_from_slice(&record);
+        }
     }
     if !batch.is_empty() {
         ensure!(
@@ -338,20 +341,37 @@ fn outbound_batches(c: &mut Connection) -> Result<Vec<Vec<u8>>> {
         );
         batches.push(batch);
     }
-    Ok(batches)
+    Ok(())
 }
 
-async fn flush(c: &mut Connection, socket: &impl crate::Datagram, peer: SocketAddr) -> Result<u64> {
+async fn flush(
+    c: &mut Connection,
+    socket: &impl crate::Datagram,
+    peer: SocketAddr,
+    batches: &mut Vec<Vec<u8>>,
+) -> Result<u64> {
+    collect_outbound(c, batches)?;
     let mut bytes = 0;
-    for packet in outbound_batches(c)? {
+    for packet in batches.drain(..) {
         bytes += socket.send_to(&packet, peer).await? as u64;
     }
     Ok(bytes)
 }
 fn send(c: &mut Connection, b: &[u8]) -> Result<()> {
-    let mut app = vec![0xcd, 2];
-    app.extend(b);
-    c.send(&app)
+    let mut small = [0; 64];
+    let mut large;
+    let len = b.len() + 2;
+    let app: &[u8] = if let Some(small) = small.get_mut(..len) {
+        small[..2].copy_from_slice(&[0xcd, 2]);
+        small[2..].copy_from_slice(b);
+        small
+    } else {
+        large = Vec::with_capacity(len);
+        large.extend_from_slice(&[0xcd, 2]);
+        large.extend_from_slice(b);
+        &large
+    };
+    c.send(app)
         .map_err(|_| anyhow::anyhow!("DTLS application write failed"))
 }
 async fn release_and_close(
@@ -368,7 +388,7 @@ async fn release_and_close(
     // Close is outside the reliable window, so a full/lost input queue cannot
     // prevent the host from ending this peer and releasing its pressed state.
     let _ = c.send(&[0xcd, 1]);
-    let _ = flush(c, socket, peer).await;
+    let _ = flush(c, socket, peer, &mut Vec::new()).await;
 }
 async fn handle_stun(
     s: &impl crate::Datagram,
@@ -457,12 +477,13 @@ pub async fn run(
         .map_err(|_| anyhow::anyhow!("Cannot initialize Rust DTLS client"))?;
     let start = Instant::now();
     let mut buf = vec![0; 65536];
+    let mut outbound = Vec::new();
     let mut tick = tokio::time::interval(Duration::from_millis(4));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     sink.stage("dtls_handshaking");
     c.handshake()
         .map_err(|_| anyhow::anyhow!("DTLS initial handshake error"))?;
-    flush(&mut c, &socket, peer).await?;
+    flush(&mut c, &socket, peer, &mut outbound).await?;
     while !c.is_handshake_complete() {
         ensure!(
             start.elapsed() < Duration::from_secs(25),
@@ -491,7 +512,7 @@ pub async fn run(
                 c.handshake().map_err(|_|anyhow::anyhow!("DTLS handshake failed"))?;
             }
         }
-        flush(&mut c, &socket, peer).await?;
+        flush(&mut c, &socket, peer, &mut outbound).await?;
     }
     let cert = c
         .peer_certificates()
@@ -510,7 +531,7 @@ pub async fn run(
         send(&mut c, &p)?;
     }
     let transmission_started = Instant::now();
-    flush(&mut c, &socket, peer).await?;
+    flush(&mut c, &socket, peer, &mut outbound).await?;
     reliable.transmitted(transmission_started);
     sink.stage("waiting_outputs");
     let mut requested = false;
@@ -726,7 +747,7 @@ pub async fn run(
         }
         reliable.retry_due(Instant::now(), |packet| send(&mut c, packet))?;
         let transmission_started = Instant::now();
-        sent = sent.saturating_add(flush(&mut c, &socket, peer).await?);
+        sent = sent.saturating_add(flush(&mut c, &socket, peer, &mut outbound).await?);
         reliable.transmitted(transmission_started);
         if let Some(sample) = reliable.take_probe_timing() {
             sink.bandwidth_probe_timing(sample);
@@ -808,8 +829,10 @@ mod tests {
             .map_err(|e| anyhow::anyhow!("Loopback server configuration: {e:?}"))?;
         c.handshake()
             .map_err(|e| anyhow::anyhow!("Loopback start: {e:?}"))?;
+        let mut outbound = Vec::new();
         for _ in 0..40 {
-            for p in outbound_batches(&mut c)? {
+            collect_outbound(&mut c, &mut outbound)?;
+            for p in outbound.drain(..) {
                 ensure!(
                     datagram_cid(&p).as_ref().map(|v| v.as_slice()) == Some(cid.as_slice()),
                     "Every client handshake datagram must be routable by the installed host"
@@ -882,6 +905,25 @@ mod tests {
                 == wire::HEARTBEAT,
             "Encrypted CID data roundtrip test"
         );
+        // Exercise both the short ACK and ordinary fragmented-payload envelope.
+        for payload in [&[4; 50][..], &[1; 1184][..]] {
+            send(&mut c, payload)?;
+            collect_outbound(&mut c, &mut outbound)?;
+            ensure!(
+                outbound.len() == 1,
+                "Expected one routed application datagram"
+            );
+            for datagram in outbound.drain(..) {
+                s.feed(&datagram)
+                    .map_err(|e| anyhow::anyhow!("Loopback reliable data: {e:?}"))?;
+            }
+            let plaintext = s
+                .recv()
+                .map_err(|e| anyhow::anyhow!("Loopback reliable recv: {e:?}"))?;
+            assert!(
+                matches!(wire::envelope(&plaintext), Some(wire::Envelope::Reliable(b)) if b == payload)
+            );
+        }
         Ok(())
     }
 
