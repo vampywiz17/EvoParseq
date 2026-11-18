@@ -13,6 +13,7 @@ pub trait Platform {
     fn stage(&mut self, _stage: &'static str) {}
     fn outputs(&mut self, _outputs: &[Output]) {}
     fn stream_request_sent(&mut self, _output: u32, _config: VideoConfig) {}
+    fn bandwidth_feedback_sent(&mut self, _lower_rate: f64, _upper_rate: f64) {}
     fn video(&mut self, encoded: &[u8], info: PacketInfo) -> Result<()>;
     fn reset_video(&mut self);
     fn take_recovery(&mut self) -> bool;
@@ -110,8 +111,12 @@ impl<P: Platform> Sink for Client<P> {
         self.state.stream.request_sent(output, config);
         self.platform.stream_request_sent(output, config);
     }
-    fn bandwidth_feedback_started(&mut self, lower_rate: f64, upper_rate: f64) {
-        phaze_session::log_bandwidth_feedback(lower_rate, upper_rate);
+    fn bandwidth_feedback_sent(&mut self, lower_rate: f64, upper_rate: f64, first: bool) {
+        if first {
+            phaze_session::log_bandwidth_feedback(lower_rate, upper_rate);
+        }
+        self.platform
+            .bandwidth_feedback_sent(lower_rate, upper_rate);
     }
     fn stage(&mut self, stage: &'static str) {
         self.platform.stage(stage);

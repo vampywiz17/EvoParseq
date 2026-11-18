@@ -47,6 +47,7 @@ pub fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result
             received: 0,
             video_payload_bytes: 0,
             frames: 0,
+            bandwidth_log: prefs.logging.then(BandwidthLog::default),
         },
         config,
         pcm,
@@ -93,9 +94,63 @@ struct Adapter<'a> {
     received: u64,
     video_payload_bytes: u64,
     frames: u64,
+    bandwidth_log: Option<BandwidthLog>,
+}
+
+#[derive(Default)]
+struct BandwidthLog {
+    baseline: Option<(Instant, u64)>,
+    batches: u64,
+    latest: Option<(f64, f64)>,
+    peak_upper_mbps: Option<f64>,
+}
+
+impl BandwidthLog {
+    fn feedback(&mut self, lower_rate: f64, upper_rate: f64) {
+        let (lower, upper) = (
+            lower_rate * 8.0 / 1_000_000.0,
+            upper_rate * 8.0 / 1_000_000.0,
+        );
+        self.batches += 1;
+        self.latest = Some((lower, upper));
+        self.peak_upper_mbps = Some(self.peak_upper_mbps.unwrap_or(upper).max(upper));
+    }
+
+    fn sample(&mut self, now: Instant, payload_bytes: u64) {
+        let (start, previous_bytes) = *self.baseline.get_or_insert((now, payload_bytes));
+        let elapsed = now.duration_since(start);
+        if elapsed < Duration::from_secs(5) {
+            return;
+        }
+        let video_mbps = payload_bytes.saturating_sub(previous_bytes) as f64 * 8.0
+            / elapsed.as_secs_f64()
+            / 1_000_000.0;
+        crate::event_log::record(
+            "INFO",
+            "phaze_android_bandwidth",
+            json!({
+                "window_ms": elapsed.as_millis() as u64,
+                "video_payload_mbps": video_mbps,
+                "feedback_batches": self.batches,
+                "latest_feedback_lower_mbps": self.latest.map(|(lower, _)| lower),
+                "latest_feedback_upper_mbps": self.latest.map(|(_, upper)| upper),
+                "peak_feedback_upper_mbps": self.peak_upper_mbps,
+            }),
+        );
+        *self = Self {
+            baseline: Some((now, payload_bytes)),
+            ..Self::default()
+        };
+    }
 }
 
 impl phaze_client::Platform for Adapter<'_> {
+    fn bandwidth_feedback_sent(&mut self, lower_rate: f64, upper_rate: f64) {
+        if let Some(log) = &mut self.bandwidth_log {
+            log.feedback(lower_rate, upper_rate);
+        }
+    }
+
     fn cursor_visibility(&mut self, visible: bool) {
         self.cursor_visible = visible;
     }
@@ -166,6 +221,9 @@ impl phaze_client::Platform for Adapter<'_> {
                 video.depth,
             );
             let payload_bytes = state.stream.payload_bytes();
+            if let (Some(log), Some(bytes)) = (&mut self.bandwidth_log, payload_bytes) {
+                log.sample(now, bytes);
+            }
             let payload_mbps = payload_bytes.map(|bytes| {
                 bytes.saturating_sub(self.video_payload_bytes) as f64 * 8.0
                     / elapsed.as_secs_f64()

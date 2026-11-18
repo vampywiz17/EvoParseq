@@ -540,7 +540,7 @@ pub async fn run(
         );
         let mut stream_request = None;
         let mut recovery_output = None;
-        let mut first_bandwidth_feedback = None;
+        let mut bandwidth_feedback = None;
         let mut controls_sent = 0;
         tokio::select! {
             _=heartbeat_timer.tick()=>{
@@ -651,8 +651,8 @@ pub async fn run(
             let (frames, ack) = reliable.receive_at(payload, arrival)?;
             if let Some(ack) = ack {
                 send(&mut c, &ack)?;
-                if !bandwidth_reported && first_bandwidth_feedback.is_none() {
-                    first_bandwidth_feedback = wire::ack_bandwidth(&ack);
+                if bandwidth_reported || bandwidth_feedback.is_none() {
+                    bandwidth_feedback = wire::ack_bandwidth(&ack).or(bandwidth_feedback);
                 }
             }
             for frame in frames {
@@ -729,9 +729,9 @@ pub async fn run(
         for (index, control) in controls.drain(..).enumerate() {
             sink.control_sent(&control, index < controls_sent);
         }
-        if let Some((lower_rate, upper_rate)) = first_bandwidth_feedback {
+        if let Some((lower_rate, upper_rate)) = bandwidth_feedback {
+            sink.bandwidth_feedback_sent(lower_rate, upper_rate, !bandwidth_reported);
             bandwidth_reported = true;
-            sink.bandwidth_feedback_started(lower_rate, upper_rate);
         }
         if let Some((output, config)) = stream_request {
             sink.stream_request_sent(output, config);
