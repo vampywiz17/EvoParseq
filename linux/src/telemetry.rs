@@ -80,7 +80,8 @@ impl Session {
 struct PendingResolution {
     request: crate::host_video::ResolutionChange,
     channel: Weak<crate::display_routes::Channel>,
-    revision: u64,
+    // None means the resize's own refresh has been received.
+    earlier_replies: Option<u64>,
     deadline: Instant,
 }
 
@@ -93,9 +94,16 @@ pub struct Control {
     primary_revision: Option<(u64, u64)>,
     confirmation: Option<crate::host_video::Confirmation>,
     secondary: Option<PendingResolution>,
+    outstanding_video_queries: u64,
     selection: Option<(String, u64, u64, Instant)>,
 }
 impl Control {
+    fn query_video(&mut self, send: impl FnOnce(Bytes) -> Result<()>) -> Result<()> {
+        send(crate::host_video::query()?)?;
+        self.outstanding_video_queries += 1;
+        Ok(())
+    }
+
     pub fn receive(&mut self, bytes: &[u8], session: &Session) {
         if bytes.len() == 13 && bytes[12] == 27 {
             if let Ok(stream) = usize::try_from(i32::from_be_bytes(bytes[..4].try_into().unwrap()))
@@ -135,6 +143,14 @@ impl Control {
                     if host.config.receive(payload).is_ok() {
                         host.revision = host.revision.wrapping_add(1);
                         host.windows = host.config.windows_host();
+                        if self.outstanding_video_queries > 0 {
+                            self.outstanding_video_queries -= 1;
+                            if let Some(pending) = &mut self.secondary {
+                                pending.earlier_replies = pending
+                                    .earlier_replies
+                                    .and_then(|count| count.checked_sub(1));
+                            }
+                        }
                     }
                 }
                 Some(12) => {
@@ -206,22 +222,19 @@ impl Control {
                     resolution,
                     size,
                 } => {
-                    use crate::host_video::{ResolutionChange, query};
+                    use crate::host_video::ResolutionChange;
                     let channel = session
                         .displays
                         .get(stream)
                         .ok_or_else(|| anyhow::anyhow!("Display is closed"))?;
                     let request = ResolutionChange::new(stream, resolution, size)?;
-                    let revision = session
-                        .host
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .revision;
-                    send(query()?)?;
+                    // The control channel is ordered, but the host echoes no query ID.
+                    let earlier_replies = self.outstanding_video_queries;
+                    self.query_video(&mut send)?;
                     self.secondary = Some(PendingResolution {
                         request,
                         channel: Arc::downgrade(&channel),
-                        revision,
+                        earlier_replies: Some(earlier_replies),
                         deadline: Instant::now() + ResolutionChange::REFRESH_TIMEOUT,
                     });
                     let mut host = session.host.lock().unwrap_or_else(|e| e.into_inner());
@@ -231,7 +244,7 @@ impl Control {
                 Command::RefreshDisplays => {
                     self.primary_attempted = None;
                     send(crate::host_displays::query()?)?;
-                    send(crate::host_video::query()?)?;
+                    self.query_video(&mut send)?;
                 }
                 Command::SecureAttention => {
                     anyhow::ensure!(
@@ -308,7 +321,7 @@ impl Control {
                     host.status = Status::Waiting.text().into();
                     drop(host);
                     send(crate::host_displays::query()?)?;
-                    send(crate::host_video::query()?)?;
+                    self.query_video(&mut send)?;
                 }
                 _ => {}
             }
@@ -342,7 +355,7 @@ impl Control {
                 self.secondary = None;
                 host.pending = false;
                 host.status = Status::Unconfirmed.text().into();
-            } else if host.revision != pending.revision {
+            } else if pending.earlier_replies.is_none() {
                 let result = pending
                     .request
                     .write_after_refresh(&host.config, now, &mut send);
@@ -391,7 +404,7 @@ impl Control {
         if let Some(confirmation) = &mut self.confirmation {
             match confirmation.poll(&host.config, now) {
                 crate::host_video::Verification::Query => {
-                    if send(crate::host_video::query().unwrap()).is_err() {
+                    if self.query_video(&mut send).is_err() {
                         self.confirmation = None;
                         host.pending = false;
                         host.status = Status::Failed.text().into();
@@ -457,7 +470,7 @@ impl Control {
         if (desired || self.hid_mouse) && !self.queried {
             // Stock-host read-only queries, once per connection, on explicit diagnostics visibility.
             self.queried = true;
-            let _ = send(crate::host_video::query()?);
+            let _ = self.query_video(&mut send);
             let _ = send(crate::host_displays::query()?);
         }
         if let Some(payload) = self.timing.update(desired) {
@@ -915,14 +928,32 @@ mod command_tests {
                 sent.push(frame);
                 Ok(())
             };
+            session
+                .bus
+                .overlay_visible
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            control.update(true, &session, &mut send).unwrap();
+            control
+                .command(Command::RefreshDisplays, &session, (1920, 1080), &mut send)
+                .unwrap();
             control
                 .command(command(), &session, (1920, 1080), &mut send)
                 .unwrap();
             control.confirm(&session, |_| panic!("cached settings caused a host write"));
             control.receive(&crate::control::text(17, 11, "{}").unwrap(), &session);
             control.confirm(&session, |_| panic!("invalid host reply caused a write"));
-            assert_eq!(sent, [crate::host_video::query().unwrap()]);
+            let query = crate::host_video::query().unwrap();
+            assert_eq!(sent.iter().filter(|frame| **frame == query).count(), 3);
+            assert_eq!(sent.last(), Some(&query));
             assert!(session.host.lock().unwrap().pending);
+
+            let mut earlier = cache.clone();
+            for fps in [40, 50] {
+                earlier["video"][0]["encoderFPS"] = fps.into();
+                control.receive(&reply(&earlier), &session);
+                control.confirm(&session, |_| panic!("earlier query reply caused a write"));
+                assert!(session.host.lock().unwrap().pending);
+            }
 
             let mut fresh = cache;
             fresh["privateOption"] = 77.into();
