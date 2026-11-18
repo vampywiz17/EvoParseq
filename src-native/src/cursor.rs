@@ -13,13 +13,17 @@ pub struct Frame {
     height: u32,
     hot_x: u32,
     hot_y: u32,
-    rgba: Vec<u8>,
+    pixels: Pixels,
+}
+enum Pixels {
+    Rgba(Vec<u8>),
+    Monochrome(Vec<u8>),
 }
 impl Frame {
     pub fn native_png(bytes: &[u8], x: i32, y: i32) -> Result<Self> {
         Self::png(bytes.to_vec(), x, y)
     }
-    fn rgba(bytes: Vec<u8>, width: u32, height: u32, x: i32, y: i32) -> Result<Self> {
+    pub(crate) fn rgba(bytes: Vec<u8>, width: u32, height: u32, x: i32, y: i32) -> Result<Self> {
         let size = Self::size(width, height)?;
         if bytes.len() != size {
             bail!("cursor pixel length mismatch");
@@ -29,7 +33,26 @@ impl Frame {
             height,
             hot_x: x.clamp(0, width as i32 - 1) as u32,
             hot_y: y.clamp(0, height as i32 - 1) as u32,
-            rgba: bytes,
+            pixels: Pixels::Rgba(bytes),
+        })
+    }
+    pub(crate) fn monochrome(
+        bytes: Vec<u8>,
+        width: u32,
+        height: u32,
+        x: u32,
+        y: u32,
+    ) -> Result<Self> {
+        let pixels = Self::size(width, height)? / 4;
+        if bytes.len() != 2 * pixels.div_ceil(8) {
+            bail!("cursor mask length mismatch");
+        }
+        Ok(Self {
+            width,
+            height,
+            hot_x: x.min(width - 1),
+            hot_y: y.min(height - 1),
+            pixels: Pixels::Monochrome(bytes),
         })
     }
     fn size(width: u32, height: u32) -> Result<usize> {
@@ -74,11 +97,17 @@ impl Frame {
             hot_y: rounded(self.hot_y, height, self.height).min(height - 1),
         }
     }
+    fn rgba_pixels(&self) -> &[u8] {
+        let Pixels::Rgba(bytes) = &self.pixels else {
+            unreachable!("RGBA conversion requires an RGBA cursor");
+        };
+        bytes
+    }
     fn resized(&self, geometry: Geometry) -> Self {
         let source = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
             self.width,
             self.height,
-            self.rgba.as_slice(),
+            self.rgba_pixels(),
         )
         .expect("validated cursor pixels");
         let rgba = image::imageops::resize(
@@ -93,11 +122,11 @@ impl Frame {
             height: geometry.height,
             hot_x: geometry.hot_x,
             hot_y: geometry.hot_y,
-            rgba,
+            pixels: Pixels::Rgba(rgba),
         }
     }
     fn bgra(&self) -> Vec<u8> {
-        self.rgba
+        self.rgba_pixels()
             .as_chunks::<4>()
             .0
             .iter()
@@ -195,7 +224,7 @@ fn create(frame: &Frame) -> Result<OwnedCursor> {
         // CreateBitmap takes WORD-aligned scan lines, with top-down source rows.
         let stride = (frame.width as usize).div_ceil(16) * 2;
         let mut mask = vec![0u8; stride * frame.height as usize];
-        for (i, pixel) in frame.rgba.as_chunks::<4>().0.iter().enumerate() {
+        for (i, pixel) in frame.rgba_pixels().as_chunks::<4>().0.iter().enumerate() {
             if pixel[3] == 0 {
                 mask[(i / frame.width as usize) * stride + (i % frame.width as usize) / 8] |=
                     0x80 >> (i % frame.width as usize % 8);
@@ -258,6 +287,43 @@ fn local_size() -> Result<(u32, u32)> {
     cursor_size(unsafe { LoadCursorW(std::ptr::null_mut(), IDC_ARROW) })
 }
 fn create_local(frame: &Frame, geometry: Geometry) -> Result<OwnedCursor> {
+    if let Pixels::Monochrome(bytes) = &frame.pixels {
+        let source_width = frame.width as usize;
+        let source_height = frame.height as usize;
+        let (width, height) = (geometry.width as usize, geometry.height as usize);
+        let stride = width.div_ceil(16) * 2;
+        let source_plane = (source_width * source_height).div_ceil(8);
+        let mut masks = vec![0u8; 2 * stride * height];
+        for (index, plane) in masks.chunks_exact_mut(stride * height).enumerate() {
+            let source = &bytes[index * source_plane..];
+            for y in 0..height {
+                for x in 0..width {
+                    let bit =
+                        (y * source_height / height) * source_width + x * source_width / width;
+                    if source[bit / 8] & (0x80 >> (bit % 8)) != 0 {
+                        plane[y * stride + x / 8] |= 0x80 >> (x % 8);
+                    }
+                }
+            }
+        }
+        let (and_mask, xor_mask) = masks.split_at(stride * height);
+        // Both bounded planes have native WORD-aligned scan lines.
+        let cursor = unsafe {
+            CreateCursor(
+                std::ptr::null_mut(),
+                geometry.hot_x as i32,
+                geometry.hot_y as i32,
+                width as i32,
+                height as i32,
+                and_mask.as_ptr().cast(),
+                xor_mask.as_ptr().cast(),
+            )
+        };
+        if cursor.is_null() {
+            bail!("native monochrome cursor unavailable");
+        }
+        return Ok(OwnedCursor(cursor as usize));
+    }
     if (geometry.width, geometry.height) == (frame.width, frame.height) {
         create(frame)
     } else {
@@ -433,7 +499,7 @@ mod tests {
         for _ in 0..80 {
             let mut pending = Pending::default();
             pending.submit(Request::Image(Some(
-                Frame::rgba(frame.rgba.clone(), 17, 3, 4, 2).unwrap(),
+                Frame::rgba(frame.rgba_pixels().to_vec(), 17, 3, 4, 2).unwrap(),
             )));
             state.apply(pending);
             let custom = state.custom.as_ref().expect("native cursor creation").0;

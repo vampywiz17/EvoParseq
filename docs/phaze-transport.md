@@ -50,6 +50,14 @@ fullscreen and detach policy. It positions before an activating button press,
 releases remote state on focus loss/detach/queue failure and sends reset opcode 13.
 No Parsec input packet is forwarded to a Phaze host.
 
+Both Windows clients use the same adjacent-movement merging and preserve
+click order. If the Phaze reliable window has at least 48 outstanding
+packets, the last absolute position in an input batch can wait for space.
+A newer position replaces it. Releases and output changes clear it.
+Phaze host cursor images (opcode 12) and cached image IDs (opcode 19) feed
+the shared Win32 cursor owner. Color images use the existing PNG/RGBA path.
+Monochrome images preserve both cursor masks and their hotspot.
+
 Video decode/presentation remains on the existing Windows backend. Audio and input
 need user validation with a real host; synthetic tests cannot establish actual
 sound, keyboard layout behavior or host permissions.

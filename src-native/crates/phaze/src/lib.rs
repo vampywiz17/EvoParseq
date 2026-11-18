@@ -2,6 +2,7 @@
 //! Wire behavior was observed from an authorized local host. Decode/presentation
 //! belong to the embedding application. Unknown media/control formats are ignored.
 mod audio;
+mod cursor;
 mod datagram;
 mod input;
 mod transport;
@@ -9,6 +10,7 @@ pub mod turn;
 mod wire;
 use anyhow::{bail, ensure, Context, Result};
 pub use audio::AudioCodec;
+pub use cursor::{CursorFormat, CursorImage};
 pub use datagram::Datagram;
 use futures_util::{SinkExt, StreamExt};
 pub use input::{Input, Keyboard};
@@ -203,6 +205,7 @@ pub trait Sink {
     }
     /// The carrier accepted a stream request for sending.
     fn stream_request_sent(&mut self, _output: u32, _config: VideoConfig) {}
+    fn cursor_image(&mut self, _image: CursorImage<'_>) {}
     /// DTLS carrier bytes, excluding TURN encapsulation and handshake traffic.
     fn traffic(&mut self, _received: u64, _sent: u64) {}
     /// Local reliable-command ACK round trip, including peer ACK scheduling.

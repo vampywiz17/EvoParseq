@@ -25,6 +25,16 @@ pub enum Input {
     Release,
 }
 impl Input {
+    pub(crate) fn is_absolute_motion(self) -> bool {
+        matches!(
+            self,
+            Self::Motion {
+                relative: false,
+                ..
+            }
+        )
+    }
+
     pub(crate) fn encode(self, output: u32) -> Vec<u8> {
         let (opcode, values) = match self {
             Self::Release => return vec![13],

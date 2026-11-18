@@ -130,6 +130,29 @@ impl evoparseq_phaze::Sink for View {
     fn rtt(&mut self, elapsed: Option<Duration>) {
         self.rtt = elapsed;
     }
+    fn cursor_image(&mut self, image: evoparseq_phaze::CursorImage<'_>) {
+        use crate::cursor::{Frame, Request};
+        use evoparseq_phaze::CursorFormat;
+        let (width, height) = image.size;
+        let (x, y) = image.hotspot;
+        let frame = match image.format {
+            CursorFormat::Png => Frame::native_png(image.bytes, x as i32, y as i32),
+            CursorFormat::Rgba => {
+                Frame::rgba(image.bytes.to_vec(), width, height, x as i32, y as i32)
+            }
+            CursorFormat::Monochrome => {
+                Frame::monochrome(image.bytes.to_vec(), width, height, x, y)
+            }
+        };
+        match frame {
+            Ok(frame) => self.window.set_cursor(Request::Image(Some(frame))),
+            Err(_) => crate::event_log::record(
+                "WARN",
+                "phaze_cursor_image_invalid",
+                serde_json::json!({}),
+            ),
+        }
+    }
     fn stream_request_sent(&mut self, output: u32, config: evoparseq_phaze::VideoConfig) {
         use super::session_model::{Notification, Status, View as _};
         self.sent_video_config = Some(config);

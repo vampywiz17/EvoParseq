@@ -28,7 +28,7 @@ pub struct Output {
     pub active: bool,
     pub primary: bool,
 }
-fn be(b: &[u8], i: usize) -> u32 {
+pub(crate) fn be(b: &[u8], i: usize) -> u32 {
     u32::from_be_bytes(b[i..i + 4].try_into().unwrap())
 }
 pub fn outputs(b: &[u8]) -> Result<Vec<Output>> {

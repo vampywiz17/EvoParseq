@@ -505,6 +505,7 @@ pub async fn run(
 
     let mut reliable = wire::Reliable::default();
     let mut audio = crate::audio::Audio::default();
+    let mut cursors = crate::cursor::Cursors::default();
     for p in reliable.frame(&wire::hello(sink.raw_audio()))? {
         send(&mut c, &p)?;
     }
@@ -521,6 +522,7 @@ pub async fn run(
     heartbeat_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut selected_output = None;
     let mut input = Vec::new();
+    let mut deferred_motion = None;
     let mut outputs_available = Vec::new();
     let (mut received, mut sent) = (0u64, 0u64);
     let mut reported = Instant::now();
@@ -549,6 +551,7 @@ pub async fn run(
                 if let Some((output,config))=sink.stream_request() {
                     ensure!(outputs_available.iter().any(|o: &wire::Output| o.id==output && o.active), "Phaze display is unavailable");
                     if selected_output != Some(output) {
+                        deferred_motion = None;
                         if let Some(previous)=selected_output {
                             let mut stop=vec![4]; stop.extend(u32::to_be_bytes(previous));
                             for p in reliable.frame(&stop)? { send(&mut c,&p)?; }
@@ -559,8 +562,23 @@ pub async fn run(
                     stream_request=Some((output,config));
                 }
                 if let Some(output)=selected_output {
-                    for command in input.drain(..) {
-                        if reliable.pending().count() >= 63 {
+                    // A newer position supersedes a deferred position. A release
+                    // clears it, so it cannot move the pointer after focus loss.
+                    let deferred = deferred_motion.take().filter(|_| {
+                        !input.first().is_some_and(|event| {
+                            event.is_absolute_motion() || *event == crate::Input::Release
+                        })
+                    });
+                    let mut commands = deferred.into_iter().chain(input.drain(..)).peekable();
+                    while let Some(command) = commands.next() {
+                        let outstanding = reliable.pending().count();
+                        // Preserve room for button and key transitions when the
+                        // peer is slow to acknowledge a burst of positions.
+                        if outstanding >= 48 && command.is_absolute_motion() && commands.peek().is_none() {
+                            deferred_motion = Some(command);
+                            break;
+                        }
+                        if outstanding >= 63 {
                             release_and_close(&mut c,&mut reliable,&socket,peer).await;
                             bail!("Phaze input acknowledgment window exhausted; reconnect to continue");
                         }
@@ -640,6 +658,11 @@ pub async fn run(
                     Some(7) => {
                         let (codec, pcm, payload_bytes) = audio.decode(&frame[1..])?;
                         sink.audio(pcm, codec, payload_bytes)?;
+                    }
+                    Some(12 | 19) => {
+                        if let Some(image) = cursors.receive(&frame) {
+                            sink.cursor_image(image);
+                        }
                     }
                     _ => {}
                 }
