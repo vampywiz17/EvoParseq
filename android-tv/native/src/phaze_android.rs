@@ -49,6 +49,7 @@ pub fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result
             frames: 0,
             bandwidth_log: prefs.logging.then(BandwidthLog::default),
             probe_samples: 0,
+            next_probe_log: Instant::now(),
         },
         config,
         pcm,
@@ -111,6 +112,7 @@ struct Adapter<'a> {
     frames: u64,
     bandwidth_log: Option<BandwidthLog>,
     probe_samples: u8,
+    next_probe_log: Instant,
 }
 
 #[derive(Default)]
@@ -162,9 +164,11 @@ impl BandwidthLog {
 
 impl phaze_client::Platform for Adapter<'_> {
     fn bandwidth_probe_timing(&mut self, sample: evoparseq_phaze::ProbeTiming) {
-        if self.probe_samples < 48 {
+        let now = Instant::now();
+        if self.probe_samples < 48 && now >= self.next_probe_log {
             crate::event_log::record("INFO", "phaze_android_probe_timing", json!(sample));
             self.probe_samples += 1;
+            self.next_probe_log = now + Duration::from_secs(1);
         }
     }
 
