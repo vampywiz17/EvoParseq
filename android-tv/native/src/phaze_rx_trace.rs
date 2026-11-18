@@ -13,27 +13,24 @@ use tokio::{io::Interest, net::UdpSocket};
 
 // Linux UAPI SO_TIMESTAMPNS_NEW uses two i64 fields on both Android ABIs.
 const SO_TIMESTAMPNS_NEW: libc::c_int = 64;
+const SO_TIMESTAMPNS_OLD: libc::c_int = 35;
 const BURST_PACKETS: usize = 24;
 const MAX_BURSTS: u8 = 8;
 
 pub fn enable(socket: UdpSocket) -> Option<TracedSocket> {
-    let enabled: libc::c_int = 1;
-    // The descriptor stays live and the option value is one initialized int.
-    let result = unsafe {
-        libc::setsockopt(
-            socket.as_raw_fd(),
-            libc::SOL_SOCKET,
-            SO_TIMESTAMPNS_NEW,
-            std::ptr::from_ref(&enabled).cast(),
-            size_of::<libc::c_int>() as libc::socklen_t,
-        )
+    let mode = if set_timestamp_option(&socket, SO_TIMESTAMPNS_NEW) {
+        Some("time64")
+    } else if set_timestamp_option(&socket, SO_TIMESTAMPNS_OLD) {
+        Some("legacy")
+    } else {
+        None
     };
     crate::event_log::record(
         "INFO",
         "phaze_android_rx_timestamping",
-        json!({"kernel_timestamps_enabled": result == 0}),
+        json!({"kernel_timestamps_enabled": mode.is_some(), "mode": mode}),
     );
-    (result == 0).then(|| TracedSocket {
+    mode.map(|_| TracedSocket {
         socket,
         trace: Mutex::new(Trace {
             next: Instant::now() + Duration::from_secs(5),
@@ -41,6 +38,21 @@ pub fn enable(socket: UdpSocket) -> Option<TracedSocket> {
             samples: Vec::with_capacity(BURST_PACKETS),
         }),
     })
+}
+
+fn set_timestamp_option(socket: &UdpSocket, option: libc::c_int) -> bool {
+    let enabled: libc::c_int = 1;
+    // The descriptor stays live and the option value is one initialized int.
+    let result = unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            option,
+            std::ptr::from_ref(&enabled).cast(),
+            size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    };
+    result == 0
 }
 
 pub struct TracedSocket {
@@ -197,13 +209,30 @@ fn timestamp(message: &libc::msghdr) -> Option<i64> {
     unsafe {
         let mut header = libc::CMSG_FIRSTHDR(message);
         while !header.is_null() {
-            if (*header).cmsg_level == libc::SOL_SOCKET
-                && (*header).cmsg_type == SO_TIMESTAMPNS_NEW
-                && (*header).cmsg_len >= libc::CMSG_LEN(16) as usize
-            {
-                let data = libc::CMSG_DATA(header).cast::<[i64; 2]>();
-                let [seconds, nanos] = data.read_unaligned();
-                return seconds.checked_mul(1_000_000_000)?.checked_add(nanos);
+            if (*header).cmsg_level == libc::SOL_SOCKET {
+                let data = libc::CMSG_DATA(header);
+                let length = (*header).cmsg_len;
+                let (seconds, nanos) = match (*header).cmsg_type {
+                    SO_TIMESTAMPNS_NEW if length >= libc::CMSG_LEN(16) as usize => {
+                        let [seconds, nanos] = data.cast::<[i64; 2]>().read_unaligned();
+                        (i128::from(seconds), i128::from(nanos))
+                    }
+                    SO_TIMESTAMPNS_OLD
+                        if length
+                            >= libc::CMSG_LEN(size_of::<libc::timespec>() as u32) as usize =>
+                    {
+                        let time = data.cast::<libc::timespec>().read_unaligned();
+                        (i128::from(time.tv_sec), i128::from(time.tv_nsec))
+                    }
+                    _ => {
+                        header = libc::CMSG_NXTHDR(message, header);
+                        continue;
+                    }
+                };
+                if seconds >= 0 && (0..1_000_000_000).contains(&nanos) {
+                    return i64::try_from(seconds * 1_000_000_000 + nanos).ok();
+                }
+                return None;
             }
             header = libc::CMSG_NXTHDR(message, header);
         }
