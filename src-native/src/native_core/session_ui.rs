@@ -281,6 +281,70 @@ unsafe fn update_metrics(hwnd: HWND, panel: &mut Panel) {
     update_timing_hint(hwnd, panel);
 }
 
+fn phaze_guest_items(
+    peers: &super::session_model::PhazePeers,
+    mut item: impl FnMut(&str, Option<evoparseq_phaze::ClientControl>),
+) {
+    use evoparseq_phaze::ClientControl;
+    let display_name = |name: &str| {
+        name.chars()
+            .filter(|ch| !ch.is_control())
+            .take(64)
+            .collect::<String>()
+            .replace('&', "&&")
+    };
+    let admin = peers.admin();
+    for guest in peers.state.guests.as_deref().unwrap_or_default() {
+        let name = display_name(&guest.user_name);
+        let active = peers
+            .controller
+            .map_or(guest.has_control, |id| id == guest.id);
+        item(
+            &if active {
+                format!("{name} (in control)")
+            } else {
+                name.clone()
+            },
+            None,
+        );
+        if admin {
+            item(
+                if active {
+                    "Revoke control"
+                } else {
+                    "Give control"
+                },
+                Some(ClientControl::SetControl(if active { 0 } else { guest.id })),
+            );
+            if Some(guest.id) != peers.local_id {
+                item("Remove guest", Some(ClientControl::RemoveGuest(guest.id)));
+            }
+        }
+    }
+    for offer in peers.state.offers.as_deref().unwrap_or_default() {
+        item(
+            &format!("Join request from {}", display_name(&offer.user_name)),
+            None,
+        );
+        if admin {
+            for (label, accept) in [("Allow", true), ("Decline", false)] {
+                item(
+                    label,
+                    Some(ClientControl::RespondToOffer {
+                        attempt_id: offer.attempt_id.clone(),
+                        accept,
+                    }),
+                );
+            }
+        }
+    }
+    if peers.state.guests.as_ref().is_none_or(Vec::is_empty)
+        && peers.state.offers.as_ref().is_none_or(Vec::is_empty)
+    {
+        item("No guest information", None);
+    }
+}
+
 unsafe fn phaze_guests_menu(hwnd: HWND, window: &crate::window::Window) {
     use evoparseq_phaze::ClientControl;
     let menu = CreatePopupMenu();
@@ -308,63 +372,7 @@ unsafe fn phaze_guests_menu(hwnd: HWND, window: &crate::window::Window) {
                 wide(label).as_ptr(),
             );
         };
-        let display_name = |name: &str| {
-            name.chars()
-                .filter(|ch| !ch.is_control())
-                .take(64)
-                .collect::<String>()
-                .replace('&', "&&")
-        };
-        let admin = peers.admin();
-        for guest in peers.state.guests.as_deref().unwrap_or_default() {
-            let name = display_name(&guest.user_name);
-            let active = peers
-                .controller
-                .map_or(guest.has_control, |id| id == guest.id);
-            item(
-                &if active {
-                    format!("{name} (in control)")
-                } else {
-                    name.clone()
-                },
-                None,
-            );
-            if admin {
-                item(
-                    if active {
-                        "Revoke control"
-                    } else {
-                        "Give control"
-                    },
-                    Some(ClientControl::SetControl(if active { 0 } else { guest.id })),
-                );
-                if Some(guest.id) != peers.local_id {
-                    item("Remove guest", Some(ClientControl::RemoveGuest(guest.id)));
-                }
-            }
-        }
-        for offer in peers.state.offers.as_deref().unwrap_or_default() {
-            item(
-                &format!("Join request from {}", display_name(&offer.user_name)),
-                None,
-            );
-            if admin {
-                for (label, accept) in [("Allow", true), ("Decline", false)] {
-                    item(
-                        label,
-                        Some(ClientControl::RespondToOffer {
-                            attempt_id: offer.attempt_id.clone(),
-                            accept,
-                        }),
-                    );
-                }
-            }
-        }
-        if peers.state.guests.as_ref().is_none_or(Vec::is_empty)
-            && peers.state.offers.as_ref().is_none_or(Vec::is_empty)
-        {
-            item("No guest information", None);
-        }
+        phaze_guest_items(&peers, &mut item);
     }
     let mut point = POINT::default();
     GetCursorPos(&mut point);
@@ -1251,6 +1259,57 @@ pub unsafe fn dialog(parent: HWND, msg: &MSG) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn phaze_guest_menu_only_offers_admin_actions_for_current_peers() {
+        use super::super::session_model::PhazePeers;
+        use evoparseq_phaze::ClientControl;
+
+        fn items(peers: &PhazePeers) -> Vec<(String, Option<ClientControl>)> {
+            let mut items = Vec::new();
+            phaze_guest_items(peers, |label, action| items.push((label.into(), action)));
+            items
+        }
+
+        let mut peers = PhazePeers::default();
+        let empty = items(&peers);
+        assert!(matches!(&empty[..], [(label, None)] if label == "No guest information"));
+        peers.state = serde_json::from_value(serde_json::json!({
+            "guests": [
+                {"id": 7, "user_name": "Local", "has_control": true, "admin": true},
+                {"id": 8, "user_name": "Guest&\nname", "has_control": false, "admin": false}
+            ],
+            "offers": [{"attempt_id": "pending", "user_name": "Visitor"}]
+        }))
+        .unwrap();
+        peers.local_id = Some(8);
+        let guest = items(&peers);
+        assert!(
+            matches!(&guest[..], [(owner, None), (guest, None), (offer, None)]
+            if owner == "Local (in control)" && guest == "Guest&&name"
+                && offer == "Join request from Visitor")
+        );
+        peers.local_id = Some(7);
+        peers.controller = Some(8);
+        let admin = items(&peers);
+        assert_eq!(admin.len(), 8);
+        assert!(
+            matches!(&admin[1], (label, Some(ClientControl::SetControl(7))) if label == "Give control")
+        );
+        assert_eq!(admin[2].0, "Guest&&name (in control)");
+        assert!(matches!(&admin[3].1, Some(ClientControl::SetControl(0))));
+        assert!(matches!(&admin[4].1, Some(ClientControl::RemoveGuest(8))));
+        assert!(
+            matches!(&admin[6].1, Some(ClientControl::RespondToOffer { attempt_id, accept: true }) if attempt_id == "pending")
+        );
+        assert!(
+            matches!(&admin[7].1, Some(ClientControl::RespondToOffer { attempt_id, accept: false }) if attempt_id == "pending")
+        );
+        assert!(admin
+            .iter()
+            .filter_map(|(_, action)| action.as_ref())
+            .all(|action| peers.allows(action)));
+    }
+
     unsafe fn select_text(panel: HWND, id: i32, value: &str) {
         let combo = GetDlgItem(panel, id);
         let index = SendMessageW(
@@ -1280,6 +1339,57 @@ mod tests {
             assert_eq!(Status::from_message(code), status);
         }
         assert_eq!(Status::from_message(usize::MAX), Status::Failed);
+    }
+
+    #[test]
+    fn phaze_panel_exposes_guest_controls_and_allows_stream_settings_while_loading() {
+        let window = crate::window::Window::create_native().unwrap();
+        struct Close(Arc<crate::window::Window>);
+        impl Drop for Close {
+            fn drop(&mut self) {
+                self.0.request_stop();
+                self.0.close();
+            }
+        }
+        let _close = Close(window.clone());
+        window.session.phaze.store(true, Ordering::Release);
+        window.session.displays.lock().unwrap().loading = true;
+        let path = std::env::temp_dir().join(format!(
+            "evoparseq-phaze-panel-{}.json",
+            crate::bud_attempt::native_attempt_id().unwrap()
+        ));
+        window.install_connection_settings(crate::connection_settings::Manager::open(path));
+        unsafe {
+            SendMessageW(window.handle(), WM_COMMAND, OPEN, 0);
+            let panel = panel(&window);
+            assert!(!panel.is_null());
+            assert_eq!(text(GetDlgItem(panel, PHAZE_GUESTS as i32)), "Guests");
+            assert!(GetDlgItem(panel, ADD_SCREEN as i32).is_null());
+            for id in [
+                20,
+                23,
+                24,
+                DISPLAY as i32,
+                REFRESH_DISPLAYS as i32,
+                SECURE_ATTENTION as i32,
+            ] {
+                let control = GetDlgItem(panel, id);
+                assert!(!control.is_null(), "Missing control {id}");
+                assert_eq!(IsWindowEnabled(control), 0, "Enabled control {id}");
+            }
+            let mut events = std::collections::VecDeque::new();
+            window.events.take_batch(&mut events);
+            events.clear();
+            select_text(panel, 21, "40");
+            select_text(panel, 22, "120");
+            SendMessageW(panel, WM_COMMAND, APPLY, 0);
+            window.events.take_batch(&mut events);
+            assert!(events.iter().any(|event| matches!(event,
+                crate::window::Event::NativeSession(Command::Apply(video))
+                if video.resolution == Resolution::Host
+                    && video.fps == Some(120) && video.bandwidth_mbps == Some(40)
+            )));
+        }
     }
 
     #[test]

@@ -488,9 +488,9 @@ impl evoparseq_phaze::Sink for View {
                                     ..Default::default()
                                 });
                                 self.window.set_fullscreen(video.fullscreen);
+                                self.config = config;
                                 if let Some(output) = output {
                                     self.pending = Some((output, config));
-                                    self.config = config;
                                 }
                             }
                             Command::SelectDisplay(id) => {
@@ -861,8 +861,27 @@ mod tests {
                 active: true,
                 primary: id == 7,
             };
+            view.stage("waiting_outputs");
+            window.events.drain();
+            let initial_video = crate::session_preferences::Video {
+                bandwidth_mbps: Some(28),
+                fps: Some(90),
+                ..Default::default()
+            };
+            window
+                .events
+                .push(Event::NativeSession(Command::Apply(initial_video.clone())));
+            let mut commands = Vec::new();
+            let mut controls = Vec::new();
+            assert!(view.poll(None, &mut commands, &mut controls)?);
+            assert!(view.stream_request().is_none());
+            assert_eq!(manager.view().0.native_core.video, initial_video);
             view.outputs(&[output(7), output(8)]);
-            view.stream_request_sent(7, view.config);
+            let initial_config = view.video_config();
+            let request = initial_config.request(7)?;
+            assert_eq!(&request[9..13], &28_u32.to_be_bytes());
+            assert_eq!(&request[13..17], &90_u32.to_be_bytes());
+            view.stream_request_sent(7, initial_config);
             view.stage("dtls_authenticated");
             view.traffic(2048, 1024);
             assert!(view.authenticated);
@@ -936,12 +955,10 @@ mod tests {
             window
                 .events
                 .push(Event::NativeSession(Command::Apply(video.clone())));
-            let mut commands = Vec::new();
-            let mut controls = Vec::new();
             assert!(view.poll(Some(7), &mut commands, &mut controls)?);
             let (id, config) = view.stream_request().context("Missing stream update")?;
             assert_eq!((id, config.mbps, config.fps), (7, 40, 144));
-            assert_eq!(view.sent_video_config, Some(Default::default()));
+            assert_eq!(view.sent_video_config, Some(initial_config));
             view.stream_request_sent(id, config);
             view.traffic(127048, 63524);
             let measured = window
@@ -989,6 +1006,79 @@ mod tests {
             assert!(view.poll(Some(8), &mut commands, &mut controls)?);
             assert!(view.stream_request().is_none());
             assert_eq!(manager.view().0.native_core.video, video);
+
+            use evoparseq_phaze::{ClientControl, CursorFormat, CursorImage};
+            view.host_flags(16);
+            view.bandwidth_feedback_started();
+            view.video_recovery_sent(8);
+            view.cursor_visibility(false);
+            view.cursor_output_changed();
+            let pixel = [200, 100, 50, 128];
+            for (format, bytes) in [
+                (CursorFormat::Rgba, pixel.as_slice()),
+                (CursorFormat::Monochrome, &[0x80, 0x00]),
+                (CursorFormat::Png, &[]),
+                (CursorFormat::Rgba, &[]),
+            ] {
+                view.cursor_image(CursorImage {
+                    format,
+                    size: (1, 1),
+                    hotspot: (0, 0),
+                    bytes,
+                });
+            }
+            view.video(&[0, 0, 0, 1, 0x09, 0xf0], true)?;
+            assert_eq!(view.video_payload_bytes, Some(129_006));
+            assert_eq!(view.interval_pictures, 0);
+            view.control_sent(&ClientControl::Clipboard("fixture".into()), false);
+            assert!(view.last_clipboard.is_empty());
+            view.control_sent(&ClientControl::Clipboard("fixture".into()), true);
+            assert_eq!(view.last_clipboard, "fixture");
+            view.control_sent(&ClientControl::SecureAttention, false);
+            view.control_sent(&ClientControl::SecureAttention, true);
+            view.control_sent(&ClientControl::SetControl(8), false);
+            view.control_sent(&ClientControl::SetControl(8), true);
+
+            window.events.drain();
+            window
+                .events
+                .push(Event::NativeSession(Command::SecureAttention));
+            window
+                .events
+                .push(Event::PhazeControl(ClientControl::SetControl(8)));
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+            assert!(controls.is_empty());
+            view.peer_state(
+                7,
+                serde_json::from_value(serde_json::json!({
+                    "guests": [
+                        {"id": 7, "user_name": "Local", "has_control": true, "admin": true},
+                        {"id": 8, "user_name": "Guest", "has_control": false, "admin": false}
+                    ]
+                }))?,
+            );
+            window
+                .events
+                .push(Event::NativeSession(Command::SecureAttention));
+            window
+                .events
+                .push(Event::PhazeControl(ClientControl::SetControl(8)));
+            window
+                .events
+                .push(Event::PhazeControl(ClientControl::RemoveGuest(7)));
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+            assert!(matches!(
+                &controls[..],
+                [ClientControl::SecureAttention, ClientControl::SetControl(8)]
+            ));
+            controls.clear();
+
+            commands.clear();
+            window.events.push(Event::RelativeMotion(10, 20));
+            window.events.push(Event::Scroll(1, 2));
+            window.events.push(Event::HidInputRelease);
+            assert!(view.poll(None, &mut commands, &mut controls)?);
+            assert_eq!(commands, [Input::Release]);
             window
                 .events
                 .push(Event::NativeSession(Command::HideButton));
@@ -1015,6 +1105,36 @@ mod tests {
                 window.session.phaze_peers.lock().unwrap().controller,
                 Some(42)
             );
+
+            block_on(async {
+                let server = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+                let address = server.local_addr()?;
+                let mut settings = manager.view().0;
+                settings.force_relay = true;
+                settings.turn_urls = vec![format!("turn:{address}?transport=tcp")];
+                settings.custom_username = "fixture".into();
+                manager.save(settings, "fixture-password", "", false, false)?;
+                let remote = evoparseq_phaze::Session::from_token("offline-fixture")?;
+                let close_connection = async {
+                    let (socket, _) = server.accept().await?;
+                    drop(socket);
+                    Ok::<_, anyhow::Error>(())
+                };
+                let (error, closed) = tokio::time::timeout(Duration::from_secs(10), async {
+                    tokio::join!(
+                        connect(&remote, "offline-host", &manager, &mut view),
+                        close_connection,
+                    )
+                })
+                .await?;
+                closed?;
+                assert_eq!(view.carrier, "TURN / TCP");
+                assert!(error
+                    .unwrap_err()
+                    .to_string()
+                    .contains("No configured TURN server"));
+                Ok(())
+            })?;
         }
         std::fs::remove_dir_all(directory)?;
         Ok(())

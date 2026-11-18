@@ -488,6 +488,28 @@ mod tests {
         assert!(Frame::png(vec![0; 16], 0, 0).is_err());
     }
     #[test]
+    fn monochrome_cursor_preserves_hotspot_when_resized() {
+        assert!(Frame::monochrome(vec![0], 9, 1, 0, 0).is_err());
+        let frame = Frame::monochrome(vec![0x80; 22], 9, 9, 8, 0).unwrap();
+        let geometry = frame.fit_local((32, 32));
+        let cursor = create_local(&frame, geometry).unwrap();
+        assert_eq!(
+            cursor_size(cursor.0 as HCURSOR).unwrap(),
+            (geometry.width, geometry.height)
+        );
+        unsafe {
+            let mut info = ICONINFO::default();
+            assert_ne!(GetIconInfo(cursor.0 as HCURSOR, &mut info), 0);
+            let _color = Bitmap(info.hbmColor);
+            let _mask = Bitmap(info.hbmMask);
+            assert!(info.hbmColor.is_null());
+            assert_eq!(
+                (info.xHotspot, info.yHotspot),
+                (geometry.hot_x, geometry.hot_y)
+            );
+        }
+    }
+    #[test]
     fn png_and_rgba_native_cursor_lifecycle() {
         let image = image::RgbaImage::from_pixel(17, 3, image::Rgba([200, 100, 50, 128]));
         let mut encoded = std::io::Cursor::new(Vec::new());
