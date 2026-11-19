@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
 
 const MAX_SIDE: u32 = 256;
 const MAX_IMAGE: usize = 512 * 1024;
@@ -7,41 +6,11 @@ const CACHE_ENTRIES: usize = 128;
 const CACHE_BYTES: usize = 4 * 1024 * 1024;
 
 pub(crate) fn visibility(body: &[u8], output: Option<u32>) -> Option<bool> {
-    // Output ID, hidden flag, and two coordinates. Visibility can be applied
-    // independently of cursor positioning or mouse capture.
+    // Output ID, mouse-mode flags, and two coordinates. Bit 0 is relative
+    // input and bit 1 hides the cursor. The two states are independent.
+    const HIDDEN: u8 = 0x02;
     let body = body.get(..13)?;
-    (output == Some(crate::wire::be(body, 0))).then_some(body[4] == 0)
-}
-
-#[derive(Default)]
-pub(crate) enum VisibilityRecovery {
-    #[default]
-    VisibleOrUnknown,
-    HiddenSince(Instant),
-    RefreshRequested,
-}
-
-impl VisibilityRecovery {
-    pub fn observe(&mut self, visible: bool, now: Instant) {
-        if visible {
-            *self = Self::VisibleOrUnknown;
-        } else if matches!(self, Self::VisibleOrUnknown) {
-            *self = Self::HiddenSince(now);
-        }
-    }
-
-    /// Refresh once per hidden interval, when absolute input resumes after
-    /// the host has had time to switch input desktops.
-    pub fn refresh_after_motion(&mut self, now: Instant) -> bool {
-        let Self::HiddenSince(since) = self else {
-            return false;
-        };
-        if now.saturating_duration_since(*since) < Duration::from_secs(4) {
-            return false;
-        }
-        *self = Self::RefreshRequested;
-        true
-    }
+    (output == Some(crate::wire::be(body, 0))).then_some(body[4] & HIDDEN == 0)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,32 +119,13 @@ impl Cursors {
 fn cursor_visibility_changes_without_a_new_image() {
     let mut body = [0; 13];
     body[3] = 2;
-    body[4] = 1;
-    assert_eq!(visibility(&body, Some(2)), Some(false));
+    for (flags, visible) in [(0, true), (1, true), (2, false), (3, false), (0x80, true)] {
+        body[4] = flags;
+        assert_eq!(visibility(&body, Some(2)), Some(visible));
+    }
     assert_eq!(visibility(&body, Some(1)), None);
     assert_eq!(visibility(&body, None), None);
     assert_eq!(visibility(&body[..12], Some(2)), None);
-    body[4] = 0;
-    assert_eq!(visibility(&body, Some(2)), Some(true));
-}
-
-#[cfg(test)]
-#[test]
-fn hidden_cursor_refresh_is_delayed_and_limited_until_visible_again() {
-    let now = Instant::now();
-    let later = |seconds| now + Duration::from_secs(seconds);
-    let mut recovery = VisibilityRecovery::default();
-    assert!(!recovery.refresh_after_motion(now));
-    recovery.observe(false, now);
-    recovery.observe(false, later(2));
-    assert!(!recovery.refresh_after_motion(later(3)));
-    assert!(recovery.refresh_after_motion(later(4)));
-    recovery.observe(false, later(5));
-    assert!(!recovery.refresh_after_motion(later(10)));
-    recovery.observe(true, later(11));
-    assert!(!recovery.refresh_after_motion(later(12)));
-    recovery.observe(false, later(13));
-    assert!(recovery.refresh_after_motion(later(17)));
 }
 
 #[cfg(test)]
