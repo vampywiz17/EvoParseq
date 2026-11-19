@@ -116,6 +116,8 @@ fn dtls_pair() -> (Connection, Connection) {
     let mut client = Connection::client(&config().build()).unwrap();
     let mut server = Connection::server(
         &config()
+            .cookie_secret([0x81; 32])
+            .peer_address(b"armv7-benchmark-fixture".to_vec())
             .identity(vec![certificate.clone()], SigningKey::Ecdsa(key))
             .build(),
     )
