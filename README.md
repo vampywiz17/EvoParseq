@@ -130,7 +130,7 @@ See [Linux installation, current scope and diagnostics](linux/README.md) and
 the [video-path audit](linux/VIDEO_PATH.md). The Windows feature list below
 should not be read as Linux feature parity.
 
-## Android TV preview
+## Android TV
 
 - Google TV / Android TV interface with D-pad navigation, 2FA, grouped settings
   and encrypted remembered sign-in using Android Keystore.
@@ -154,11 +154,10 @@ stable. This is a transport-specific observation, **not a universal hardware lim
 MediaCodec submits frames to Surface without CPU pixel readback; physical scanout
 and internal driver/compositor copies are not verified.
 
-Use the [preview release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.6-dev.5)
-or successful [dev Android CI artifacts](https://github.com/vampywiz17/EvoParseq/actions/workflows/android-tv.yml?query=branch%3Adev)
-for previews; the stable Windows ZIP is not an Android package.
-[Android TV setup, build and limits](android-tv/README.md).
-The Windows features below remain available on this branch.
+Install the signed **EvoParseq-TV.apk** from the
+[stable release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8)
+or use **Settings > Updates** on an existing distribution-signed installation.
+See the [Android TV setup, build and compatibility guide](android-tv/README.md).
 
 ## Features
 
@@ -186,7 +185,7 @@ The Windows features below remain available on this branch.
   On Windows, the Session overlay offers immediate local mute and 0–100% volume
   control for either transport, without changing the host's volume. Mute preserves
   the chosen level; these controls reset when the client is restarted.
-- **Controllers (development):** shared Rust gamepad state/protocol for up to
+- **Controllers:** shared Rust gamepad state/protocol for up to
   four controllers, Windows XInput and Android gamepad events. Wired Windows
   and GameSir Android forwarding are live-tested; device-specific rumble and
   disconnect behavior need broader validation.
@@ -232,10 +231,8 @@ The animation illustrates processing order, not measured speed. Check
 
 ## Windows download and run
 
-1. Download `EvoParseq-v0.9.5-win64.zip` from the
-   [stable release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.5).
-   For this branch's Windows preview (including controllers), use artifacts from successful
-   [dev CI runs](https://github.com/vampywiz17/EvoParseq/actions/workflows/native-core.yml?query=branch%3Adev).
+1. Download `EvoParseq-v0.9.8-win64.zip` from the
+   [stable release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8).
 2. Extract to a writable folder and run **EvoParseq.exe**. Settings and optional
    encrypted sessions are stored beside it in `settings.json`.
 3. Sign in with the host owner's account, choose a computer and connect.
