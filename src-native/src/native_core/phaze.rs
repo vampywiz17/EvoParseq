@@ -678,7 +678,7 @@ fn translate(
             relative: true,
         }),
         Event::Button(down, button, x, y) => {
-            phaze_session::button(viewport, down, button, x, y, commands);
+            commands.extend(phaze_session::button(viewport, down, button, x, y));
         }
         Event::Scroll(x, y) => commands.push(Input::Scroll {
             x,
@@ -1029,7 +1029,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn activating_click_positions_before_press_and_focus_loss_releases() -> Result<()> {
+    fn phaze_click_sends_only_the_button_and_focus_loss_releases() -> Result<()> {
         let viewport = Some(crate::viewport::Viewport {
             source: (1920, 1080),
             client: (1024, 768),
@@ -1043,21 +1043,39 @@ mod tests {
             true,
             &mut commands,
         )?;
-        assert!(matches!(
-            commands[0],
-            Input::Motion {
-                relative: false,
-                ..
-            }
-        ));
-        assert!(matches!(
+        assert_eq!(
+            commands,
+            [Input::Button {
+                button: 2,
+                x: 512,
+                y: 384,
+                down: true,
+            }]
+        );
+        translate(
+            Event::Button(true, 0, 512, 20),
+            &mut keys,
+            viewport,
+            true,
+            &mut commands,
+        )?;
+        assert_eq!(commands.len(), 1);
+        translate(
+            Event::Button(false, 2, 512, 20),
+            &mut keys,
+            None,
+            true,
+            &mut commands,
+        )?;
+        assert_eq!(
             commands[1],
             Input::Button {
                 button: 2,
-                down: true,
-                ..
+                x: 512,
+                y: 20,
+                down: false
             }
-        ));
+        );
         translate(
             Event::Key(true, "ControlRight", 0),
             &mut keys,

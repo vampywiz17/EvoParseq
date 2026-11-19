@@ -47,8 +47,9 @@ uses normalized 0..65535 coordinates in the presented letterbox. Keyboard events
 use physical PC set-1 scans and side-specific modifiers; host text layout applies.
 The public vocabulary and wire serialization live in the platform-independent
 Phaze crate. Windows drains its existing event queue and retains focus, viewport,
-fullscreen and detach policy. It positions before an activating button press,
-releases remote state on focus loss/detach/queue failure and sends reset opcode 13.
+fullscreen and detach policy. It sends button presses inside the video as a
+single button message and allows releases outside it. It releases remote state
+on focus loss/detach/queue failure and sends reset opcode 13.
 No Parsec input packet is forwarded to a Phaze host.
 
 Both Windows clients use the same adjacent-movement merging and preserve

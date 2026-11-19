@@ -29,21 +29,17 @@ pub fn button(
     button: i32,
     x: i32,
     y: i32,
-    commands: &mut Vec<Input>,
-) {
-    if let (Some(&button), Some((nx, ny))) = (
-        [1, 3, 2, 4, 5].get(button as usize),
-        normalized(viewport, x, y),
-    ) {
-        if down {
-            commands.push(Input::Motion {
-                x: nx,
-                y: ny,
-                relative: false,
-            });
+) -> Option<Input> {
+    let &button = [1, 3, 2, 4, 5].get(button as usize)?;
+    // The Phaze client checks the video bounds on a press. A release can
+    // finish a drag outside the video or while its geometry is changing.
+    if down {
+        let [left, top, right, bottom] = viewport?.rect()?;
+        if !(left..right).contains(&x) || !(top..bottom).contains(&y) {
+            return None;
         }
-        commands.push(Input::Button { button, x, y, down });
     }
+    Some(Input::Button { button, x, y, down })
 }
 
 pub struct Stream {
