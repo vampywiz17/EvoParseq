@@ -192,6 +192,7 @@ impl evoparseq_phaze::Sink for View {
         );
     }
     fn cursor_output_changed(&mut self) {
+        self.window.set_host_relative_mouse(false);
         self.window
             .set_cursor(crate::cursor::Request::Visible(true));
     }
@@ -208,13 +209,14 @@ impl evoparseq_phaze::Sink for View {
     fn bandwidth_feedback_started(&mut self, lower_rate: f64, upper_rate: f64) {
         crate::phaze_session::log_bandwidth_feedback(lower_rate, upper_rate);
     }
-    fn cursor_visibility(&mut self, visible: bool) {
+    fn cursor_mode(&mut self, relative: bool, visible: bool) {
+        self.window.set_host_relative_mouse(relative);
         self.window
             .set_cursor(crate::cursor::Request::Visible(visible));
         crate::event_log::record(
             "INFO",
             "phaze_cursor_visibility",
-            serde_json::json!({"visible": visible}),
+            serde_json::json!({"visible": visible, "relative": relative}),
         );
     }
     fn cursor_image(&mut self, image: evoparseq_phaze::CursorImage<'_>) {
@@ -473,6 +475,13 @@ impl evoparseq_phaze::Sink for View {
                     } else if !self.stream.pending() {
                         self.window.result(true);
                     }
+                }
+                Event::RelativeMode(acquired) => {
+                    crate::event_log::record(
+                        "INFO",
+                        "phaze_relative_mouse_capture",
+                        serde_json::json!({"acquired": acquired}),
+                    );
                 }
                 event => {
                     let kind = match &event {
@@ -894,8 +903,12 @@ mod tests {
             view.host_flags(16);
             view.bandwidth_feedback_started(750_000.0, 875_000.0);
             view.video_recovery_sent(8);
-            view.cursor_visibility(false);
+            view.cursor_mode(false, false);
+            assert!(!window.native_relative_mouse());
+            view.cursor_mode(true, true);
+            assert!(window.native_relative_mouse());
             view.cursor_output_changed();
+            assert!(!window.native_relative_mouse());
             let pixel = [200, 100, 50, 128];
             for (format, bytes) in [
                 (CursorFormat::Rgba, pixel.as_slice()),

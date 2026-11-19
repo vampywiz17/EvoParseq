@@ -214,6 +214,9 @@ pub trait Sink {
     /// The carrier accepted a stream request for sending.
     fn stream_request_sent(&mut self, _output: u32, _config: VideoConfig) {}
     fn cursor_visibility(&mut self, _visible: bool) {}
+    fn cursor_mode(&mut self, _relative: bool, visible: bool) {
+        self.cursor_visibility(visible);
+    }
     fn cursor_output_changed(&mut self) {}
     fn cursor_image(&mut self, _image: CursorImage<'_>) {}
     /// The carrier accepted the first bandwidth feedback ACK. Rates are in bytes per second.

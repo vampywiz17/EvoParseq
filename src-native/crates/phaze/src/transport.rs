@@ -697,10 +697,10 @@ pub async fn run(
                         video_received |= !bytes.is_empty();
                     }
                     Some(6) => {
-                        if let Some(visible) =
-                            crate::cursor::visibility(&frame[1..], selected_output)
+                        if let Some((relative, visible)) =
+                            crate::cursor::mode(&frame[1..], selected_output)
                         {
-                            sink.cursor_visibility(visible);
+                            sink.cursor_mode(relative, visible);
                         }
                     }
                     Some(7) => {

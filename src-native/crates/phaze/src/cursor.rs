@@ -5,12 +5,14 @@ const MAX_IMAGE: usize = 512 * 1024;
 const CACHE_ENTRIES: usize = 128;
 const CACHE_BYTES: usize = 4 * 1024 * 1024;
 
-pub(crate) fn visibility(body: &[u8], output: Option<u32>) -> Option<bool> {
+pub(crate) fn mode(body: &[u8], output: Option<u32>) -> Option<(bool, bool)> {
     // Output ID, mouse-mode flags, and two coordinates. Bit 0 is relative
     // input and bit 1 hides the cursor. The two states are independent.
+    const RELATIVE: u8 = 0x01;
     const HIDDEN: u8 = 0x02;
     let body = body.get(..13)?;
-    (output == Some(crate::wire::be(body, 0))).then_some(body[4] & HIDDEN == 0)
+    (output == Some(crate::wire::be(body, 0)))
+        .then_some((body[4] & RELATIVE != 0, body[4] & HIDDEN == 0))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,16 +118,22 @@ impl Cursors {
 
 #[cfg(test)]
 #[test]
-fn cursor_visibility_changes_without_a_new_image() {
+fn cursor_motion_mode_and_visibility_are_independent() {
     let mut body = [0; 13];
     body[3] = 2;
-    for (flags, visible) in [(0, true), (1, true), (2, false), (3, false), (0x80, true)] {
+    for (flags, relative, visible) in [
+        (0, false, true),
+        (1, true, true),
+        (2, false, false),
+        (3, true, false),
+        (0x80, false, true),
+    ] {
         body[4] = flags;
-        assert_eq!(visibility(&body, Some(2)), Some(visible));
+        assert_eq!(mode(&body, Some(2)), Some((relative, visible)));
     }
-    assert_eq!(visibility(&body, Some(1)), None);
-    assert_eq!(visibility(&body, None), None);
-    assert_eq!(visibility(&body[..12], Some(2)), None);
+    assert_eq!(mode(&body, Some(1)), None);
+    assert_eq!(mode(&body, None), None);
+    assert_eq!(mode(&body[..12], Some(2)), None);
 }
 
 #[cfg(test)]

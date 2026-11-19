@@ -612,6 +612,9 @@ impl Window {
         *self.host_cursor.lock().unwrap_or_else(|e| e.into_inner()) = Some((x, y, relative));
         // When capture is suspended, the input consumer already sees relative=false and
         // may omit its redundant unlock. Do not retain a stale relative request.
+        self.set_host_relative_mouse(relative);
+    }
+    pub(crate) fn set_host_relative_mouse(&self, relative: bool) {
         if relative != self.relative_requested.load(Ordering::Acquire) {
             // A host transition is permanent, including while unfocused.
             self.request_relative_mouse(relative, true);
