@@ -43,7 +43,11 @@ libc = "0.2"
 jni = { version = "0.21.1", default-features = false }
 ndk-sys = { version = "0.6", features = ["media", "audio"] }
 
+[target.'cfg(all(target_os = "android", target_arch = "arm"))'.dependencies]
+purecrypto = { version = "=0.10.4", default-features = false, features = ["evoparseq-armv7-aes-gcm"] }
+
 [patch.crates-io]
+purecrypto = { path = "vendor/purecrypto-0.10.4" }
 webrtc-util = { path = "../../src-native/vendor/webrtc-util-0.12.0" }
 dtls = { path = "../../src-native/vendor/dtls-0.13.0" }
 webrtc = { path = "../../src-native/vendor/webrtc-0.14.0" }
@@ -56,11 +60,16 @@ lto = "thin"
 codegen-units = 1
 opt-level = "s"
 
-# The Phaze DTLS packet path uses portable AES-GCM on 32-bit ARM.
-[profile.release.package.purecrypto]
+[profile.release.package."aes:0.8.4"]
 opt-level = 3
 
-[profile.release.package.evoparseq-phaze]
+[profile.release.package."aes-gcm:0.10.3"]
+opt-level = 3
+
+[profile.release.package."ghash:0.5.1"]
+opt-level = 3
+
+[profile.release.package."polyval:0.6.2"]
 opt-level = 3
 
 [patch."https://github.com/nomi-san/lowlat"]

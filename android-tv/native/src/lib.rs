@@ -55,8 +55,6 @@ mod phaze_android;
 #[path = "../../../src-native/src/phaze_client.rs"]
 mod phaze_client;
 #[cfg(target_os = "android")]
-mod phaze_rx_trace;
-#[cfg(target_os = "android")]
 #[path = "../../../src-native/src/phaze_session.rs"]
 pub mod phaze_session;
 #[cfg(target_os = "android")]

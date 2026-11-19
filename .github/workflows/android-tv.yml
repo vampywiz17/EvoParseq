@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [dev]
-    paths: ['android-tv/**', '.github/workflows/android-tv.yml', 'src-native/src/**', 'src-native/vendor/**', 'src-native/crates/bud/**']
+    paths: ['android-tv/**', '.github/workflows/android-tv.yml', 'src-native/src/**', 'src-native/vendor/**', 'src-native/crates/bud/**', 'src-native/crates/phaze/**']
 
 permissions:
   contents: read
@@ -36,6 +36,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: android-tv/native
+      - name: Prepare pinned Phaze DTLS dependency
+        run: bash android-tv/native/prepare-purecrypto.sh
       - name: Verify shared Rust account and streaming core
         run: |
           cargo fmt --manifest-path android-tv/native/Cargo.toml -- --check
@@ -116,6 +118,17 @@ jobs:
           done
           test -s dist/android-tv/SYMPHONIA-MPL-2.0.txt
           cp src-native/crates/phaze/SYMPHONIA-NOTICE.txt dist/android-tv/
+          mkdir -p dist/android-tv/phaze-crypto-licenses
+          cp android-tv/native/vendor/purecrypto-0.10.4/LICENSE dist/android-tv/phaze-crypto-licenses/PURECRYPTO-MIT.txt
+          for package in aes-gcm-0.10.3 aes-0.8.4 ghash-0.5.1 polyval-0.6.2; do
+            for source in "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/"$package"; do
+              if [ -f "$source/LICENSE-MIT" ]; then
+                cp "$source/LICENSE-MIT" "dist/android-tv/phaze-crypto-licenses/$package-MIT.txt"
+                break
+              fi
+            done
+            test -s "dist/android-tv/phaze-crypto-licenses/$package-MIT.txt"
+          done
           cp src-native/crates/bud/vendor/lowlat-client/LICENSE dist/android-tv/LOWLAT-LICENSE.txt
           git rev-parse HEAD > dist/android-tv/SOURCE.txt
           sha256sum dist/android-tv/EvoParseq-TV.apk > dist/android-tv/SHA256.txt

@@ -294,16 +294,7 @@ impl Reliable {
     fn receive(&mut self, b: &[u8]) -> Result<Received> {
         self.receive_at(b, Instant::now())
     }
-    #[cfg(test)]
-    fn receive_at(&mut self, b: &[u8], now: Instant) -> Result<Received> {
-        self.receive_timed(b, now, None)
-    }
-    pub(crate) fn receive_timed(
-        &mut self,
-        b: &[u8],
-        now: Instant,
-        kernel_ns: Option<i64>,
-    ) -> Result<Received> {
+    pub(crate) fn receive_at(&mut self, b: &[u8], now: Instant) -> Result<Received> {
         if b.is_empty() {
             bail!("Empty reliable packet")
         }
@@ -363,7 +354,7 @@ impl Reliable {
         }
         if b[0] == 6 {
             let ack = if let Some(highest) = self.highest {
-                self.bandwidth.probe(b, highest, now, kernel_ns);
+                self.bandwidth.probe(b, highest, now);
                 self.bandwidth
                     .take_feedback()
                     .and_then(|sample| self.ack(Some(sample)))
@@ -407,7 +398,7 @@ impl Reliable {
             self.buffered += len;
             self.packets.insert(seq, b[..len].to_vec());
             if b[1] == 0 {
-                self.bandwidth.ordinary(seq, b.len(), now, kernel_ns);
+                self.bandwidth.ordinary(seq, b.len(), now);
             }
         }
         if seq == self.frontier {
@@ -450,10 +441,6 @@ impl Reliable {
             return Ok((frames, Some(ack)));
         }
         Ok((frames, self.ack(feedback)))
-    }
-
-    pub(crate) fn take_probe_timing(&mut self) -> Option<crate::ProbeTiming> {
-        self.bandwidth.take_probe_timing()
     }
 
     fn ack(&mut self, feedback: Option<(f64, f64)>) -> Option<Vec<u8>> {

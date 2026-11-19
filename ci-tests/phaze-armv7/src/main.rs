@@ -85,7 +85,7 @@ fn aead() {
     summarize("RustCrypto AES-256-GCM decrypt", candidate_runs);
 }
 
-fn dtls_pair() -> (Connection, Connection) {
+fn dtls_pair(suite: u16) -> (Connection, Connection) {
     let key = BoxedEcdsaPrivateKey::generate(CurveId::P256, &mut purecrypto::rng::OsRng);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -103,12 +103,13 @@ fn dtls_pair() -> (Connection, Connection) {
     .to_der()
     .to_vec();
     let cid = vec![1, 2, 3, 4, 5, 6, 7, 8];
+    let suites = [suite];
     let config = || {
         Config::builder()
             .rng(Arc::new(purecrypto::rng::OsRng))
             .dtls()
             .versions(ProtocolVersion::DTLSv1_2, ProtocolVersion::DTLSv1_2)
-            .cipher_suites(&[0xc02c])
+            .cipher_suites(&suites)
             .connection_id(cid.clone())
             .max_record_size(1232)
             .verify_certificates(false)
@@ -129,7 +130,7 @@ fn dtls_pair() -> (Connection, Connection) {
         if client.is_handshake_complete() && server.is_handshake_complete() {
             assert_eq!(client.peer_certificates()[0], certificate);
             assert_eq!(client.local_connection_id(), Some(cid.as_slice()));
-            assert_eq!(client.negotiated_cipher_suite(), Some(0xc02c));
+            assert_eq!(client.negotiated_cipher_suite(), Some(suite));
             return (client, server);
         }
     }
@@ -147,8 +148,18 @@ fn exchange(from: &mut Connection, to: &mut Connection) {
     }
 }
 
-fn dtls() {
-    let (mut client, mut server) = dtls_pair();
+fn dtls(suite: u16, label: &str) {
+    let (mut client, mut server) = dtls_pair(suite);
+    server.send(&PAYLOAD[..BODY - 1]).unwrap();
+    let valid = server.pop().unwrap();
+    let mut tampered = valid.clone();
+    *tampered.last_mut().unwrap() ^= 1;
+    client.feed(&tampered).unwrap();
+    assert!(client.recv().unwrap().is_empty());
+    client.feed(&valid).unwrap();
+    assert_eq!(client.recv().unwrap(), PAYLOAD[..BODY - 1]);
+    client.feed(&valid).unwrap();
+    assert!(client.recv().unwrap().is_empty());
     let mut runs = [0.0; RUNS];
     for measured in &mut runs {
         let packets: Vec<_> = (0..RECORDS)
@@ -169,7 +180,7 @@ fn dtls() {
         }
         *measured = start.elapsed().as_secs_f64() * 1e6 / RECORDS as f64;
     }
-    summarize("purecrypto DTLS 1.2 CID feed + recv", runs);
+    summarize(label, runs);
 }
 
 fn main() {
@@ -180,5 +191,6 @@ fn main() {
         usize::BITS
     );
     aead();
-    dtls();
+    dtls(0xc02b, "DTLS 1.2 AES-128-GCM CID feed + recv");
+    dtls(0xc02c, "DTLS 1.2 AES-256-GCM CID feed + recv");
 }

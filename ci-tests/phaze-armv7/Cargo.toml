@@ -4,9 +4,15 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+patched = ["purecrypto/evoparseq-armv7-aes-gcm"]
+
 [dependencies]
 aes-gcm = { version = "=0.10.3", default-features = false, features = ["aes"] }
 purecrypto = { version = "=0.10.4", default-features = false, features = ["std", "dtls", "p256-table"] }
+
+[patch.crates-io]
+purecrypto = { path = "../../android-tv/native/vendor/purecrypto-0.10.4" }
 
 [profile.release]
 lto = "thin"

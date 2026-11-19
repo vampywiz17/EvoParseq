@@ -13,8 +13,6 @@ pub trait Platform {
     fn stage(&mut self, _stage: &'static str) {}
     fn outputs(&mut self, _outputs: &[Output]) {}
     fn stream_request_sent(&mut self, _output: u32, _config: VideoConfig) {}
-    fn bandwidth_feedback_sent(&mut self, _lower_rate: f64, _upper_rate: f64) {}
-    fn bandwidth_probe_timing(&mut self, _sample: evoparseq_phaze::ProbeTiming) {}
     fn video(&mut self, encoded: &[u8], info: PacketInfo) -> Result<()>;
     fn reset_video(&mut self);
     fn take_recovery(&mut self) -> bool;
@@ -93,17 +91,6 @@ impl<P: Platform> Client<P> {
             evoparseq_phaze::connect(&remote, peer, self).await
         }
     }
-
-    #[cfg(target_os = "android")]
-    pub async fn connect_direct_via(
-        &mut self,
-        token: &str,
-        peer: &str,
-        socket: impl evoparseq_phaze::Datagram,
-    ) -> Result<()> {
-        let remote = evoparseq_phaze::Session::from_token(token)?;
-        evoparseq_phaze::connect_via(&remote, peer, self, socket).await
-    }
 }
 
 impl<P: Platform> Sink for Client<P> {
@@ -123,15 +110,8 @@ impl<P: Platform> Sink for Client<P> {
         self.state.stream.request_sent(output, config);
         self.platform.stream_request_sent(output, config);
     }
-    fn bandwidth_feedback_sent(&mut self, lower_rate: f64, upper_rate: f64, first: bool) {
-        if first {
-            phaze_session::log_bandwidth_feedback(lower_rate, upper_rate);
-        }
-        self.platform
-            .bandwidth_feedback_sent(lower_rate, upper_rate);
-    }
-    fn bandwidth_probe_timing(&mut self, sample: evoparseq_phaze::ProbeTiming) {
-        self.platform.bandwidth_probe_timing(sample);
+    fn bandwidth_feedback_started(&mut self, lower_rate: f64, upper_rate: f64) {
+        phaze_session::log_bandwidth_feedback(lower_rate, upper_rate);
     }
     fn stage(&mut self, stage: &'static str) {
         self.platform.stage(stage);

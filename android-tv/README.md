@@ -127,6 +127,11 @@ Rust and cargo-ndk4.1.2. See `.github/workflows/android-tv.yml` for the exact
 per-ABI Opus CMake toolchain and build commands. No local signing keys or
 `local.properties` belong in git.
 
+Before the first native build, run `bash android-tv/native/prepare-purecrypto.sh`
+from the repository root. CI runs this step automatically. It verifies the
+pinned purecrypto source archive and applies the checked-in AES-GCM patch.
+Only the Android ARMv7 build opts into the RustCrypto record implementation.
+
 CI APK: `EvoParseq-TV.apk` (from `app/build/outputs/apk/release/app-release.apk`).
 Local `assembleDebug` builds remain debug-signed and cannot replace the signed
 distribution build. Both ARM64 and ARMv7

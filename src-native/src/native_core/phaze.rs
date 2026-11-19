@@ -205,10 +205,8 @@ impl evoparseq_phaze::Sink for View {
     fn rtt(&mut self, elapsed: Option<Duration>) {
         self.rtt = elapsed;
     }
-    fn bandwidth_feedback_sent(&mut self, lower_rate: f64, upper_rate: f64, first: bool) {
-        if first {
-            crate::phaze_session::log_bandwidth_feedback(lower_rate, upper_rate);
-        }
+    fn bandwidth_feedback_started(&mut self, lower_rate: f64, upper_rate: f64) {
+        crate::phaze_session::log_bandwidth_feedback(lower_rate, upper_rate);
     }
     fn cursor_visibility(&mut self, visible: bool) {
         self.window
@@ -894,7 +892,7 @@ mod tests {
 
             use evoparseq_phaze::{ClientControl, CursorFormat, CursorImage};
             view.host_flags(16);
-            view.bandwidth_feedback_sent(750_000.0, 875_000.0, true);
+            view.bandwidth_feedback_started(750_000.0, 875_000.0);
             view.video_recovery_sent(8);
             view.cursor_visibility(false);
             view.cursor_output_changed();

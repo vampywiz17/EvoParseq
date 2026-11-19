@@ -20,17 +20,6 @@ pub trait Datagram: Sync {
         &self,
         data: &mut [u8],
     ) -> impl Future<Output = io::Result<(usize, SocketAddr)>> + Send;
-
-    /// Optional kernel receive timestamp, in nanoseconds on the socket's clock.
-    fn recv_from_timed(
-        &self,
-        data: &mut [u8],
-    ) -> impl Future<Output = io::Result<(usize, SocketAddr, Option<i64>)>> + Send {
-        async {
-            let (len, peer) = self.recv_from(data).await?;
-            Ok((len, peer, None))
-        }
-    }
 }
 
 impl Datagram for tokio::net::UdpSocket {

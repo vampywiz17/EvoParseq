@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [codex/phaze-protocol]
-    paths: ['ci-tests/phaze-armv7/**', '.github/workflows/phaze-armv7-benchmark.yml']
+    paths: ['ci-tests/phaze-armv7/**', '.github/workflows/phaze-armv7-benchmark.yml', 'android-tv/native/patches/**', 'android-tv/native/prepare-purecrypto.sh']
 permissions:
   contents: read
 jobs:
@@ -21,6 +21,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends gcc-arm-linux-gnueabihf libc6-dev-armhf-cross qemu-user
+      - name: Prepare pinned Phaze DTLS dependency
+        run: bash android-tv/native/prepare-purecrypto.sh
       - name: Compare DTLS and standards-compatible AES-GCM on emulated Cortex-A7
         env:
           CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
@@ -28,4 +30,8 @@ jobs:
         run: |
           set -o pipefail
           cargo build --locked --release --target armv7-unknown-linux-gnueabihf
+          echo "Upstream DTLS AES-GCM" | tee -a "$GITHUB_STEP_SUMMARY"
+          qemu-arm -cpu cortex-a7 -L /usr/arm-linux-gnueabihf target/armv7-unknown-linux-gnueabihf/release/evoparseq-phaze-armv7 | tee -a "$GITHUB_STEP_SUMMARY"
+          cargo build --locked --release --target armv7-unknown-linux-gnueabihf --features patched
+          echo "DTLS with RustCrypto AES-GCM" | tee -a "$GITHUB_STEP_SUMMARY"
           qemu-arm -cpu cortex-a7 -L /usr/arm-linux-gnueabihf target/armv7-unknown-linux-gnueabihf/release/evoparseq-phaze-armv7 | tee -a "$GITHUB_STEP_SUMMARY"
