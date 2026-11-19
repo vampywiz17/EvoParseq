@@ -18,9 +18,11 @@ jobs:
         with:
           targets: armv7-unknown-linux-gnueabihf
       - name: Install ARMv7 compiler and emulator
+        timeout-minutes: 7
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends gcc-arm-linux-gnueabihf libc6-dev-armhf-cross qemu-user
+          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|https://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get -o Acquire::Retries=1 update -qq
+          sudo apt-get -o Acquire::Retries=1 install -y --no-install-recommends gcc-arm-linux-gnueabihf libc6-dev-armhf-cross qemu-user
       - name: Prepare pinned Phaze DTLS dependency
         run: bash android-tv/native/prepare-purecrypto.sh
       - name: Compare DTLS and standards-compatible AES-GCM on emulated Cortex-A7
