@@ -112,7 +112,8 @@ pub struct SettingEngine {
 }
 
 impl SettingEngine {
-    /// Optional connected TURN TCP/TLS socket marking. Unsupported platforms send unmarked.
+    /// Optional connected TURN TCP/TLS socket marking. Linux also marks native UDP sockets.
+    /// Unsupported platforms send unmarked.
     pub fn set_turn_tcp_qos(&mut self, enabled: bool) {
         self.turn_tcp_qos = enabled;
     }

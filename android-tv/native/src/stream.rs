@@ -424,7 +424,7 @@ fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result<()>
             );
 
             overlay["frame_rate_hint"] =
-                crate::overlay::frame_rate_hint(&host_config.observed()).into();
+                crate::session_preferences::frame_rate_hint(&host_config.observed()).into();
 
             *status.lock().unwrap_or_else(|e| e.into_inner()) = json!({"state":if snapshot.submitted>0 {"Streaming"} else {"Connecting…"},"ended":false,"video":snapshot,"settings_confirmed":settings_confirmed,
                 "audio":receiver.snapshot(),"audio_output":audio.snapshot(),"network":network,"overlay":overlay});

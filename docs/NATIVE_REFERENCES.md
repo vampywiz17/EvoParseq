@@ -120,3 +120,89 @@ Platform adapters use Microsoft's documented
 and Android's documented
 [controller events](https://developer.android.com/games/sdk/game-controller/controller-input).
 Synthetic wire/lifecycle tests do not establish stock-host live compatibility.
+
+## Linux audio and input adapters
+
+- PipeWire 0.8 Rust bindings use the public stream, registry, metadata and SPA raw
+  audio APIs: https://pipewire.pages.freedesktop.org/pipewire-rs/pipewire/
+  Speaker positions follow SPA audio channel definitions; unpositioned/unknown
+  output layouts never imply surround capability.
+- SDL2's public GameController API supplies Linux device state and motor output;
+  the Freedesktop 25.08 runtime provides SDL2-compat/SDL3. Shared Rust retains
+  controller activation, dead zones, reports and lifecycle. No SDL video backend,
+  application controller thread, host input driver or mapping SDK is bundled.
+  https://wiki.libsdl.org/SDL2/CategoryGameController
+- Wayland keyboard shortcut inhibition is the documented optional extension in
+  wayland-protocols, not a global keyboard hook or private compositor API:
+  https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1.xml
+  Its active/inactive events are authoritative; the compositor may retain
+  reserved shortcuts. Unsupported keyboard choices are disabled.
+- Clipboard uses the existing eframe/egui-winit Wayland adapter. The shared text
+  policy retains Windows' bounds, UTF-8 truncation, echo suppression and focus
+  revocation. Linux synchronizes on activation/paste; it does not monitor the
+  background clipboard or record its contents.
+
+## Windows additional-display control
+
+Read-only inspection of the same installed 150-105c runtime/hash above established
+the directional opcode-27 contract. The client helper at RVA `0xa1920` sends
+`(stream, enabled, 0, 27)` and is called for creation at `0x8e82b` and closure at
+`0x8eb10`. The host sends opcode 27 back as `(stream, 0, status, 27)`. It is not
+an acknowledgement of successful client-side window creation. The secondary
+mouse encoder at `0x4aa39` uses opcode 26 with `(stream << 1) | relative` and
+packed unsigned-horizontal/signed-vertical 16-bit coordinate halves. No binary
+implementation is incorporated, no entitlement check is patched, and host
+acceptance without Warp remains an explicit live validation question.
+
+The initial Windows adapter opens streams 1/2 for the corresponding host-listed
+outputs; physical/virtual output creation remains the host's responsibility.
+Additional windows have fullscreen and Close screen controls; the original
+window retains session settings/audio/Disconnect. Normal Parsec input is the
+initial supported multi-display mode. Secondary HID desktop-coordinate mapping
+is not inferred from local window positions.
+
+
+## Parsec VDD provisioning versus additional streams
+
+The official [Multiple Monitors and Virtual Displays](https://support.parsec.app/hc/en-us/articles/32381733729044-Multiple-Monitors-and-Virtual-Displays)
+guide separates Add Screens (opening a window for an existing extended output)
+from Virtual Displays (a host setting applied during owner connections).
+[Advanced configuration](https://support.parsec.app/hc/en-us/articles/32381443626516-All-Advanced-Configuration-Options)
+names `host_virtual_monitors` for the configured additional display count and
+`host_virtual_monitor_fallback` for the separate single-display fallback.
+These settings are not client stream-count requests.
+
+Read-only inspection on 2026-11-13 of the same 150-105c runtime/hash above
+corroborates that separation:
+
+- The host settings UI writes `host_virtual_monitors` at RVA `0x15728`.
+  The local configuration loader reads it at `0x52f0a` into configuration
+  offset `0x5c8`.
+- The host connection initializer at `0xa88f0` copies that host configuration;
+  its guarded VDD path at `0xa8b77` supplies the configured count to
+  `0xc0090`. That host-side routine initializes the installed Parsec display
+  driver and adds the requested devices. The guard's full account/permission
+  meaning has not been established; this is not evidence that entitlement
+  checks are absent.
+- The Add Screens helper at `0xa1920` sends the already documented opcode 27
+  stream toggle. It is not the VDD provisioning routine.
+- The examined remote configuration serializer (`0xa7c00`) and parser
+  (`0xa7dc0..0xa8568`) expose `virtualTablet`, `virtualMicrophone` and per-stream
+  video settings. They do not expose a virtual-monitor count. Supplying an
+  invented `virtualMonitors` JSON field is not an implemented remote VDD API.
+
+No compatible guest-side command for changing the stock host's VDD count has
+been established. This bounded inspection does not prove that no other private
+interface exists. EvoParseq therefore does not send guessed control messages,
+modify the host's local configuration or install a driver on the client.
+The lowlat client/protocol review likewise supplies no Parsec-VDD provisioning
+contract; lowlat's own host/display driver is a different implementation.
+
+For a live test, configure the desired virtual displays in the stock host's
+Settings > Host > Virtual Displays first, reconnect, refresh the host display
+list and use Add screen for the reported outputs. Fallback alone supplies only
+one virtual output when no other displays exist. A successful settings change,
+output-list response or local window is not proof that the host accepted an
+additional encoder: validate an actual secondary keyframe/picture. The installed
+VDD, owner/account policy, driver state and extended desktop remain host-side
+requirements. There is no new VDD-creation feature in the client from this review.

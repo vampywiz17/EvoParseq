@@ -125,7 +125,7 @@ impl Keyboard {
 pub fn relative_capture(relative: bool, hidden: bool) -> bool {
     relative || hidden
 }
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", target_os = "linux", test))]
 mod pointing {
     use super::*;
     use anyhow::Result;
@@ -551,7 +551,7 @@ mod pointing {
         }
     }
 }
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", target_os = "linux", test))]
 pub use pointing::{Engine, Event, Pointer, RemoteSource};
 
 #[cfg(test)]

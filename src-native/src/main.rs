@@ -5,6 +5,8 @@
 use {rcgen as _, rustls as _, tokio_rustls as _};
 
 const APP_TITLE: &str = "EvoParseq";
+mod about;
+mod app_style;
 mod attempt;
 #[cfg(windows)]
 mod audio_endpoint_windows;
@@ -20,9 +22,12 @@ mod branding;
 #[cfg(all(windows, feature = "bud"))]
 mod bud_attempt;
 #[cfg(all(windows, feature = "bud"))]
+mod bud_ingress;
+#[cfg(all(windows, feature = "bud"))]
 mod bud_media;
 #[cfg(feature = "bud")]
 mod bud_routes;
+mod clipboard_sync;
 mod connection_settings;
 #[cfg(windows)]
 mod connection_settings_ui;
@@ -33,6 +38,8 @@ mod crypto_policy_tests;
 mod cursor;
 #[cfg(test)]
 mod data_only_policy_tests;
+#[cfg(any(windows, test))]
+mod display_stream;
 mod event_log;
 mod event_queue;
 #[cfg(windows)]
@@ -43,6 +50,7 @@ mod fullscreen;
 mod gpu_windows;
 #[cfg(all(windows, feature = "bud"))]
 mod hid_input;
+mod hid_policy;
 mod input;
 mod input_state;
 #[cfg(windows)]
@@ -57,6 +65,7 @@ mod media_scheduling;
 mod native_core;
 #[cfg(windows)]
 mod native_wire;
+mod network_settings;
 #[cfg(windows)]
 mod nvidia_vsr;
 #[cfg(windows)]
@@ -66,6 +75,7 @@ mod platform;
 mod platform_windows;
 mod rtc_configuration;
 mod secure_storage;
+mod session_controls;
 #[cfg(windows)]
 mod session_preferences;
 #[cfg(windows)]

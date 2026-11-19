@@ -1,0 +1,20 @@
+[package]
+name = "evoparseq-wayland-input-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+bytes = "1"
+egui = "=0.33.3"
+libc = "0.2"
+serde_json = "1"
+smithay-clipboard = { path = "../../linux/vendor/smithay-clipboard" }
+wayland-client = "=0.31.15"
+wayland-cursor = "=0.31.14"
+wayland-protocols = { version = "=0.32.13", features = ["client"] }
+winit = { version = "=0.30.13", default-features = false, features = ["wayland", "rwh_06"] }
+
+[profile.dev]
+debug = 0

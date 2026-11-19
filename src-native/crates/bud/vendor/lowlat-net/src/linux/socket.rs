@@ -7,7 +7,9 @@ use std::io;
 use std::mem;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
-use crate::socket::{DEFAULT_TTL, DSCP_EF, WANT_RCVBUF, WANT_SNDBUF};
+#[cfg(not(target_os = "linux"))]
+use crate::socket::DSCP_EF;
+use crate::socket::{DEFAULT_TTL, WANT_RCVBUF, WANT_SNDBUF};
 
 /// Sizes into the kernel's length type.
 ///
@@ -60,6 +62,11 @@ impl Socket {
         })
     }
 
+    #[cfg(all(target_os = "linux", feature = "turn-stream"))]
+    pub fn linux_qos(&self, requested: bool) {
+        evoparseq_socket_qos::Flow::new(&self.fd, requested, "BUD/UDP");
+    }
+
     fn configure(&self) -> io::Result<()> {
         // Dual stack. One socket serves both families.
         self.set_int(libc::IPPROTO_IPV6, libc::IPV6_V6ONLY, 0)?;
@@ -74,8 +81,11 @@ impl Socket {
         self.set_int(libc::IPPROTO_IPV6, libc::IPV6_RECVPKTINFO, 1)?;
         self.set_int(libc::IPPROTO_IP, libc::IP_PKTINFO, 1)?;
 
-        self.set_int(libc::IPPROTO_IP, libc::IP_TOS, DSCP_EF)?;
-        self.set_int(libc::IPPROTO_IPV6, libc::IPV6_TCLASS, DSCP_EF)?;
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.set_int(libc::IPPROTO_IP, libc::IP_TOS, DSCP_EF)?;
+            self.set_int(libc::IPPROTO_IPV6, libc::IPV6_TCLASS, DSCP_EF)?;
+        }
 
         // Do not fragment, so an oversized probe fails fast rather than being
         // split and arriving anyway, which would make the probe meaningless.

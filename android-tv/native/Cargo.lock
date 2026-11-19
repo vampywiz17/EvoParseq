@@ -675,13 +675,13 @@ dependencies = [
  "lowlat-core",
  "lowlat-crypto",
  "serde_json",
- "tokio",
 ]
 
 [[package]]
 name = "evoparseq-socket-qos"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "windows-sys 0.61.2",
 ]
 

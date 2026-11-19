@@ -1,14 +1,10 @@
 # EvoParseq for Android TV
 
-Stable release: [**EvoParseq v0.9.7**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.7)
-on `main`, with a signed **EvoParseq-TV.apk** for Android 10+ (ARMv7 and ARM64).
-The initial Android TV client uses a Google TV / Android TV interface, D-pad
-navigation, two-factor sign-in and shared Rust account/session logic. First live
-device: Xiaomi TV Box S (3rd Gen) EU, Android 14 (32-bit ARM userspace).
-Device-specific capabilities and the limits below still apply. Development
-continues on `dev`; Linux builds are distributed separately.
+Stable release: [**EvoParseq v0.9.8**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8). First live device: Xiaomi TV Box S
+(3rd Gen) EU, Android 14 (32-bit ARM userspace). Google TV / Android TV interface,
+D-pad navigation, two-factor sign-in and shared Rust account/session logic.
 
-## Streaming
+## Streaming preview
 
 - Connect to an unmodified official Parsec host using **WebRTC direct/STUN**
   (default) or **BUD direct UDP**.

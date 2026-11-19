@@ -2,7 +2,7 @@
 use anyhow::{bail, Result};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, Weak,
 };
 use windows_sys::Win32::{
     Foundation::*,
@@ -14,7 +14,15 @@ use windows_sys::Win32::{
 
 pub use crate::native_core::session_model::Event;
 
+struct PeerCursor {
+    window: Weak<Window>,
+    position: (i32, i32),
+}
+
 pub struct Window {
+    pub(crate) display_stream: AtomicUsize,
+    pub(crate) multidisplay_ready: AtomicBool,
+    pub(crate) displays: Arc<crate::native_core::multi_display::Displays>,
     pub(crate) audio_output: crate::audio_output::Output,
     pub(crate) native_panel: AtomicUsize,
 
@@ -62,6 +70,7 @@ pub struct Window {
     mouse_clipped: AtomicBool,
     input_suspended: AtomicBool,
     host_cursor: Mutex<Option<(i32, i32, bool)>>,
+    peer_cursor_restore: Mutex<Option<PeerCursor>>,
     warp_pending: AtomicBool,
     warp_echo: AtomicU64,
     keyboard_requested: AtomicBool,
@@ -69,7 +78,6 @@ pub struct Window {
     pressed_buttons: AtomicUsize,
     pressed_keys: Mutex<std::collections::BTreeSet<&'static str>>,
     local_shortcuts: Mutex<crate::input::Shortcuts>,
-    text_decoder: Mutex<crate::input::TextDecoder>,
     cursor_pending: Mutex<crate::cursor::Pending>,
     cursor_posted: AtomicBool,
     cursor: Mutex<crate::cursor::State>,
@@ -123,6 +131,9 @@ impl Window {
     }
 
     unsafe fn open_stats(&self) {
+        if self.display_stream.load(Ordering::Acquire) != 0 {
+            return;
+        }
         let existing = self.stats_page.load(Ordering::Acquire) as HWND;
         if !existing.is_null() {
             ShowWindow(existing, SW_RESTORE);
@@ -141,6 +152,9 @@ impl Window {
 
     fn create_mode(online: bool) -> Result<Arc<Self>> {
         let state = Arc::new(Self {
+            display_stream: AtomicUsize::new(0),
+            multidisplay_ready: AtomicBool::new(false),
+            displays: Default::default(),
             audio_output: Default::default(),
             stats: Default::default(),
 
@@ -187,6 +201,7 @@ impl Window {
             mouse_clipped: AtomicBool::new(false),
             input_suspended: AtomicBool::new(false),
             host_cursor: Default::default(),
+            peer_cursor_restore: Default::default(),
             warp_pending: AtomicBool::new(false),
             warp_echo: Default::default(),
             keyboard_requested: AtomicBool::new(false),
@@ -194,7 +209,6 @@ impl Window {
             pressed_buttons: AtomicUsize::new(0),
             pressed_keys: Default::default(),
             local_shortcuts: Default::default(),
-            text_decoder: Default::default(),
             cursor_pending: Default::default(),
             cursor_posted: AtomicBool::new(false),
             cursor: Default::default(),
@@ -204,6 +218,7 @@ impl Window {
             wake_pending: AtomicUsize::new(0),
             wake_lock: Default::default(),
         });
+        state.displays.set_primary(Arc::downgrade(&state));
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let ui = state.clone();
         std::thread::spawn(move || {
@@ -298,12 +313,12 @@ impl Window {
             && !self.closing.load(Ordering::Acquire)
     }
     #[cfg(feature = "vendor-video")]
-    pub fn experimental_zero_copy(&self) -> bool {
+    pub fn zero_copy(&self) -> bool {
         self.connection_settings
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
-            .is_some_and(|manager| manager.view().0.experimental_zero_copy)
+            .is_some_and(|manager| manager.view().0.zero_copy)
     }
     pub fn ai_upscale_quality(&self) -> u8 {
         let settings = self
@@ -464,6 +479,10 @@ impl Window {
     pub fn end_session(&self) {
         self.begin_video(); // Retire the old surface before a reconnect can own it.
         *self.host_cursor.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.peer_cursor_restore
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
         self.relative_requested.store(false, Ordering::Release);
         self.set_input_state(Default::default());
         self.set_relative_mouse(false);
@@ -577,6 +596,10 @@ impl Window {
         }
     }
     pub fn set_host_cursor(&self, x: i32, y: i32, relative: bool, hidden: bool) {
+        self.peer_cursor_restore
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
         // Parsec SDK cursor_func and lowlat both use OR. A hidden-only event
         // must acquire native relative input too; button state is not evidence.
         let relative = crate::desktop_input::relative_capture(relative, hidden);
@@ -588,11 +611,46 @@ impl Window {
             self.request_relative_mouse(relative, true);
         }
     }
+    /// A visible absolute cursor on another live stream ends this stream's
+    /// stale capture request. Restore its endpoint through the destination's
+    /// viewport without changing focus or synthesizing button/key releases.
+    pub(crate) fn release_peer_cursor(&self, peer: &Arc<Window>, position: (i32, i32)) {
+        let visible_stream = peer.display_stream.load(Ordering::Acquire);
+        let stream = self.display_stream.load(Ordering::Acquire);
+        if stream == visible_stream {
+            return;
+        }
+        let mut cursor = self.host_cursor.lock().unwrap_or_else(|e| e.into_inner());
+        if !cursor.is_some_and(|(_, _, relative)| relative) {
+            return;
+        }
+        *cursor = None;
+        drop(cursor);
+        *self
+            .peer_cursor_restore
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(PeerCursor {
+            window: Arc::downgrade(peer),
+            position,
+        });
+        self.request_relative_mouse(false, true);
+        self.set_cursor(crate::cursor::Request::Visible(true));
+        crate::event_log::record(
+            "INFO",
+            "cursor_capture_released_for_peer",
+            serde_json::json!({"stream":stream,"visible_stream":visible_stream}),
+        );
+    }
     unsafe fn restore_host_cursor(&self) {
         // HID desktop input also needs the host's endpoint when leaving raw
         // relative capture. Otherwise the next absolute move sends the old
         // local capture anchor back to the host. This is transition-only:
         // ordinary host cursor images must never continuously warp HID input.
+        let peer = self
+            .peer_cursor_restore
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
         if !self.warp_pending.swap(false, Ordering::AcqRel) {
             return;
         }
@@ -602,23 +660,87 @@ impl Window {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .warp_disabled;
-        let cursor = *self.host_cursor.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((x, y, false)) = cursor.filter(|_| restore) {
-            if let Some((cx, cy)) = self.presented_viewport().and_then(|v| v.unmap(x, y)) {
-                let mut point = POINT { x: cx, y: cy };
-                if ClientToScreen(self.handle(), &mut point) != 0
-                    && SetCursorPos(point.x, point.y) != 0
-                {
-                    // Zero means no synthetic move. Keep the ordinary mouse
-                    // path free of an additional mutex for this rare transition.
-                    self.warp_echo
-                        .store(((cx as u64) << 32 | cy as u64) + 1, Ordering::Release);
+        if restore {
+            if let Some(peer) = peer {
+                if let Some(target) = peer.window.upgrade().filter(|w| {
+                    !w.closing.load(Ordering::Acquire)
+                        && w.video_visible.load(Ordering::Acquire)
+                        && w.video_ready.load(Ordering::Acquire)
+                        && !w.settings_open()
+                }) {
+                    let warped = self.warp_host_cursor(&target, peer.position);
+                    crate::event_log::record(
+                        "INFO",
+                        "cursor_peer_endpoint_restored",
+                        serde_json::json!({
+                            "stream":self.display_stream.load(Ordering::Acquire),
+                            "visible_stream":target.display_stream.load(Ordering::Acquire),"warped":warped
+                        }),
+                    );
+                }
+            } else {
+                let cursor = *self.host_cursor.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some((x, y, false)) = cursor {
+                    self.warp_host_cursor(self, (x, y));
                 }
             }
         }
         // Relative capture release kept the cursor hidden until its position
         // was restored. Showing it first exposes the stale capture anchor.
         self.select_client_cursor();
+    }
+    unsafe fn warp_host_cursor(&self, target: &Window, position: (i32, i32)) -> bool {
+        if IsWindowVisible(target.handle()) == 0 || IsIconic(target.handle()) != 0 {
+            return false;
+        }
+        let Some((x, y)) = target
+            .presented_viewport()
+            .and_then(|v| v.unmap(position.0, position.1))
+        else {
+            return false;
+        };
+        let mut point = POINT { x, y };
+        if ClientToScreen(target.handle(), &mut point) == 0 {
+            return false;
+        }
+        // Explicit immersive confinement must not clamp the requested peer
+        // endpoint into the source and echo that different position to the host.
+        let mut clip = RECT::default();
+        if GetClipCursor(&mut clip) == 0
+            || point.x < clip.left
+            || point.x >= clip.right
+            || point.y < clip.top
+            || point.y >= clip.bottom
+        {
+            return false;
+        }
+        let mut source = point;
+        if ScreenToClient(self.handle(), &mut source) == 0 {
+            return false;
+        }
+        // Capture may still route the synthetic move to the source window.
+        // Without capture it goes to the destination. Suppress both possible
+        // echoes before SetCursorPos so neither can jump the host back.
+        let source_echo = crate::input_windows::motion_echo(source.x, source.y);
+        let target_echo = crate::input_windows::motion_echo(x, y);
+        self.warp_echo.store(source_echo, Ordering::Release);
+        target.warp_echo.store(target_echo, Ordering::Release);
+        if SetCursorPos(point.x, point.y) == 0 {
+            let _ = self.warp_echo.compare_exchange(
+                source_echo,
+                0,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            let _ = target.warp_echo.compare_exchange(
+                target_echo,
+                0,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            return false;
+        }
+        true
     }
     fn client_cursor_hidden(&self) -> bool {
         self.relative_mouse.load(Ordering::Acquire) || self.warp_pending.load(Ordering::Acquire)
@@ -888,8 +1010,29 @@ impl Window {
         }
     }
 
+    pub(crate) fn native_relative_mouse(&self) -> bool {
+        // Focus/capture reacquisition must not warp a relative camera.
+        self.relative_requested.load(Ordering::Acquire)
+            || self.relative_mouse.load(Ordering::Acquire)
+    }
+
     pub fn native_fullscreen(&self) -> bool {
         self.fullscreen_active.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn input_detached(&self) -> bool {
+        self.input_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .detached
+    }
+    pub(crate) fn toggle_input_detached(&self) {
+        let next = {
+            let mut state = *self.input_state.lock().unwrap_or_else(|e| e.into_inner());
+            state.detached = !state.detached;
+            state
+        };
+        self.set_input_state(next);
     }
 
     pub fn native_toggle_overlay(&self) {
@@ -1141,7 +1284,14 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
             }
             m if m == WM_APP + 8 => {
                 crate::connection_settings_ui::install_menu(hwnd);
-
+                if s.display_stream.load(Ordering::Acquire) != 0 {
+                    EnableMenuItem(
+                        GetMenu(hwnd),
+                        crate::stats_ui::OPEN as u32,
+                        MF_BYCOMMAND | MF_GRAYED,
+                    );
+                    DrawMenuBar(hwnd);
+                }
                 crate::native_core::session_ui::install(s);
                 return 0;
             }
@@ -1400,7 +1550,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                 }
 
                 crate::native_core::session_ui::raise(s);
-                s.push(Event::Size(w, h));
+                s.push(Event::Size);
                 s.apply_input_capture();
             }
             WM_MOVE => {
@@ -1455,7 +1605,6 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                     s.push(Event::Key(false, code, 0));
                 }
                 s.push(Event::Focus(false));
-                *s.text_decoder.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
             }
             WM_CAPTURECHANGED => s.release_buttons(),
             WM_MOUSEMOVE if !s.relative_mouse.load(Ordering::Acquire) => {
@@ -1487,15 +1636,8 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                     return 0;
                 }
             }
-            WM_CHAR => {
-                if let Some(event) = crate::input_windows::text(
-                    wp,
-                    &mut s.text_decoder.lock().unwrap_or_else(|e| e.into_inner()),
-                ) {
-                    s.push(event);
-                }
-                return 0;
-            }
+            // Remote typing follows physical key events and the host layout.
+            WM_CHAR => return 0,
             WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
                 #[cfg(feature = "bud")]
                 {
@@ -1537,7 +1679,7 @@ unsafe extern "system" fn video_surface_proc(
 mod tests {
     use super::*;
     #[test]
-    fn native_input_boundary_keeps_signed_axes_text_and_focus_release_order() {
+    fn native_input_boundary_keeps_signed_axes_and_focus_release_order() {
         struct Close(Arc<Window>);
         impl Drop for Close {
             fn drop(&mut self) {
@@ -1563,14 +1705,11 @@ mod tests {
                 usize::from(-120i16 as u16) << 16,
                 point(-20, 30),
             );
-            SendMessageW(hwnd, WM_CHAR, 0xd83e, 0);
             SendMessageW(hwnd, WM_KEYDOWN, VK_LWIN as usize, 0x5b << 16);
             SendMessageW(hwnd, WM_KEYDOWN, b'A' as usize, 0x1e << 16);
             SendMessageW(hwnd, WM_KEYUP, VK_LWIN as usize, (0x5b << 16) | (1 << 31));
             SendMessageW(hwnd, WM_LBUTTONDOWN, 1, point(120, 120));
             SendMessageW(hwnd, WM_KILLFOCUS, 0, 0);
-            SendMessageW(hwnd, WM_CHAR, 0xdd80, 0); // Pending high surrogate was reset.
-            SendMessageW(hwnd, WM_CHAR, 'ő' as usize, 0);
         }
         let events = window.events.drain();
         assert!(events.iter().any(|e| matches!(e, Event::Motion(-12, 34))));
@@ -1592,8 +1731,6 @@ mod tests {
             .position(|e| matches!(e, Event::Focus(false)))
             .unwrap();
         assert!(button_release < key_release && key_release < focus_loss);
-        assert!(events.iter().any(|e| matches!(e, Event::Text(0x151))));
-        assert!(!events.iter().any(|e| matches!(e, Event::Text(0x1f980))));
         assert!(window.pressed_keys.lock().unwrap().is_empty());
     }
     #[cfg(feature = "bud")]
@@ -1757,6 +1894,34 @@ mod tests {
             }
         };
         let window = Window::create_mode(false).unwrap();
+        let peer = Window::create_mode(false).unwrap();
+        struct ClosePeer(Arc<Window>);
+        impl Drop for ClosePeer {
+            fn drop(&mut self) {
+                self.0.end_session();
+                self.0.close();
+            }
+        }
+        let _peer = ClosePeer(peer.clone());
+        peer.display_stream.store(1, Ordering::Release);
+        peer.video_ready.store(true, Ordering::Release);
+        *peer.video_report.lock().unwrap() = Some(crate::video_output::Snapshot {
+            width: Some(3840),
+            height: Some(2160),
+            frames_presented: 1,
+            ..Default::default()
+        });
+        unsafe {
+            SetWindowPos(
+                peer.handle(),
+                HWND_BOTTOM,
+                200,
+                120,
+                400,
+                320,
+                SWP_NOACTIVATE,
+            );
+        }
         #[track_caller]
         fn wait(mut check: impl FnMut() -> bool) {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
@@ -2025,6 +2190,72 @@ mod tests {
                 height: Some(1080),
                 frames_presented: 1,
                 ..Default::default()
+            });
+            // Restore through a differently sized/letterboxed destination,
+            // retaining source capture and the held button until its real up.
+            for disabled in [true, false] {
+                window.set_input_state(crate::input_state::State {
+                    warp_disabled: disabled,
+                    ..mode(false, false)
+                });
+                window.set_host_cursor(960, 540, false, true);
+                wait(|| relative() && clipped());
+                unsafe {
+                    SendMessageW(window.handle(), WM_LBUTTONDOWN, 1, (100 << 16) | 100);
+                }
+                window.events.drain();
+                window.release_peer_cursor(&window, (2880, 540));
+                assert!(window.relative_requested.load(Ordering::Acquire));
+                window
+                    .displays
+                    .cursor_mode(1, false, false, false, (2880, 540)); // Closed output.
+                assert!(window.relative_requested.load(Ordering::Acquire));
+                let mut before = POINT::default();
+                unsafe {
+                    GetCursorPos(&mut before);
+                }
+                window.release_peer_cursor(&peer, (2880, 540));
+                wait(|| !relative() && !clipped());
+                unsafe {
+                    SendMessageW(window.handle(), WM_APP + 7, 0, 0);
+                    let (x, y) = peer.presented_viewport().unwrap().unmap(2880, 540).unwrap();
+                    let mut expected = POINT { x, y };
+                    ClientToScreen(peer.handle(), &mut expected);
+                    let mut actual = POINT::default();
+                    GetCursorPos(&mut actual);
+                    let expected = if disabled { before } else { expected };
+                    assert_eq!((actual.x, actual.y), (expected.x, expected.y));
+                    let mut gui = GUITHREADINFO {
+                        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+                        ..Default::default()
+                    };
+                    let thread = GetWindowThreadProcessId(window.handle(), std::ptr::null_mut());
+                    assert_ne!(GetGUIThreadInfo(thread, &mut gui), 0);
+                    assert_eq!(gui.hwndCapture, window.handle());
+                }
+                assert!(!window.client_cursor_hidden());
+                assert_eq!(window.pressed_buttons.load(Ordering::Acquire), 1);
+                assert!(!window
+                    .events
+                    .drain()
+                    .iter()
+                    .any(|event| matches!(event, Event::Button(false, ..))));
+                // A stationary visible report must not relocate the cursor again.
+                window.release_peer_cursor(&peer, (10, 10));
+                assert!(window.peer_cursor_restore.lock().unwrap().is_none());
+                unsafe {
+                    SendMessageW(window.handle(), WM_LBUTTONUP, 0, (100 << 16) | 100);
+                }
+                assert_eq!(window.pressed_buttons.load(Ordering::Acquire), 0);
+                assert!(window
+                    .events
+                    .drain()
+                    .iter()
+                    .any(|event| matches!(event, Event::Button(false, 0, ..))));
+            }
+            window.set_input_state(crate::input_state::State {
+                warp_disabled: true,
+                ..mode(false, false)
             });
             // SDK/lowlat truth table: either flag locks, both clear unlock.
             for (rel, hidden) in [(true, false), (false, true), (true, true)] {

@@ -207,7 +207,7 @@ impl Manager {
     }
 }
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", target_os = "linux", test))]
 mod events {
     use super::*;
     #[derive(Clone, Copy, Debug)]
@@ -269,10 +269,10 @@ mod events {
         }
     }
 }
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", target_os = "linux", test))]
 pub use events::Event;
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 pub mod polling {
     use super::*;
     use std::time::{Duration, Instant};
@@ -311,15 +311,15 @@ pub mod polling {
             }
             if now >= self.next {
                 let scan = now >= self.scan;
-                for i in 0..PADS {
-                    if !self.connected[i] && !scan {
+                for (i, connected) in self.connected.iter_mut().enumerate() {
+                    if !*connected && !scan {
                         continue;
                     }
                     if let Some(state) = devices.read(i as u32) {
-                        self.connected[i] = true;
+                        *connected = true;
                         pads.update(i as i32, state, &mut send)?;
-                    } else if self.connected[i] {
-                        self.connected[i] = false;
+                    } else if *connected {
+                        *connected = false;
                         pads.remove(i as i32, devices, &mut send)?;
                     }
                 }

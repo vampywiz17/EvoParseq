@@ -30,6 +30,7 @@ pub struct Sample {
     pub turn_server: Option<String>,
     pub turn_protocol: Option<String>,
     pub rtt_ms: Option<f64>,
+    pub host_encode_ms: Option<f64>,
     pub received: Option<u64>,
     pub sent: Option<u64>,
     pub audio_bytes: u64,
@@ -37,6 +38,8 @@ pub struct Sample {
     pub audio_codec: Option<&'static str>,
     pub audio_layout: Option<crate::audio_layout::Layout>,
     pub audio_decoded_queue_ms: Option<f64>,
+    #[cfg(target_os = "linux")]
+    pub audio_native: Option<crate::audio_stream::Snapshot>,
     #[cfg(windows)]
     pub audio_playback: Option<crate::audio_windows::Snapshot>,
     pub video: Option<crate::video_output::Snapshot>,
@@ -60,6 +63,7 @@ impl Default for Sample {
             turn_server: None,
             turn_protocol: None,
             rtt_ms: None,
+            host_encode_ms: None,
             received: None,
             sent: None,
             audio_bytes: 0,
@@ -67,6 +71,8 @@ impl Default for Sample {
             audio_codec: None,
             audio_layout: None,
             audio_decoded_queue_ms: None,
+            #[cfg(target_os = "linux")]
+            audio_native: None,
             #[cfg(windows)]
             audio_playback: None,
             video: None,
@@ -79,7 +85,6 @@ impl Default for Sample {
 #[derive(Default)]
 pub struct Shared {
     pub overlay_visible: AtomicBool,
-    #[cfg(windows)]
     pub host_timing: crate::frame_timing::Shared,
     #[cfg(windows)]
     audio: Mutex<Option<std::sync::Weak<crate::audio_windows::Playback>>>,
@@ -103,7 +108,6 @@ impl Shared {
     pub fn begin(&self) -> u64 {
         let mut data = self.latest.lock().unwrap_or_else(|e| e.into_inner());
         data.0 += 1;
-        #[cfg(windows)]
         self.host_timing.begin(data.0);
         data.1 = Some(Sample {
             generation: data.0,
@@ -232,7 +236,6 @@ impl Shared {
             .clone()
     }
     pub fn finish(&self, generation: u64) {
-        #[cfg(windows)]
         self.host_timing.end(generation);
         self.publish(
             generation,

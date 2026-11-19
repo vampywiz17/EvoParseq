@@ -10,7 +10,11 @@ pub struct Pointer {
 impl Pointer {
     pub fn receive(&mut self, bytes: &[u8], window: &crate::window::Window) -> Result<()> {
         let pointer = cursor_message(bytes)?;
-        if pointer.update.stream != 0 {
+        if usize::from(pointer.update.stream)
+            != window
+                .display_stream
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
             return Ok(());
         }
         if pointer.flags.contains(CursorFlags::FORGET) {
@@ -29,7 +33,7 @@ impl Pointer {
                     "INFO",
                     "cursor_mode_changed",
                     serde_json::json!({
-                        "relative":mode.0,"hidden":mode.1,"suppressed":mode.2
+                        "stream":pointer.update.stream,"relative":mode.0,"hidden":mode.1,"suppressed":mode.2
                     }),
                 );
             }

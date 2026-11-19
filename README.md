@@ -26,10 +26,9 @@ requires no browser, WebView or helper executable.
 **This is an independent community project, not affiliated with or endorsed by
 Parsec, Unity or lowlat.** A Parsec account and a compatible host are required.
 
-The stable release is [**EvoParseq v0.9.7**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.7),
-with Windows x64 packages and the signed Android TV APK. This is the `main`
-branch; ongoing development continues on `dev`. Linux remains a separate alpha
-on `codex/linux-flatpak` and is not included in this release.
+The stable [**EvoParseq v0.9.8**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8)
+release includes Windows x64, the signed Android TV APK and an experimental
+Linux x86_64 Flatpak. Development continues on `dev`.
 
 ## Code quality
 
@@ -57,6 +56,80 @@ own implementation alone and can give a misleading impression without that
 context. Dependency findings still require review; upstream origin does not
 automatically make a finding harmless or a false positive.
 
+## Linux Flatpak preview
+
+- **Wayland + Vulkan:** egui desktop UI follows the Windows client's shared
+  wording, logical dimensions and layout, with native desktop window decorations.
+  Login/computer picker and Settings have fixed sizes; the stream is resizable
+  and uses centered aspect fitting. Connection stats is a separate fixed-size native window.
+- **Shared Rust core:** account/2FA, discovery, session preferences, settings,
+  WebRTC/BUD, media ingress, normal input and diagnostic models are reused.
+  Linux adapters provide Vulkan Video/Vulkan, PipeWire, Wayland input and
+  Secret portal credential protection.
+- **Playback:** WebRTC and explicit BUD selection, progressive H.264 or capability-gated HEVC Main/Main10 4:2:0
+  and stereo WebRTC Opus or BUD Opus/PCM with optional matched 5.1/7.1 output. Original NV12 and P010 decoder surfaces feed the same-device Vulkan
+  presentation shader; no application-side decoded-image copy or CPU readback.
+  Shader conversion still costs GPU work: this is GPU-resident rendering,
+  **not the application's Zero copy mode**.
+- **Controls:** normal or opt-in BUD HID mouse/keyboard, controllers/rumble,
+  focused text clipboard, orientation and immersive input. A
+  draggable session icon, host display selection, resolution/bitrate/FPS/pacing
+  requests, fullscreen, local PipeWire mute/volume and Disconnect. Host settings
+  replies and Apply confirmation use the shared Rust models.
+- **Diagnostics:** live overlay and Connection stats, with four Overview cards
+  in a 2-by-2 layout. CPU/RSS are sampled at most once per second and only while
+  Connection stats is open. No GPU utilization sampler or extra render pass is
+  introduced; unavailable measurements remain explicitly unavailable.
+- **Updates:** Help → About and GitHub Flatpak checks; verified Linux packages open
+  in the system installer for user confirmation. CI artifacts must first be
+  published as versioned release assets to be discoverable.
+- **Network:** shared Windows STUN/custom TURN/Cloudflare configuration,
+  direct-only and Force TURN for WebRTC and BUD; protected relay secrets and
+  optional in-memory Cloudflare credentials. The QoS switch enables Linux DSCP AF21
+  and SO_PRIORITY 6; network equipment may ignore these hints.
+- **Persistence:** Windows-compatible `settings.json` schema and encrypted
+  remembered sessions through the Linux Secret portal. Passwords and 2FA codes
+  are never saved; protected credentials are not portable between platforms.
+
+Linux currently requires a working Wayland desktop, PipeWire and a driver
+exposing the necessary Vulkan Video H.264 decode and sampleable NV12 surfaces.
+A Flatpak runtime cannot add missing GPU/kernel capabilities. Intel HD 520
+H.264 and HEVC 8-bit playback have been reported working on the maintainer's HP EliteBook 840 G3, with Intel HEVC reconfirmed under Nobara Live.
+AMD Radeon 780M H.264 playback has also been tested. These observations do not
+establish support for every GPU, driver or codec. The package defaults to
+`ANV_DEBUG=video-decode` for Mesa Intel's experimental video path.
+
+**NVIDIA H.264 playback is also live-confirmed** on RTX 3060 with Nobara Linux,
+on the same hybrid AMD/NVIDIA configuration (1920 × 1200, 8-bit 4:2:0).
+NVIDIA HEVC and longer stability testing remain pending. On the tested hybrid Pop!_OS
+system, RTX 3060 / driver 595.84 fails Vulkan presentation before decoding.
+The failure also reproduces in native `vkcube` outside EvoParseq/Flatpak, including
+with only the NVIDIA ICD selected. This establishes an independent system-level
+reproducer. It resembles a known class of
+[NVIDIA/Wayland presentation issues](https://github.com/gfx-rs/wgpu/issues/5382);
+the exact cause and contribution of hybrid presentation remain unconfirmed.
+The successful Nobara test shows that hybrid hardware alone is not a blocker;
+no alternative decoder or cross-GPU copy fallback has been introduced.
+
+HEVC Main10/P010 decoding is now available after selected-device capability checks,
+with SDR presentation. Main10 has been tested on the maintainer's Intel ARL system. Display timing VRR requests
+adaptive presentation; physical VRR remains unverified.
+
+**Not yet integrated on Linux:** 4:4:4 playback, the application's
+Zero copy mode, AI upscaling, runtime GPU switching and verified VRR control.
+The full Settings layout is present; unimplemented controls remain disabled.
+
+Linux now implements up to three simultaneous host-listed display windows on
+one BUD or WebRTC connection, with one decoder per active display and one audio
+output. Additional windows have independent resolution controls and input;
+Connection stats remains on the primary window. Multi-display playback is now
+live-confirmed by the maintainer. GPU selection is saved with the shared Windows settings
+schema and matching policy; changing the Vulkan GPU requires an app restart.
+
+See [Linux installation, current scope and diagnostics](linux/README.md) and
+the [video-path audit](linux/VIDEO_PATH.md). The Windows feature list below
+should not be read as Linux feature parity.
+
 ## Android TV
 
 - Google TV / Android TV interface with D-pad navigation, 2FA, grouped settings
@@ -81,16 +154,12 @@ stable. This is a transport-specific observation, **not a universal hardware lim
 MediaCodec submits frames to Surface without CPU pixel readback; physical scanout
 and internal driver/compositor copies are not verified.
 
-Download **EvoParseq-TV.apk** from the
-[stable release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.7), or
-use **Settings > Updates** in an existing distribution-signed Android build.
-The APK includes ARMv7 and ARM64 libraries and requires **Android 10 (API 29)+**.
-Android still asks for installation confirmation. Normal signed updates retain
-settings and remembered sign-in; old debug-signed previews need a one-time
-reinstall, which clears their private data. The Windows ZIP cannot run on TV.
-[Android TV setup, updates and compatibility limits](android-tv/README.md).
+Install the signed **EvoParseq-TV.apk** from the
+[stable release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8)
+or use **Settings > Updates** on an existing distribution-signed installation.
+See the [Android TV setup, build and compatibility guide](android-tv/README.md).
 
-## Windows features
+## Features
 
 - **Native account and sessions:** optional 2FA, encrypted remembered sign-in,
   background-refreshing computer picker and manual peer ID. Owner connections
@@ -104,6 +173,12 @@ reinstall, which clears their private data. The Windows ZIP cannot run on TV.
 - **Session overlay:** draggable icon; resolution, bandwidth, FPS, constant FPS,
   orientation, fullscreen and immersive input controls. Switch the current stream
   between host-listed physical or virtual displays.
+- **Windows multi-display:** open up to three host-listed extended outputs
+  on one BUD/WebRTC connection, with independent resolution controls and one audio
+  pipeline. Normal input, activating clicks and cross-display window dragging are
+  live-tested with two screens. Additional windows have their own draggable controls;
+  Connection stats stays on the primary window. Configure Parsec VDD outputs on the
+  host first; this feature does not create virtual displays or override host policy.
 - **Audio:** stereo Opus, configurable buffering, BUD raw PCM and experimental
   multichannel output. Automatically reopen the Windows audio output after
   transient device errors or default-device changes, retiring stale audio.
@@ -115,14 +190,23 @@ reinstall, which clears their private data. The Windows ZIP cannot run on TV.
   and GameSir Android forwarding are live-tested; device-specific rumble and
   disconnect behavior need broader validation.
 - **Input:** two-way Unicode text clipboard; normal mouse/keyboard forwarding;
-  experimental BUD USB HID mouse and keyboard, including relative camera input.
+  BUD USB HID mouse and keyboard, including relative camera input.
 - **Diagnostics:** route, RTT, traffic, FPS, actual decoder/format, audio queues,
   host/local timings and system resource use. Optional bounded event logs record
   failures without continuous mouse/key activity.
-- **Presentation:** Automatic, Low latency, VSync and experimental DXGI VRR,
+- **Presentation:** Automatic, Low latency, VSync and DXGI VRR,
   with reference-safe catch-up after bursts. VRR requires an enabled compatible
   display/driver; DXGI support alone does not verify panel activation. Zero copy
   retains Windows-managed timing. WebRTC uses bounded recent queue history.
+
+**Recommended VDD for Windows multi-display:**
+[ParsecDisplay / parsec-vdd](https://github.com/nomi-san/parsec-vdd) is the
+project's recommended virtual display manager because it uses Parsec's official
+Virtual Display Driver. Use the driver already installed by Parsec on the host;
+there is no need to reinstall the driver when setting up ParsecDisplay. Create
+the required virtual displays on the host before opening them in EvoParseq.
+Multi-display also works with other VDD solutions that expose compatible host
+displays; using Parsec VDD is a recommendation, not a requirement.
 
 Host permissions, encoders and graphics drivers determine the actual stream.
 **Connection stats shows the received depth/chroma and application RGB output**;
@@ -147,8 +231,8 @@ The animation illustrates processing order, not measured speed. Check
 
 ## Windows download and run
 
-1. Download `EvoParseq-v0.9.7-win64.zip` from the
-   [stable release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.7).
+1. Download `EvoParseq-v0.9.8-win64.zip` from the
+   [stable release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8).
 2. Extract to a writable folder and run **EvoParseq.exe**. Settings and optional
    encrypted sessions are stored beside it in `settings.json`.
 3. Sign in with the host owner's account, choose a computer and connect.
@@ -278,10 +362,13 @@ or generated frames are introduced.
   runtime/configuration details remain in event logs. Currently limited to
   8-bit SDR upscaling; 10-bit, 4:4:4 and Zero copy keep their existing paths.
 
+On Windows, Display timing (including VRR), Zero copy presentation and BUD USB HID
+input no longer carry an experimental label. Hardware requirements and fallbacks
+still apply. Linux feature labels and defaults are unchanged.
+
 ## Experimental features and limits
 
-**Vendor HEVC, zero-copy, 10-bit HEVC, 4:4:4, display timing, USB HID and
-multichannel audio remain experimental.** For conservative operation, use H.264,
+**Vendor HEVC, 10-bit HEVC, 4:4:4 and multichannel audio remain experimental.** For conservative operation, use H.264,
 stereo Opus and Automatic timing with experimental options disabled.
 
 - **Video:** live decoded frames remain on the GPU. Normal rendering uses the

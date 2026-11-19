@@ -100,6 +100,8 @@ pub struct Session {
     audio_layout: Option<(u8, u32)>,
     hid_input: (bool, bool),
     cipher: Option<&'static str>,
+    #[cfg(target_os = "linux")]
+    linux_qos: bool,
 }
 
 impl Session {
@@ -141,6 +143,8 @@ impl Session {
             audio_layout: None,
             hid_input: (false, false),
             cipher: None,
+            #[cfg(target_os = "linux")]
+            linux_qos: false,
         })
     }
 
@@ -229,10 +233,22 @@ impl Session {
         self.client.send_user_data(id, text)
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn set_linux_qos(&mut self, enabled: bool) {
+        self.linux_qos = enabled;
+    }
+
     pub fn offer(&mut self, id: &str, route: Route) -> Result<Credentials> {
         ensure!(!id.is_empty() && id.len() <= 256, "invalid BUD attempt id");
         ensure!(self.attempt.is_none(), "BUD attempt already active");
         let mut config = route.configure();
+        #[cfg(target_os = "linux")]
+        {
+            config.linux_qos = self.linux_qos;
+            if let Some(relay) = &mut config.relay {
+                relay.tcp_qos = self.linux_qos;
+            }
+        }
         config.video.hevc = self.prefer_hevc;
         config.video.ten_bit = self.ten_bit;
         config.video.chroma_444 = self.chroma_444;
@@ -364,6 +380,20 @@ impl MediaSource {
         };
         sink(unit.bytes()).map(Some)
     }
+    #[cfg(any(windows, target_os = "linux"))]
+    pub fn with_secondary_video<T>(
+        &mut self,
+        stream: usize,
+        sink: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<Option<T>> {
+        let Some(units) = self.units.secondary(stream, false) else {
+            return Ok(None);
+        };
+        let Some(unit) = units.take() else {
+            return Ok(None);
+        };
+        sink(unit.bytes()).map(Some)
+    }
     pub fn with_audio<T>(&mut self, sink: impl FnOnce(&[u8]) -> Result<T>) -> Result<Option<T>> {
         let Some(packet) = self.audio.take() else {
             return Ok(None);
@@ -399,7 +429,7 @@ pub struct Snapshot {
     pub input_drops: u32,
 }
 
-#[cfg(feature = "native-core")]
+#[cfg(any(feature = "native-core", target_os = "linux"))]
 pub fn cursor_message(bytes: &[u8]) -> Result<lowlat_core::cursor::Message<'_>> {
     let control =
         lowlat_core::control::parse(bytes).map_err(|_| anyhow!("Invalid cursor control"))?;

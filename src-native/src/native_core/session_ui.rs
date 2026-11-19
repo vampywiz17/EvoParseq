@@ -23,6 +23,9 @@ use windows_sys::Win32::{
 };
 pub const OPEN: usize = 4600;
 pub const OPEN_SHORTCUT: usize = 4610;
+const ADD_SCREEN: usize = 4618;
+const SECONDARY_FULLSCREEN: usize = 4619;
+const SECONDARY_INPUT: usize = 4620;
 const APPLY: usize = 4602;
 const CLOSE: usize = 4603;
 const DISCONNECT: usize = 4604;
@@ -43,6 +46,13 @@ const TBM_GETPOS: u32 = WM_USER;
 const DISPLAYS: u32 = WM_APP + 28;
 const DISPLAY_TIMING_CHANGED: u32 = WM_APP + 29;
 const PANEL_HEIGHT: i32 = 1000;
+fn panel_height(window: &crate::window::Window) -> i32 {
+    if window.display_stream.load(Ordering::Acquire) == 0 {
+        PANEL_HEIGHT
+    } else {
+        336
+    }
+}
 pub const RESULT: u32 = WM_APP + 26;
 pub const VISIBILITY: u32 = WM_APP + 27;
 impl Status {
@@ -122,12 +132,7 @@ unsafe fn collect(p: &Panel) -> Result<Video> {
         fps: &selected_field(p, 2),
         constant_fps: select(3) == 1,
         rotated: select(4) == 1,
-        immersive: match select(5) {
-            1 => 3,
-            2 => 2,
-            3 => 1,
-            _ => 0,
-        },
+        immersive: crate::input_state::immersive_value(select(5) as usize),
         fullscreen: SendMessageW(p.fullscreen, BM_GETCHECK, 0, 0) == BST_CHECKED as isize,
     }
     .parse()
@@ -167,7 +172,10 @@ unsafe fn update_displays(hwnd: HWND, panel: &mut Panel) {
     SendMessageW(combo, CB_RESETCONTENT, 0, 0);
     panel.display_ids.clear();
     let mut selected = None;
-    for output in &displays.outputs {
+    for (stream, output) in displays.outputs.iter().enumerate() {
+        if stream != 0 && window.displays.get(stream).is_some() {
+            continue;
+        }
         let label = format!(
             "{}{}",
             output.name,
@@ -196,6 +204,15 @@ unsafe fn update_displays(hwnd: HWND, panel: &mut Panel) {
         let index = SendMessageW(combo, CB_ADDSTRING, 0, wide(label).as_ptr() as isize);
         SendMessageW(combo, CB_SETCURSEL, index as usize, 0);
     }
+    EnableWindow(
+        GetDlgItem(hwnd, ADD_SCREEN as i32),
+        i32::from(
+            window.multidisplay_ready.load(Ordering::Acquire)
+                && !displays.hid_mouse
+                && !displays.loading
+                && displays.outputs.len() > 1,
+        ),
+    );
     let busy = window.session.video_pending.load(Ordering::Acquire);
     EnableWindow(
         combo,
@@ -362,14 +379,14 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             WM_SIZE => {
                 let mut r = std::mem::zeroed();
                 GetClientRect(hwnd, &mut r);
-                let max = (PANEL_HEIGHT - r.bottom).max(0);
+                let max = (panel_height(&*p.window) - r.bottom).max(0);
                 let target = p.scroll.min(max);
                 scroll(hwnd, p, target);
                 let info = SCROLLINFO {
                     cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
                     fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
                     nMin: 0,
-                    nMax: PANEL_HEIGHT - 1,
+                    nMax: panel_height(&*p.window) - 1,
                     nPage: r.bottom.max(1) as u32,
                     nPos: p.scroll,
                     ..std::mem::zeroed()
@@ -395,7 +412,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 scroll(
                     hwnd,
                     p,
-                    target.clamp(0, (PANEL_HEIGHT - info.nPage as i32).max(0)),
+                    target.clamp(0, (panel_height(&*p.window) - info.nPage as i32).max(0)),
                 );
                 return 0;
             }
@@ -437,13 +454,25 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                             && !(&*p.window).session.video_pending.load(Ordering::Acquire),
                     ),
                 );
-                update_displays(hwnd, p);
+                if (&*p.window).display_stream.load(Ordering::Acquire) == 0 {
+                    update_displays(hwnd, p);
+                    update_timing_hint(hwnd, p);
+                }
                 SetWindowTextW(GetDlgItem(hwnd, STATUS), wide(status.text()).as_ptr());
-                update_timing_hint(hwnd, p);
                 return 0;
             }
             WM_COMMAND => {
                 match wp & 0xffff {
+                    ADD_SCREEN => super::multi_display::add_menu(&*p.window),
+                    SECONDARY_FULLSCREEN => {
+                        let window = &*p.window;
+                        window.set_fullscreen(!window.native_fullscreen());
+                        close(hwnd);
+                    }
+                    SECONDARY_INPUT => {
+                        (&*p.window).toggle_input_detached();
+                        close(hwnd);
+                    }
                     MUTE => {
                         (&*p.window).audio_output.set_muted(
                             SendMessageW(GetDlgItem(hwnd, MUTE as i32), BM_GETCHECK, 0, 0)
@@ -486,6 +515,22 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                             .push(crate::window::Event::NativeSession(
                                 Command::RefreshDisplays,
                             ));
+                    }
+                    APPLY if (&*p.window).display_stream.load(Ordering::Acquire) != 0 => {
+                        match crate::session_preferences::resolution(&selected_field(p, 0)) {
+                            Ok(resolution) => {
+                                EnableWindow(GetDlgItem(hwnd, APPLY as i32), 0);
+                                (&*p.window)
+                                    .events
+                                    .push(crate::window::Event::NativeSession(Command::Apply(
+                                        Video {
+                                            resolution,
+                                            ..Default::default()
+                                        },
+                                    )));
+                            }
+                            Err(error) => super::ui::message_box(hwnd, &error.to_string()),
+                        }
                     }
                     APPLY => match collect(p) {
                         Ok(video) => {
@@ -670,7 +715,7 @@ pub unsafe fn raise(window: &crate::window::Window) {
             origin.x,
             origin.y + panel_offset,
             420,
-            (r.bottom - panel_offset - 32).clamp(120, PANEL_HEIGHT),
+            (r.bottom - panel_offset - 32).clamp(120, panel_height(window)),
             SWP_NOACTIVATE
                 | SWP_NOOWNERZORDER
                 | if insert_after.is_some() {
@@ -681,7 +726,7 @@ pub unsafe fn raise(window: &crate::window::Window) {
         );
         if (IsWindowVisible(panel) != 0) != visible {
             ShowWindow(panel, if visible { SW_SHOWNA } else { SW_HIDE });
-            if visible {
+            if visible && window.display_stream.load(Ordering::Acquire) == 0 {
                 SetTimer(panel, 1, 1000, None);
             } else {
                 KillTimer(panel, 1);
@@ -744,7 +789,7 @@ pub unsafe fn toggle(
         16,
         60,
         420,
-        PANEL_HEIGHT,
+        panel_height(window),
         parent,
         null_mut(),
         instance,
@@ -757,6 +802,62 @@ pub unsafe fn toggle(
     window.native_panel.store(hwnd as usize, Ordering::Release);
     SetLayeredWindowAttributes(hwnd, 0, 238, LWA_ALPHA);
     let p = &mut *Box::into_raw(panel);
+    if window.display_stream.load(Ordering::Acquire) != 0 {
+        let title = control(hwnd, p, "STATIC", "Session", 0, 0, [24, 18, 350, 36]);
+        SendMessageW(title, WM_SETFONT, p.heading as usize, 0);
+        let resolution = *window
+            .session
+            .display_resolution
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        p.initial_fields[0] = resolution_text(resolution);
+        control(hwnd, p, "STATIC", "Resolution", 0, 0, [24, 76, 145, 24]);
+        p.controls[0] = combo(
+            hwnd,
+            p,
+            20,
+            72,
+            RESOLUTION_CHOICES,
+            &resolution_text(resolution),
+        );
+        control(
+            hwnd,
+            p,
+            "STATIC",
+            "",
+            STATUS as usize,
+            0,
+            [24, 276, 370, 44],
+        );
+        for ((label, rect), id) in
+            crate::app_style::forms::secondary_actions(!window.input_detached())
+                .into_iter()
+                .zip([
+                    APPLY,
+                    SECONDARY_FULLSCREEN,
+                    SECONDARY_INPUT,
+                    DISCONNECT,
+                    CLOSE,
+                ])
+        {
+            control(
+                hwnd,
+                p,
+                "BUTTON",
+                label,
+                id,
+                BS_OWNERDRAW as u32 | WS_TABSTOP,
+                rect,
+            );
+        }
+        ShowWindow(hwnd, SW_SHOW);
+        SetForegroundWindow(hwnd);
+        SetFocus(p.controls[0]);
+        if window.session.video_pending.load(Ordering::Acquire) {
+            SendMessageW(hwnd, RESULT, Status::Waiting.message(), 0);
+        }
+        return;
+    }
     let title = control(hwnd, p, "STATIC", "Session", 0, 0, [24, 18, 350, 36]);
     SendMessageW(title, WM_SETFONT, p.heading as usize, 0);
     control(
@@ -794,20 +895,19 @@ pub unsafe fn toggle(
         "",
         DISPLAY_HINT as usize,
         0,
-        [24, 199, 370, 44],
+        [24, 199, 240, 44],
+    );
+    control(
+        hwnd,
+        p,
+        "BUTTON",
+        "Add screen",
+        ADD_SCREEN,
+        BS_OWNERDRAW as u32 | WS_TABSTOP,
+        [274, 208, 120, 28],
     );
     update_displays(hwnd, p);
-    for (i, label) in [
-        "Resolution",
-        "Bandwidth (Mbps)",
-        "Frame rate (FPS)",
-        "Frame pacing",
-        "Orientation",
-        "Immersive mode",
-    ]
-    .iter()
-    .enumerate()
-    {
+    for (i, label) in crate::app_style::forms::SESSION_LABELS.iter().enumerate() {
         control(
             hwnd,
             p,
@@ -850,13 +950,8 @@ pub unsafe fn toggle(
         p,
         25,
         470,
-        &["Disabled", "Mouse", "Keyboard", "Mouse + keyboard"],
-        match video.immersive {
-            1 => "Mouse + keyboard",
-            2 => "Keyboard",
-            3 => "Mouse",
-            _ => "Disabled",
-        },
+        &crate::input_state::IMMERSIVE_LABELS,
+        crate::input_state::IMMERSIVE_LABELS[crate::input_state::immersive_index(video.immersive)],
     );
     p.fullscreen = control(
         hwnd,
@@ -905,7 +1000,7 @@ pub unsafe fn toggle(
         "",
         VOLUME,
         WS_TABSTOP | TBS_HORZ,
-        [24, 590, 368, 32],
+        crate::app_style::forms::SESSION_VOLUME,
     );
     SendMessageW(volume, TBM_SETRANGE, 0, 100 << 16);
     SendMessageW(volume, TBM_SETPAGESIZE, 0, 10);
@@ -929,14 +1024,14 @@ pub unsafe fn toggle(
         0,
         [24, 790, 370, 40],
     );
-    for (id, label, x, y, w) in [
-        (SETTINGS, "Settings", 24, 838, 178),
-        (APPLY, "Apply", 214, 838, 178),
-        (DISCONNECT, "Disconnect", 24, 888, 178),
-        (CLOSE, "Close", 214, 888, 178),
-        (HIDE_BUTTON, "Hide button", 24, 938, 178),
-        (SECURE_ATTENTION, "Send Ctrl+Alt+Del", 214, 938, 178),
-    ] {
+    for ((label, rect), id) in crate::app_style::forms::SESSION_ACTIONS.into_iter().zip([
+        SETTINGS,
+        APPLY,
+        DISCONNECT,
+        CLOSE,
+        HIDE_BUTTON,
+        SECURE_ATTENTION,
+    ]) {
         control(
             hwnd,
             p,
@@ -944,7 +1039,7 @@ pub unsafe fn toggle(
             label,
             id,
             BS_OWNERDRAW as u32 | WS_TABSTOP,
-            [x, y, w, 36],
+            rect,
         );
     }
     ShowWindow(hwnd, SW_SHOW);
@@ -979,6 +1074,28 @@ impl View for crate::window::Window {
     }
     fn notify(&self, notification: Notification) {
         match notification {
+            Notification::DisplayResolution {
+                stream,
+                status,
+                resolution,
+            } => {
+                if let Some(screen) = self.displays.get(stream) {
+                    screen
+                        .window
+                        .session
+                        .video_pending
+                        .store(status == Status::Waiting, Ordering::Release);
+                    if let Some(resolution) = resolution {
+                        *screen
+                            .window
+                            .session
+                            .display_resolution
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) = resolution;
+                    }
+                    post_status(&screen.window, status);
+                }
+            }
             Notification::Status(status) => post_status(self, status),
             Notification::DisplaysChanged => post_displays(self, false),
             Notification::DisplaySelected => post_displays(self, true),
@@ -1049,6 +1166,60 @@ mod tests {
         );
     }
     #[test]
+    fn additional_display_panel_only_applies_its_resolution_and_disables_stats() {
+        let window = crate::window::Window::create_native().unwrap();
+        struct Close(Arc<crate::window::Window>);
+        impl Drop for Close {
+            fn drop(&mut self) {
+                self.0.request_stop();
+                self.0.close();
+            }
+        }
+        let _close = Close(window.clone());
+        window.display_stream.store(1, Ordering::Release);
+        *window.session.display_resolution.lock().unwrap() = Resolution::Fixed(1536, 864);
+        let path = std::env::temp_dir().join(format!(
+            "evoparseq-secondary-panel-{}.json",
+            crate::bud_attempt::native_attempt_id().unwrap()
+        ));
+        window.install_connection_settings(crate::connection_settings::Manager::open(path));
+        unsafe {
+            SendMessageW(window.handle(), WM_APP + 8, 0, 0);
+            assert_ne!(
+                GetMenuState(
+                    GetMenu(window.handle()),
+                    crate::stats_ui::OPEN as u32,
+                    MF_BYCOMMAND
+                ) & MF_GRAYED,
+                0
+            );
+            SendMessageW(window.handle(), WM_COMMAND, OPEN, 0);
+            let panel = panel(&window);
+            assert!(!panel.is_null());
+            assert_eq!(text(GetDlgItem(panel, 20)), current_choice("1536 x 864"));
+            assert!(GetDlgItem(panel, METRICS).is_null());
+            assert!(GetDlgItem(panel, DISPLAY as i32).is_null());
+            assert!(GetDlgItem(panel, 21).is_null());
+            select_text(panel, 20, "1280 x 720");
+            SendMessageW(panel, WM_COMMAND, APPLY, 0);
+            let mut events = std::collections::VecDeque::new();
+            window.events.take_batch(&mut events);
+            assert!(events.iter().any(|event| matches!(event,
+                crate::window::Event::NativeSession(Command::Apply(video))
+                if video.resolution == Resolution::Fixed(1280, 720)
+                    && video.fps.is_none() && video.bandwidth_mbps.is_none()
+            )));
+            assert_eq!(IsWindowEnabled(GetDlgItem(panel, APPLY as i32)), 0);
+            SendMessageW(panel, RESULT, Status::Confirmed.message(), 0);
+            assert_ne!(IsWindowEnabled(GetDlgItem(panel, APPLY as i32)), 0);
+            assert_eq!(text(GetDlgItem(panel, DISCONNECT as i32)), "Close screen");
+            assert_eq!(
+                text(GetDlgItem(panel, SECONDARY_INPUT as i32)),
+                "Release input"
+            );
+        }
+    }
+    #[test]
     fn panel_controls_emit_native_actions_without_network() {
         let window = crate::window::Window::create_native().unwrap();
         struct Close(Arc<crate::window::Window>);
@@ -1109,9 +1280,7 @@ mod tests {
                 (48, 48)
             );
             let point = |x: u16, y: u16| (u32::from(x) | (u32::from(y) << 16)) as LPARAM;
-            SendMessageW(child, WM_LBUTTONDOWN, 1, point(8, 8));
-            SendMessageW(child, WM_MOUSEMOVE, 1, point(108, 68));
-            SendMessageW(child, WM_LBUTTONUP, 0, point(8, 8));
+            SendMessageW(child, WM_APP + 90, point(8, 8) as WPARAM, point(108, 68));
             let mut after = RECT::default();
             GetWindowRect(button, &mut after);
             assert_eq!(
@@ -1309,6 +1478,7 @@ mod tests {
             assert_eq!(IsWindowEnabled(GetDlgItem(panel, DISPLAY as i32)), 0);
             let mut prior = std::collections::VecDeque::new();
             window.events.take_batch(&mut prior);
+            prior.clear();
             // A forged command must not bypass a disabled HID selector.
             SendMessageW(GetDlgItem(panel, DISPLAY as i32), CB_SETCURSEL, 1, 0);
             SendMessageW(

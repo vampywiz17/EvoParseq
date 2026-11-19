@@ -1,4 +1,4 @@
-//! Optional qWAVE flow, once per connected socket. No rate shaping or probing.
+//! Optional platform socket marking, once per socket. No shaping or probing.
 use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -8,6 +8,8 @@ pub struct Status {
     pub configured_dscp: Option<u32>,
     pub configured_l2: Option<u32>,
     pub error: Option<u32>,
+    #[cfg(target_os = "linux")]
+    pub linux: linux::Status,
 }
 #[derive(Debug, Default)]
 pub struct Flow {
@@ -37,9 +39,17 @@ impl Flow {
         flow.report(transport);
         flow
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    pub fn new(socket: &impl std::os::fd::AsRawFd, requested: bool, transport: &str) -> Self {
+        let flow = Self {
+            status: linux::create(socket, requested),
+        };
+        flow.report(transport);
+        flow
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     pub fn new<T>(_socket: &T, requested: bool, transport: &str) -> Self {
-        // Portable no-op: no new Linux DSCP policy or socket mutation.
+        // Other platforms keep their existing no-op policy.
         let flow = Self {
             status: Status {
                 requested,
@@ -57,6 +67,9 @@ impl Flow {
         }
     }
 }
+#[cfg(target_os = "linux")]
+pub mod linux;
+
 #[cfg(windows)]
 mod windows {
     use super::*;

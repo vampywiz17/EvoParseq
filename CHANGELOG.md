@@ -1,5 +1,445 @@
 # EvoParseq changelog
 
+## Unreleased
+
+## v0.9.8 — Multi-display streaming and Linux Flatpak (2026-11-19)
+
+
+This stable release builds on **EvoParseq v0.9.7**. It includes Windows x64
+packages, a distribution-signed Android TV APK and an experimental Linux x86_64
+Flatpak. All three clients report **0.9.8**.
+
+## What's new and improved
+
+- **Windows and Linux multi-display:** open up to three host-reported outputs
+  over one WebRTC or BUD connection, with one decoder per display and one
+  shared audio pipeline. Each additional display has independent resolution,
+  fullscreen and input controls. Resolution changes refresh the host settings
+  before updating the selected display, preserving other outputs' settings.
+  Closing an additional window leaves the other streams running.
+- **Cross-display input:** Windows sends the clicked display and position before
+  forwarding the activating click and restores the cursor on the destination
+  display. Linux uses native Wayland drag-and-drop for held-button handoff
+  between stream windows while retaining focused clipboard access.
+- **Linux Vulkan Video:** H.264, HEVC Main and capability-gated HEVC Main10
+  playback, with saved Intel, AMD or NVIDIA GPU selection. Decode and
+  presentation share one Vulkan device and use GPU timeline synchronization
+  where supported. NV12 and P010 decoder images feed the GPU color conversion
+  pass directly. Main10 presentation is SDR.
+- **Linux desktop and audio:** shared launcher, Settings, session overlay and
+  connection statistics, with secure remembered sign-in through the Secret
+  portal. PipeWire provides local volume and mute, automatic device recovery,
+  stereo Opus and BUD PCM or supported 5.1/7.1 output. Normal keyboard and mouse,
+  opt-in BUD HID, focused text clipboard and controllers with rumble are wired.
+- **Linux networking and session controls:** shared STUN, custom TURN and
+  Cloudflare TURN settings, direct-only and Force TURN modes, and optional
+  DSCP/socket-priority hints. The overlay exposes display, resolution, bitrate,
+  frame-rate and frame-pacing requests. Vulkan adaptive presentation is available
+  when supported.
+- **Windows reliability:** fix a BUD teardown deadlock that could freeze the
+  client and remove duplicate scrollbars from information pages.
+- **Desktop sign-in:** accept spaced six-digit authenticator codes and show clearer
+  messages for rejected fields, confirmation requirements and rate limits.
+- **Linux updates:** check GitHub for versioned Flatpak releases, verify the
+  bundle and open the system installer for confirmation.
+- **Shared client code:** reuse desktop UI definitions and connection statistics
+  views, and share host frame-rate hints with Android TV. Android versionCode is 35.
+- **Virtual displays:** the guide recommends ParsecDisplay / parsec-vdd for
+  configuring host-side virtual outputs using Parsec's installed driver. The
+  client opens existing extended outputs reported by the host.
+
+## Compatibility and validation
+
+Windows requires Windows 11 x64 and Direct3D feature level 11.0+. Android TV
+requires Android 10 (API 29) or later on ARMv7 or ARM64. The Linux preview
+requires Wayland, PipeWire, Flatpak 1.15.6 or later and a graphics driver with
+compatible Vulkan Video support. The maintainer tested Linux H.264 on Intel,
+AMD and NVIDIA, including RTX 3060 on hybrid Nobara, and HEVC on tested Intel
+hardware. Cross-display dragging was tested on Zorin OS 18/GNOME. GPU support
+and Wayland presentation depend on the driver and compositor. Requesting
+adaptive presentation does not verify physical VRR. Linux 4:4:4 and Windows AI
+video processing are outside the Linux preview.
+
+## Requirements and upgrading
+
+**Windows:** close the client and extract **EvoParseq-v0.9.8-win64.zip**.
+**ParsecWebTurn-v0.9.8-win64.zip** contains the identical executable under the
+old filename. The packages exclude user settings and the optional NVIDIA runtime.
+
+**Android TV:** install **EvoParseq-TV.apk** or use **Settings > Updates**.
+**EvoParseq-TV-v0.9.8.zip** includes the same APK, setup guide and license notices.
+The distribution signing certificate is unchanged.
+
+**Linux:** install **EvoParseq-Linux-v0.9.8-x86_64.flatpak**. The existing
+application ID and private settings directory are retained.
+
+Verify downloads with `SHA256SUMS.txt`. [Changes since v0.9.7](https://github.com/vampywiz17/EvoParseq/compare/v0.9.7...v0.9.8)
+
+## v0.9.8-dev.3 — Linux multi-display and shared-core cleanup (2026-11-16)
+
+This development preview builds on **EvoParseq v0.9.8-dev.2**. It includes
+Windows x64, the distribution-signed Android TV APK and the experimental Linux
+x86_64 Flatpak. All three application versions are **0.9.8-dev.3**.
+
+**This is a development preview. EvoParseq v0.9.7 remains the stable release.**
+
+## What's new and improved
+
+- **Linux GPU selection:** enumerate available Intel, AMD and NVIDIA Vulkan
+  adapters, save the selected adapter identity and restore it on startup.
+  The command-line adapter override remains available.
+- **Linux multi-display:** open additional host-listed outputs over the existing
+  BUD or WebRTC session, with independent Vulkan Video decoders and per-display
+  resolution, fullscreen, input and close controls. Keep a single connection and
+  audio pipeline; closing an additional window closes only that stream.
+- **Native Wayland window dragging:** transfer held-button motion between stream
+  windows using the core Wayland drag-and-drop protocol and the existing shared
+  clipboard data device. Preserve first-click input, final target/position,
+  button release, cancellation and clipboard access. Show native pointer feedback
+  between stream windows without permanently locking the mouse or using XWayland.
+- **Linux HEVC Main10:** decode supported 10-bit HEVC into original P010 images
+  and sample them in the existing Vulkan presentation pass. Fix compressed-video
+  size validation so valid encoded pictures use the bounded video budget rather
+  than the smaller control-message limit.
+- **Linux session controls:** wire the available existing video/audio controls,
+  including fixed/dynamic host FPS, orientation, multichannel/PCM audio requests
+  and Vulkan VRR presentation requests. Keep capability-dependent controls gated.
+  Settings menus now open the settings page from any display, and the volume
+  track uses the same full width as Windows.
+- **Shared core and cleanup:** share desktop session action labels/bounds and
+  statistics tab definitions, and move Android's host frame-rate hint policy into
+  shared Rust. Remove unused statistics scaffolding, the unconsumed Windows
+  character-event/UTF-16 path, runtime-only test counters, redundant resize-event
+  payloads, obsolete cursor
+  state, temporary debugging traces and the forced-CPU diagnostic switch. Vulkan
+  format tests now exercise the
+  production NV12/P010 compatibility predicate.
+- **Virtual-display guidance:** document parsec-vdd as the recommended host-side
+  display manager. It uses Parsec's own VDD; an existing Parsec-installed driver
+  does not need reinstalling. Other compatible host virtual-display drivers also
+  work with already configured extended outputs.
+
+## Compatibility and validation
+
+Linux remains a Wayland/Vulkan Video preview. The maintainer has confirmed Linux
+playback on Intel, AMD and NVIDIA, including an NVIDIA RTX 3060 on a hybrid
+Nobara system. Linux HEVC playback is confirmed on the tested Intel notebooks;
+Main10 is confirmed on the Intel ARL test system. Cross-display dragging has been
+live-confirmed on Zorin OS 18/GNOME. This does not validate every driver, GPU or
+compositor. The earlier Pop!_OS NVIDIA surface-presentation failure is not a
+universal NVIDIA failure; that particular environment remains unverified.
+
+Linux output is **SDR**, including Main10. Its YUV-to-RGB presentation pass is
+GPU processing, not the application's strict Zero copy mode. Linux 4:4:4,
+Windows-only AI upscaling and unsupported rendering paths remain disabled.
+Requesting Vulkan VRR does not prove physical variable-refresh scanout or recover
+host capture cadence. No host protocol timing reconstruction is implemented.
+
+Multi-display uses existing host-reported extended outputs (up to three streams
+in total). It does not remotely create VDD devices or change host account/driver
+permissions. Normal and HID input retain their existing eligibility restrictions.
+
+## Updating
+
+Windows: close the client and extract **EvoParseq-v0.9.8-dev.3-win64.zip**.
+The legacy **ParsecWebTurn-v0.9.8-dev.3-win64.zip** contains the same executable
+under its previous name. Neither ZIP contains user settings.
+
+Android TV: install the signed **EvoParseq-TV.apk**, or choose the prerelease
+channel in Settings > Updates. Its distribution signing identity is unchanged.
+
+Linux: install **EvoParseq-Linux-v0.9.8-dev.3-x86_64.flatpak**. The application ID
+and settings directory are unchanged; the saved GPU selection is retained.
+
+## v0.9.8-dev.2 — Windows multi-display and cursor handoff (2026-11-13)
+
+This development preview builds on **EvoParseq v0.9.8-dev.1** and covers all
+implemented changes since that dev release. It includes Windows x64, a
+distribution-signed Android TV APK and the experimental Linux x86_64 Flatpak.
+All three application versions are **0.9.8-dev.2**.
+
+**This is a development preview. EvoParseq v0.9.7 remains the stable release.**
+
+## What's new and improved
+
+- **Windows multi-display:** open a second or third host-reported display from
+  the primary session overlay's **Add screen** menu, over the existing BUD or
+  WebRTC connection. Each stream uses its own bounded decoder/reference state
+  and the existing D3D11 presentation path. Keep one connection and one audio
+  pipeline; no application decoded-frame copy, composition pass or CPU readback
+  is added.
+- **Independent display lifecycle:** prevent duplicate display windows, isolate
+  rejected/ended/failed additional streams and close an extra window that receives
+  no decoded picture within ten seconds. Closing an additional window disables
+  only that stream. Preserve negotiated codec/format flags and existing bounded
+  keyframe recovery. Release the display-worker registry guard before teardown
+  or synchronous window operations, avoiding a nested-lock deadlock.
+- **Per-display controls:** additional windows use the same draggable translucent
+  session icon with Resolution/Apply, Fullscreen, Release/Capture input and Close
+  screen. Disable Connection stats on additional windows; the primary window
+  remains the session settings/statistics owner. Refresh host configuration
+  before each resolution write, patch only the target stream's dimensions,
+  preserve other/unknown host settings and confirm that stream through the
+  existing bounded readback transaction. Serialize changes across windows.
+- **Correct first click after switching displays:** send the normal absolute
+  pointer's target stream and position before button-down on the same ordered
+  channel. Relative camera and HID paths do not receive an extra absolute warp.
+- **Cross-display window dragging:** release stale hidden/relative capture when
+  the host reports a visible, unsuppressed absolute pointer on another live
+  display. Restore cursor drawing at the destination viewport rather than the
+  source position, suppress synthetic-move echoes at both endpoints and retain
+  held buttons/keys. Respect Disable cursor warp, explicit confinement and
+  closed/minimized destinations. Same-screen camera/hidden/suppressed cursor
+  behavior is preserved. Add transition-only stream diagnostics without logging
+  pointer positions, keystrokes or image contents.
+- **Regression coverage:** add isolated native display-window lifecycle tests
+  covering stream enable/disable packets, independent workers, resolution
+  forwarding, focus-release ownership, cursor transitions, overflow isolation
+  and rollback after a closed command receiver. Include the existing isolated
+  native cursor/capture fixture in the measured Sonar report. Tests use private
+  fixtures and the real bounded command handoff, without accounts or host access;
+  the strict coverage/quality gate is unchanged. Measured Sonar coverage is
+  **85.3% on new code** and **72.1% overall**; all required Quality Gate conditions
+  pass. The 80% threshold applies to new code, not the whole repository.
+- **Maintenance:** remove the BUD adapter's unused direct Tokio dependency and
+  refresh the validated display documentation. Windows, Android and Linux
+  application dependency/feature graphs remain unchanged by that removal; the
+  standalone adapter no longer pulls in unnecessary Tokio socket/runtime crates.
+
+## Compatibility and validation
+
+Multi-display is **Windows-only** in this preview, with at most three streams
+in total and normal Parsec mouse/keyboard input. It opens existing host-listed
+extended outputs; it does not remotely create Parsec VDD devices or bypass the
+host's account/driver policy. Configure the required virtual displays on the
+host first. Fallback To Virtual Display alone creates only a fallback output.
+
+The maintainer has live-tested two-screen Windows playback, independent
+resolution changes, activating clicks and dragging windows between displays.
+This does not validate every host, account or display topology. A previously
+reported BUD delivery/acknowledgement timeout is not claimed fixed by this work.
+
+Linux Vulkan Video playback remains tested on **Intel HD 520** and **AMD Radeon
+780M**. **NVIDIA playback remains unverified**: the hybrid Pop!_OS test system
+also failed Vulkan presentation queries outside EvoParseq. This suggests an
+independent system/driver/compositor issue; its exact cause is not established.
+There is no VAAPI, OpenGL, software-decoding or cross-GPU-copy fallback.
+Existing Linux H.264/HEVC Main 8-bit 4:2:0 limitations remain applicable.
+
+Android receives an aligned, signed maintenance rebuild; no new Android-only
+feature is claimed. Windows x64 and Android 10+ ARMv7/ARM64 requirements and
+existing transport/codec limitations remain as documented. The Windows changes
+add no Linux or Android multi-display frontend.
+
+VirusTotal reports are point-in-time evidence, not a safety certification or
+Google Play Protect approval. Detection counts and any accepted exception stay
+visible; no finding is silently discarded. No universal performance gain is claimed.
+
+## Updating
+
+**Windows:** close the client and extract **EvoParseq-v0.9.8-dev.2-win64.zip**,
+retaining settings.json under the same Windows account. The migration package
+**ParsecWebTurn-v0.9.8-dev.2-win64.zip** contains the identical executable under
+the old filename. ZIPs exclude user settings and the optional NVIDIA runtime.
+
+**Android TV:** install **EvoParseq-TV.apk**, or select the prerelease channel in
+Settings > Updates. Android versionCode is 33, above v0.9.8-dev.1's 32. The
+distribution signing key is unchanged; normal updates retain settings/sign-in.
+**EvoParseq-TV-v0.9.8-dev.2.zip** includes the APK, setup guide and notices. Old
+debug-signed previews may still require the documented one-time reinstall.
+
+**Linux:** install **EvoParseq-Linux-v0.9.8-dev.2-x86_64.flatpak**:
+
+```sh
+flatpak install --user --reinstall EvoParseq-Linux-v0.9.8-dev.2-x86_64.flatpak
+flatpak run io.github.vampywiz17.EvoParseq
+```
+
+The application ID remains io.github.vampywiz17.EvoParseq. Existing private
+settings and protected sessions are retained under the same Linux account.
+GitHub update checks can offer this build when prereleases are included; the
+system installer still asks for confirmation.
+
+Verify downloads with SHA256SUMS.txt. This prerelease does not replace v0.9.7 as
+the stable updater's latest release. Protected credentials are not portable
+between OS accounts or machines.
+
+Source changes since the previous dev release:
+https://github.com/vampywiz17/EvoParseq/compare/v0.9.8-dev.1...v0.9.8-dev.2
+
+## v0.9.8-dev.1 — Linux Flatpak, Vulkan Video and Windows session fixes (2026-11-12)
+
+This development preview builds on **EvoParseq v0.9.6-dev.5** and covers all
+implemented changes since that previous dev release. It brings the Linux port
+into the shared dev branch and includes Windows x64, a distribution-signed
+Android TV APK, and an experimental Linux x86_64 Flatpak. All application versions
+are now **0.9.8-dev.1**; Linux no longer uses a separate 0.1.x application version.
+
+**This is a development preview. EvoParseq v0.9.7 remains the stable release.**
+
+## What's new and improved
+
+- **Linux desktop client:** introduce Wayland windowing, a Vulkan-rendered egui
+  interface, Vulkan Video hardware decoding and PipeWire audio. Reuse shared Rust
+  authentication/2FA, discovery, protocol, settings, input and presentation models;
+  keep operating-system operations in Linux adapters. No VAAPI, OpenGL or software
+  decode fallback is introduced.
+- **Linux Vulkan Video playback:** support progressive H.264 and HEVC Main,
+  8-bit 4:2:0 without frame reordering. Handle parameter changes, reference-picture
+  lifetimes, slice offsets, coded-image padding and crop/range metadata. Check
+  decode status where supported. Original decoder NV12 surfaces feed the existing
+  same-device presentation shader without an application decoded-frame copy,
+  intermediate RGBA video texture or CPU readback. Shader conversion still costs
+  GPU work; this is GPU-resident rendering, not the application's Zero copy mode.
+- **Cross-vendor Vulkan resources and GPU choice:** support capability-selected
+  separate/layered DPB storage and coinciding/distinct decoder output, retaining
+  the established Intel layout. Distinct output is written by decoding, without
+  adding an application image copy. Enumerate hardware GPUs and persist the
+  selected Video GPU; changes require restart. Restrict whole-NV12 video views
+  to decode usage while presentation samples the separate plane views.
+- **AMD startup fix:** avoid destroying absent Vulkan Video parameter objects
+  during first SPS/PPS setup or partial cleanup. This avoids a null-handle
+  dereference present in older RADV implementations. Retain a driver-free
+  regression test. Radeon 780M H.264 playback now works in the physical test.
+- **Linux GPU synchronization:** hand decode/render dependencies through timeline
+  semaphores where supported. Track reference images, the selected presentation
+  output and outstanding graphics readers separately. Use two bounded reusable
+  decode submission slots without deepening the media queue; retain resources
+  until their final GPU/render owner finishes. Preserve the synchronous path
+  when timeline handoff is unavailable. No new rendering pass or frame copy.
+- **Linux media delivery and recovery:** reuse the Windows/shared BUD media ingress
+  with bounded video-first batches and prompt burst draining. Decouple compressed
+  video draining from display refresh, retain output leases and recover from
+  background-window stalls at a keyframe. Feed WebRTC media from the detached
+  reader, wake control consumers promptly and use the shared host-certificate
+  compatibility policy while retaining fingerprint/signature verification.
+- **Linux relay/network settings:** integrate the shared STUN, custom TURN and
+  Cloudflare configuration, direct-only and Force TURN policies, including the
+  existing UDP/TCP/TLS relay routes. Protect saved relay secrets and preserve
+  in-memory Cloudflare credentials where selected. BUD remains an explicit choice;
+  failures never silently change the selected transport.
+- **Linux QoS:** connect the existing optional QoS setting to DSCP AF21 and
+  SO_PRIORITY 6, including configured BUD route attempts. The switch remains
+  opt-in; these are scheduling/network hints, not guaranteed latency reductions.
+- **Linux audio:** support stereo WebRTC Opus, BUD Opus/raw PCM and verified
+  default-output 5.1/7.1 layouts. Wire local mute/volume, configurable bounded
+  buffering and automatic output reopening through PipeWire and the shared audio
+  policies. Keep callbacks nonblocking and channel/layout validation explicit.
+- **Linux input:** implement normal Parsec keyboard/mouse and opt-in BUD USB HID,
+  focused text clipboard synchronization, controllers and rumble. Share input
+  policy, HID reports and controller lifecycle with the existing platforms.
+  Include orientation, manual immersive modes and compositor-supported shortcut
+  inhibition. Preserve focus-loss releases, drag/cursor transitions, clipboard
+  permission/echo rules, deferred paste during static video and rumble duration.
+- **Desktop UI parity on Linux:** use shared Windows labels, geometry, styles and
+  control ordering for sign-in, computer selection, Settings, menus, the draggable
+  translucent session icon and overlay. Use native desktop decorations. Keep
+  launcher/Settings and Connection stats fixed-size; restore resizable streaming,
+  first-frame window fitting and centered aspect fitting. Repair cursor restoration,
+  resize cursor transitions and window size restoration after Disconnect.
+- **Linux session controls:** wire display refresh/selection, resolution, bandwidth,
+  FPS/frame pacing and Apply, orientation, immersive modes, fullscreen, local
+  audio controls, Settings, Hide/Close and Disconnect. Handle late host replies
+  without overwriting user edits, including stock-host NUL-terminated messages.
+  Ctrl+Alt+Del requires a host reporting Windows and normal host authorization.
+- **Linux statistics and logging:** populate shared overlay and Connection stats
+  models with the four Overview cards arranged two per row. Expose available
+  transport, format, FPS, timing, queue and audio measurements; keep unavailable
+  data explicit. Sample process CPU/RAM only while stats is open, at most once per
+  second, without a GPU utilization polling worker or extra render. Add bounded,
+  opt-in event logging and actionable renderer/surface errors; remove temporary
+  first-decode investigation checkpoints after the AMD issue was isolated.
+- **Linux persistence, About and updates:** use the Windows-compatible settings
+  schema and encrypted remembered sessions through the Secret portal. Passwords
+  and 2FA codes are not saved. Add native About/Updates windows and GitHub release
+  checks with verified Flatpak downloads handed to the system installer for user
+  confirmation. Package Wayland cursor resources and the Flatpak runtime reference;
+  default ANV_DEBUG=video-decode for Mesa Intel's experimental video path.
+- **Windows BUD freeze fix:** terminal transport events update their already-locked
+  attempt state instead of reacquiring the same mutex. Delivery timeout/host
+  disconnect can reach existing teardown/error handling instead of freezing the
+  application. Preserve status codes, retry policy and video presentation.
+- **Windows feature status and information pages:** remove the experimental label
+  from Display timing, VRR, Zero copy presentation and BUD USB HID input. Defaults
+  and hardware requirements are unchanged; old saved profile keys remain accepted.
+  Linux retains its experimental labels. Remove the duplicate inner scrollbar
+  from About and Check for updates.
+- **Release security and maintenance:** add VirusTotal scans and public SHA-256-linked
+  reports for final release EXE/APK/Flatpak assets and the embedded Linux executable.
+  Scan fully prepared drafts and block publication on detections, errors or
+  incomplete analyses, except the explicitly disclosed, owner-approved sole
+  Trapmine suspicious.low.ml.score finding on a Windows EXE. Harden CI action/tool
+  download references, extend measured coverage/regression checks, trim unused
+  Linux vendor backends/helpers and update the unified platform documentation,
+  AI-assisted development disclosure and Star History chart. Research-only work
+  and the separate macOS branch are not shipped features.
+
+## Compatibility and validation
+
+**Linux Intel/AMD:** live playback has been tested on Intel HD Graphics 520 in
+the HP EliteBook 840 G3 (H.264 and HEVC 8-bit) and AMD Radeon 780M (H.264).
+These tests do not establish every GPU, driver, profile or codec combination.
+
+**Linux NVIDIA: not yet validated.** RTX 3060 / driver 595.84 on the tested hybrid
+AMD/NVIDIA Pop!_OS system fails Vulkan presentation-mode queries before decoding.
+Native vkcube outside EvoParseq and Flatpak fails as well, even with only the
+NVIDIA ICD selected. This independently reproduces a system-side Vulkan failure;
+it is not an EvoParseq-only failure. It resembles a known class of NVIDIA/Wayland
+and hybrid presentation issues ([wgpu report](https://github.com/gfx-rs/wgpu/issues/5382),
+[Flatpak NVIDIA report](https://github.com/flathub/org.freedesktop.Platform.GL.nvidia/issues/327)).
+The exact cause and role of hybrid presentation remain unconfirmed. Validation
+on a dedicated NVIDIA machine is pending; implemented layered-DPB support is
+not a claim of successful NVIDIA playback.
+
+Linux requires a working Wayland/PipeWire desktop and compatible Vulkan Video
+hardware/driver. Flatpak supplies runtime components and matching graphics-driver
+extensions, not missing GPU features or a replacement kernel driver. Linux
+10-bit/4:4:4, AI upscaling, the application's Zero copy mode, verified VRR control,
+runtime GPU switching and simultaneous multi-display windows remain unimplemented.
+HID requires the host driver/permissions and verified primary-display constraints.
+
+Windows x64 and Android 10+ ARMv7/ARM64 requirements remain as documented. Android
+receives aligned version metadata and a signed rebuild; no new Android-only
+feature beyond v0.9.6-dev.5 is claimed. Shared-source fixes/maintenance are included.
+Existing Android 4:2:0/SDR and transport-specific limitations remain applicable.
+
+VirusTotal reports are point-in-time evidence, not a safety certification or
+Google Play Protect approval. Detection counts and any accepted exception remain
+visible; no finding is silently discarded. No universal performance gain is claimed.
+
+## Updating
+
+**Windows:** close the client and extract **EvoParseq-v0.9.8-dev.1-win64.zip**,
+retaining settings.json under the same Windows account. The migration package
+**ParsecWebTurn-v0.9.8-dev.1-win64.zip** contains the identical executable under
+the old filename. ZIPs exclude user settings and the optional NVIDIA runtime.
+
+**Android TV:** install **EvoParseq-TV.apk**, or select the prerelease channel in
+Settings > Updates. Android versionCode is 32, above stable v0.9.7's 31. The
+distribution signing key is unchanged; normal updates retain settings/sign-in.
+**EvoParseq-TV-v0.9.8-dev.1.zip** includes the APK, setup guide and notices. Old
+debug-signed previews may still require the previously documented one-time reinstall.
+
+**Linux:** install **EvoParseq-Linux-v0.9.8-dev.1-x86_64.flatpak**:
+
+```sh
+flatpak install --user --reinstall EvoParseq-Linux-v0.9.8-dev.1-x86_64.flatpak
+flatpak run io.github.vampywiz17.EvoParseq
+```
+
+The application ID remains io.github.vampywiz17.EvoParseq. Upgrading the earlier
+0.1.x Flatpak retains its private settings and protected session under the same
+Linux account. GitHub update checks can offer this build when prereleases are
+included; the system installer still asks for confirmation.
+
+Verify downloads with SHA256SUMS.txt. This prerelease does not replace v0.9.7 as
+the stable updater's latest release. Protected credentials are not portable
+between OS accounts or machines.
+
+Source changes since the previous dev release:
+https://github.com/vampywiz17/EvoParseq/compare/v0.9.6-dev.5...v0.9.8-dev.1
+
+
 ## v0.9.7 - Release security reports (2026-11-10)
 
 Stable maintenance release since v0.9.6. Publish VirusTotal results for final
@@ -263,7 +703,7 @@ Windows-equivalent Zero copy mode. The related API research is documentation,
 not an implemented or validated capability. Driver/compositor work and physical
 scanout remain unverified; no universal performance or latency gain is claimed.
 The earlier transport-specific high-bitrate WebRTC limitation remains under
-investigation. Existing Windows experimental GPU, HID and audio limits remain
+investigation. Existing Windows experimental GPU and audio limits remain
 as documented in the README.
 
 Existing host permissions and controller requirements still apply. Windows
@@ -396,7 +836,7 @@ report simultaneous OK and direction presses required for dragging.
 
 MediaCodec-to-Surface output is not a claim of verified driver/compositor
 zero copy. Android does not advertise HDR, 4:4:4 or AI upscaling; 10-bit is SDR.
-Existing Windows experimental video/HID/QoS limits remain as documented for
+Existing Windows experimental video/QoS limits remain as documented for
 v0.9.5. This release does not change the stable main branch or host configuration.
 EvoParseq remains independent of Parsec/Unity and lowlat.
 
@@ -531,8 +971,7 @@ compatible video drivers. H.264, stereo Opus and Automatic presentation remain
 the conservative defaults. Host settings are requests: check **Connection stats**
 for the codec, depth, chroma and output actually received.
 
-**Vendor HEVC, Zero copy, 10-bit HEVC, HEVC 4:4:4, display timing/VRR, AI
-upscaling, USB HID, QoS and multichannel audio remain experimental options.**
+**Vendor HEVC, 10-bit HEVC, HEVC 4:4:4, AI upscaling, QoS and multichannel audio remain experimental options.**
 Successful tests do not guarantee every GPU/driver combination. Intel AI and
 live multichannel playback remain unverified; no universal latency gain is claimed.
 
@@ -589,7 +1028,7 @@ Implemented changes since EvoParseq v0.9.5-dev.1.
   presentation and teardown. Keep driver-owned resources on their owning worker
   and prevent accumulating replacement workers. An unrecoverable native timeout
   requires restarting the app.
-- **Experimental DXGI VRR:** add optional variable-refresh presentation to the
+- **DXGI VRR:** add optional variable-refresh presentation to the
   normal DXGI path used by vendor and Media Foundation decoders. Check tearing
   support, preserve configuration through resize/precision changes and fall back
   without adding decoded-frame copies. Physical panel activation depends on the
@@ -694,7 +1133,7 @@ builds, not published stable releases.
 
 ## Unreleased
 
-- Extend experimental original-surface Zero copy to HEVC Main10 4:2:0 P010. Check optional P010 displayable support at setup; decode directly into displayable P010 DPB textures and retain existing presentation leases. No application pixel copy, RGB target, processor/shader pass or new per-frame format probe is added. Unsupported setup/runtime falls back to normal Media Foundation rendering without a silent 8-bit downgrade.
+- Extend original-surface Zero copy to HEVC Main10 4:2:0 P010. Check optional P010 displayable support at setup; decode directly into displayable P010 DPB textures and retain existing presentation leases. No application pixel copy, RGB target, processor/shader pass or new per-frame format probe is added. Unsupported setup/runtime falls back to normal Media Foundation rendering without a silent 8-bit downgrade.
 - Report original P010 presentation and actual decoded 10-bit depth without claiming final compositor/scanout output depth. HEVC 10-bit 4:2:0 Zero copy is now live-confirmed on tested AMD and NVIDIA systems; Intel HEVC paths under the current decoder policy still require live testing.
 
 
@@ -714,21 +1153,20 @@ unmodified Parsec WASM core.
 - **BUD transport:** connect to unmodified Parsec hosts directly over UDP or through configured TURN relays over UDP, TLS or TCP. Use the same Network settings as WebRTC, including Force TURN; startup retries prefer UDP, then TLS, then TCP, with port 80 first among TCP URLs. An established connection is not migrated and BUD never silently switches to WebRTC.
 - **Responsive relay IO:** native event-driven BUD TCP/TLS sockets retain partial writes, bounded reusable buffers, TLS backpressure and write deadlines. TLS verifies the server certificate and hostname. WebRTC TURN/TCP reuses receive storage, and TCP/TLS ChannelData is submitted with its padding in one framed write. Newly queued BUD HID reports and control replies drain before the next network wait, without a batching delay or changes to protocol retransmission timers.
 - **Vendor HEVC decoding (experimental):** normal 8-bit HEVC uses Direct D3D11 on NVIDIA, AMF on AMD and VPL on Intel, with the existing Media Foundation recovery/fallback. H.264 continues to use Media Foundation on every vendor. Burst handling and surface ownership fixes improve HEVC startup and avoid unnecessary Intel decoder fallback.
-- **Zero copy presentation (experimental):** supported NVIDIA, AMD and Intel GPUs can present original 8-bit NV12 decoder surfaces through Windows Presentation API, preserving aspect ratio and falling back to normal GPU rendering when needed. This removes the application's conversion/output pass without decoded-frame CPU readback; internal Windows/driver copies and direct scanout are not guaranteed. Windows 11 and compatible drivers are required.
+- **Zero copy presentation:** supported NVIDIA, AMD and Intel GPUs can present original 8-bit NV12 decoder surfaces through Windows Presentation API, preserving aspect ratio and falling back to normal GPU rendering when needed. This removes the application's conversion/output pass without decoded-frame CPU readback; internal Windows/driver copies and direct scanout are not guaranteed. Windows 11 and compatible drivers are required.
 - **Correct color range:** translate full/limited-range metadata correctly between Media Foundation and D3D11, including vendor output. This fixes grey-looking whites and lifted blacks. Startup, later encoder requests and keyframe requests consistently retain the selected range and HEVC flags.
 - **10-bit HEVC and RGB SDR output (experimental):** request Main 10 over WebRTC or BUD when supported, including the BUD startup fix for negotiated 10-bit video. Actual P010 decoder output can feed a 10-bit RGB swap chain through the existing GPU conversion pass, with compatible 8-bit RGB output fallback. Stats distinguish decoded depth from application output. Host/driver support determines the received stream; this is SDR, not HDR, and original-surface Zero copy stays 8-bit only.
 - **Audio controls:** add a dedicated Audio tab with optional minimum/maximum playback buffering, supported low-period shared WASAPI output with fallback, bounded fresh PCM queues and BUD-only raw PCM permission. Keep automatic buffering and Opus as defaults, align the menu's initial custom limits with the pinned core, and handle PCM/Opus transitions safely. Raw PCM also requires host support and can fall back to Opus; WebRTC remains stereo Opus.
 - **Multichannel audio (experimental, BUD):** optionally request the Windows output's compatible 5.1/7.1 channel layout, decode Opus/PCM with per-packet format information and report the actual layout. Stereo remains the default and fallback. This feature has synthetic tests and silent WASAPI validation only; live surround playback and channel ordering are not confirmed.
-- **USB HID mouse and keyboard (experimental, BUD):** use the stock host's USB/Yubikey passthrough for absolute desktop positioning, native relative camera control, five mouse buttons, dragging, scrolling and physical keyboard input. Mouse and keyboard share one device lifecycle and bounded queues; selected HID devices replace ordinary Parsec forwarding independently. Local menus remain accessible and focus loss/disconnect releases held input. No helper executable or host patch is needed; one physical or virtual display and matching keyboard layouts are supported.
+- **USB HID mouse and keyboard (BUD):** use the stock host's USB/Yubikey passthrough for absolute desktop positioning, native relative camera control, five mouse buttons, dragging, scrolling and physical keyboard input. Mouse and keyboard share one device lifecycle and bounded queues; selected HID devices replace ordinary Parsec forwarding independently. Local menus remain accessible and focus loss/disconnect releases held input. No helper executable or host patch is needed; one physical or virtual display and matching keyboard layouts are supported.
 - **Dragging and cursor transitions:** restore the host-reported endpoint when leaving relative/hidden capture so the next HID click does not return to the old drag anchor. Keep the cursor hidden until position restoration and replace its image before retiring the old handle. Prompt BUD capture-state wakeups reduce transition flicker while preserving camera input, event order, focus handling and local controls.
 - **Two-way text clipboard:** forward native clipboard changes, focus restoration and paste-key requests through the original core while respecting core/host permissions. Preserve UTF-8 boundaries, avoid echoes and distinguish unavailable reads from copied empty text. Client-to-host pasting has been verified live; file/image transfer is not added.
-- **Display timing and burst catch-up:** add experimental Automatic, Low latency and VSync choices. Automatic preserves previous behavior; explicit DXGI modes request a one-presentation queue. Interruptible display/input readiness waits fix the reported Low latency stutter while preferring fresh decoded input over a pending presentation. BUD can skip obsolete display work without dropping reference decoding. No extra decoded-frame copy, RGB target or rendering thread is introduced; original-surface timing stays Windows-managed.
+- **Display timing and burst catch-up:** add Automatic, Low latency and VSync choices. Automatic preserves previous behavior; explicit DXGI modes request a one-presentation queue. Interruptible display/input readiness waits fix the reported Low latency stutter while preferring fresh decoded input over a pending presentation. BUD can skip obsolete display work without dropping reference decoding. No extra decoded-frame copy, RGB target or rendering thread is introduced; original-surface timing stays Windows-managed.
 - **More useful diagnostics:** Connection stats adds native BUD route/RTT/traffic/delivery counters, actual audio codec and queue/buffer details, decoded/RGB precision, automatic host video/audio timing and bounded local video-stage measurements. Correct encode/frame-interval labels and add Present submission interval. The embedded overlay receives native Decode and Network values. Timings describe their reported host durations or CPU-observed stages, not GPU completion, scanout or end-to-end latency; unavailable values remain unknown.
 - **Optional event logging:** Network settings can create a bounded asynchronous UTF-8 JSON Lines log beside settings.json, with UTC connection/route transitions, transport/decoder/HID failures and audio/profile state. Rotation retains one previous file. Logging is off by default and excludes credentials, media, clipboard content and continuous mouse/key activity; temporary input trace capture has been removed.
 - **Settings, recovery and maintenance:** separate Network, Video, Audio and Input with consistent tab spacing, shared saving and preserved unsaved edits. Disable Zero copy and 10-bit controls while HEVC is off, fix wrapped settings/stats text and guide unsupported host launch choices. Reuse bounded media/input storage, shorten shared locks and release retired video reuse pools. Add concise bug/feature/question issue forms, consolidate active native tests, remove retired experiments, shorten the README, clarify the unchanged-core provenance and credit lowlat's reused open-source components.
 
-**Vendor HEVC decoding, Zero copy, 10-bit HEVC, display timing, multichannel
-audio and USB HID input remain experimental options in this stable release.**
+**Vendor HEVC decoding, 10-bit HEVC and multichannel audio remain experimental options in this stable release.**
 WebRTC, H.264, stereo Opus and Automatic display timing remain the defaults.
 BUD, custom audio buffering, raw PCM permission and host timing no longer carry
 an experimental label. For the most conservative setup, keep the defaults and
@@ -762,8 +1200,7 @@ release is targeted for the second half of next week (October 29-November 1,
 
 Changes since v0.9.4-dev.5.
 
-**Vendor-specific HEVC decoding, Zero copy, 10-bit HEVC, display timing,
-multichannel audio and USB HID input remain experimental.** BUD, custom audio
+**Vendor-specific HEVC decoding, 10-bit HEVC and multichannel audio remain experimental.** BUD, custom audio
 buffering, raw PCM permission and host timing no longer carry the experimental
 label. Defaults remain WebRTC, H.264 and automatic playback. For stability-first
 use, leave experimental options disabled or use the stable v0.9.3 release.
@@ -772,7 +1209,7 @@ use, leave experimental options disabled or use the stable v0.9.3 release.
 - **Feature status:** remove the experimental label from BUD, custom audio buffering, raw PCM permission and host timing. Keep existing defaults and accept the former settings keys when loading saved profiles. Other experimental options keep their labels; historical release notes describe their original status.
 - **Connection stats layout:** measure both text columns when sizing rows so wrapped labels and values do not overlap; shorten the display catch-up counter label.
 - **Local video timing:** bounded CPU measurements of native compressed-queue wait, decoder setup/service and correlated input-to-output time, surface handoff, presentation preparation and Present calls. No GPU execution/scanout claim, pixel readback or per-frame logging.
-- **Display timing (experimental):** Automatic preserves existing behavior; Low latency and VSync request a one-presentation DXGI queue with nonblocking readiness checks and compatible fallback. Original-surface Zero copy keeps Windows-managed timing. Hardware/live latency gains remain unverified.
+- **Display timing:** Automatic preserves existing behavior; Low latency and VSync request a one-presentation DXGI queue with nonblocking readiness checks and compatible fallback. Original-surface Zero copy keeps Windows-managed timing. Hardware/live latency gains remain unverified.
 - **BUD burst handling:** retain reference decoding while omitting obsolete display updates when later compressed messages are queued. Deterministic tests compare identical decoded references and reduced display work; WebRTC delivery is unchanged.
 - **Memory diagnostics:** distinguish resident/private committed process memory in stats and record a few startup milestones through existing optional event logging. The reported intermittent high-memory startup remains under investigation; no forced working-set trimming. Retired video pipelines release their compressed-buffer reuse pool while preserving final statistics.
 
@@ -784,18 +1221,17 @@ use, leave experimental options disabled or use the stable v0.9.3 release.
 
 - **Maintenance and reporting:** add bug/feature/question issue forms, move the active TURN integration fixture under native tests, and remove the obsolete separate BUD test-file logger and launcher instructions. Connection failure stages remain in the normal event log.
 
-## 0.9.4-dev.5 - Experimental USB HID input (2026-10-20)
+## 0.9.4-dev.5 - USB HID input (2026-10-20)
 
 Changes since v0.9.4-dev.4.
 
-**USB HID input, BUD, vendor-specific HEVC decoding, Zero copy, 10-bit HEVC
-and the Audio options remain experimental.** For stability-first use, select
+**BUD, vendor-specific HEVC decoding, 10-bit HEVC and the Audio options remain experimental.** For stability-first use, select
 WebRTC with H.264, leave experimental options disabled, or use the published
 stable v0.9.3 release. HID input requires BUD and USB/Yubikey passthrough on
 the stock host; compatibility depends on the host and application.
 
-- **Experimental USB HID mouse:** use the stock host's USB/Yubikey passthrough with BUD for absolute desktop positioning, native relative camera movement, five buttons, dragging and vertical/horizontal scrolling. Relative capture follows the host cursor state and hides the local pointer. One physical or virtual display is supported.
-- **Experimental USB HID keyboard:** forward physical key presses, releases and modifiers through the same host USB path. Matching active layouts, including Hungarian on both computers, are supported; the host layout is not changed automatically. Simultaneous keys use a bitmap without a six-key array limit.
+- **USB HID mouse:** use the stock host's USB/Yubikey passthrough with BUD for absolute desktop positioning, native relative camera movement, five buttons, dragging and vertical/horizontal scrolling. Relative capture follows the host cursor state and hides the local pointer. One physical or virtual display is supported.
+- **USB HID keyboard:** forward physical key presses, releases and modifiers through the same host USB path. Matching active layouts, including Hungarian on both computers, are supported; the host layout is not changed automatically. Simultaneous keys use a bitmap without a six-key array limit.
 - **Simultaneous HID input:** mouse and keyboard share one USB device lifecycle and bounded transport queues, with separate reports and fair scheduling. Buttons keep the same owner across desktop/camera mode changes. Ordinary Parsec forwarding is disabled independently for each selected HID input, preventing duplicate input.
 - **New Input settings tab:** select HID mouse and keyboard independently, save the preferences and reconnect. Both options require BUD and are disabled by default. Local menus remain usable; focus loss and disconnect release held input and capture. Only the usual EXE and settings.json are needed, without a host modification or additional launcher.
 - **HID operational logging:** the existing optional client-events.jsonl records activation, state changes and setup/transfer/queue failures, without continuous mouse movement, coordinates, clicks, key history, typed text or USB payloads.
@@ -836,7 +1272,7 @@ leave experimental options disabled, or use the published stable v0.9.3 release.
 
 Changes since v0.9.4-dev.1.
 
-**BUD, vendor-specific HEVC decoding, Zero copy and 10-bit HEVC are experimental.**
+**BUD, vendor-specific HEVC decoding and 10-bit HEVC are experimental.**
 For stability-first use, select WebRTC with H.264 and leave experimental options
 disabled, or use the published stable v0.9.3 release.
 
@@ -850,14 +1286,14 @@ disabled, or use the published stable v0.9.3 release.
 
 Changes since the stable v0.9.3 release.
 
-**BUD, vendor-specific HEVC decoding and Zero copy are experimental.** For
+**BUD and vendor-specific HEVC decoding are experimental.** For
 stability-first use, select WebRTC with H.264 and leave the experimental options
 disabled, or use the published stable v0.9.3 release. H.264 remains the default
 and uses Media Foundation on every GPU vendor.
 
 - **Experimental BUD transport:** enable Experimental BUD in Settings to use the native UDP protocol with a regular Parsec host. Direct UDP, automatic fallback to a configured UDP TURN relay and Force TURN are supported. WebRTC remains the default and retains TURN over UDP, TCP and TLS; BUD supports UDP only and does not silently switch to WebRTC.
 - **Experimental vendor-specific HEVC decoding:** when Prefer H.265 / HEVC is enabled, normal 8-bit HEVC playback uses Direct D3D11 on NVIDIA, AMF on AMD and VPL on Intel. These paths keep decoder output on the GPU and feed the existing presentation path directly. The existing GPU Media Foundation fallback/recovery remains available when a vendor path cannot be used.
-- **Experimental Zero copy presentation:** the Video tab can select original NV12 decoder-surface presentation through Direct D3D11 and Windows Presentation API on supported NVIDIA, AMD and Intel GPUs. This removes the application's conversion/output pass and introduces no intermediate decoded-frame copy or CPU pixel readback. Windows 11 and compatible hardware/drivers are required; internal Windows/driver copies and direct scanout are not guaranteed.
+- **Zero copy presentation:** the Video tab can select original NV12 decoder-surface presentation through Direct D3D11 and Windows Presentation API on supported NVIDIA, AMD and Intel GPUs. This removes the application's conversion/output pass and introduces no intermediate decoded-frame copy or CPU pixel readback. Windows 11 and compatible hardware/drivers are required; internal Windows/driver copies and direct scanout are not guaranteed.
 - **More reliable HEVC startup and recovery:** handle short arrival bursts without exhausting presentation surfaces or unnecessarily abandoning the working Intel decoder. Original-surface presentation preserves the picture's aspect ratio and can recover to normal GPU rendering when unavailable.
 - **BUD connection statistics:** show native RTT, decoded FPS, incoming/outgoing traffic, direct or relay route, host encode time when available and BUD delivery counters. Irrelevant WebRTC ICE/DTLS fields are hidden in BUD mode, and the last valid host encode time no longer flickers between reports.
 - **Network and Video settings tabs:** connection servers, credentials, routing and transport settings are separated from GPU, codec and presentation choices. Both tabs share Save settings and retain unsaved edits when switching tabs.

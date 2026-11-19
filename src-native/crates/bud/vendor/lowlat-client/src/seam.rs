@@ -206,6 +206,8 @@ impl Client {
 
         let socket = lowlat_net::Socket::open_or_any_port(0)
             .map_err(|e| Error::io(crate::event::IoStage::Socket, &e))?;
+        #[cfg(all(target_os = "linux", feature = "turn-stream"))]
+        socket.linux_qos(attempt.config.linux_qos);
         let bound = socket
             .local_addr()
             .map_err(|e| Error::io(crate::event::IoStage::LocalAddress, &e))?

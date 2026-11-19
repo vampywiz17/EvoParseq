@@ -16,6 +16,7 @@ const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Default)]
 pub(super) struct HostSettings {
     config: host_video::Config,
+    secondary: Option<host_video::ResolutionChange>,
     query_deadline: Option<Instant>,
     confirmation: Option<host_video::Confirmation>,
     pending: Option<Video>,
@@ -39,8 +40,11 @@ impl HostSettings {
         }
     }
 
-    fn busy(&self) -> bool {
-        self.confirmation.is_some() || self.pending.is_some() || self.pending_output.is_some()
+    pub fn busy(&self) -> bool {
+        self.secondary.is_some()
+            || self.confirmation.is_some()
+            || self.pending.is_some()
+            || self.pending_output.is_some()
     }
 
     pub fn connected(&mut self, attempt: &Attempt, view: &impl View) -> Result<()> {
@@ -62,6 +66,7 @@ impl HostSettings {
             self.hid_primary_ready(attempt, view, false);
             self.pending = None;
             self.pending_output = None;
+            self.finish_secondary(view, Status::Failed, false);
             crate::event_log::record(
                 "WARN",
                 "native_host_video_configuration_invalid",
@@ -97,8 +102,76 @@ impl HostSettings {
             view.notify(Notification::Status(Status::Confirmed));
         }
         if self.confirmation.is_none() {
-            self.send_pending(attempt, view);
+            if self.secondary.is_some() {
+                self.send_secondary(attempt, view);
+            } else {
+                self.send_pending(attempt, view);
+            }
         }
+    }
+
+    pub fn display_resolution(
+        &mut self,
+        attempt: &Attempt,
+        view: &impl View,
+        stream: usize,
+        resolution: crate::session_preferences::Resolution,
+        size: (u32, u32),
+    ) -> Result<()> {
+        ensure!(
+            !self.busy() && self.query_deadline.is_none() && self.outputs_deadline.is_none(),
+            "Waiting for the previous host request"
+        );
+        let request = host_video::ResolutionChange::new(stream, resolution, size)?;
+        attempt.send(&host_video::query()?)?;
+        self.secondary = Some(request);
+        self.query_deadline = Some(Instant::now() + host_video::ResolutionChange::REFRESH_TIMEOUT);
+        view.waiting();
+        view.notify(Notification::DisplayResolution {
+            stream,
+            status: Status::Waiting,
+            resolution: None,
+        });
+        Ok(())
+    }
+    fn send_secondary(&mut self, attempt: &Attempt, view: &impl View) {
+        let Some(request) = self.secondary.as_ref() else {
+            return;
+        };
+        let stream = request.stream;
+        let result =
+            request.write_after_refresh(&self.config, Instant::now(), |frame| attempt.send(&frame));
+        crate::event_log::record(
+            if result.is_ok() { "INFO" } else { "WARN" },
+            "additional_display_resolution_requested",
+            serde_json::json!({"stream":stream,"sent":result.is_ok()}),
+        );
+        match result {
+            Ok(confirmation) => self.confirmation = Some(confirmation),
+            Err(_) => {
+                self.finish_secondary(view, Status::Failed, false);
+                self.failed(view);
+            }
+        }
+    }
+    fn finish_secondary(&mut self, view: &impl View, status: Status, confirmed: bool) {
+        if let Some(request) = self.secondary.take() {
+            self.confirmation = None;
+            self.query_deadline = None;
+            view.notify(Notification::DisplayResolution {
+                stream: request.stream,
+                status,
+                resolution: confirmed.then_some(request.resolution),
+            });
+        }
+    }
+
+    pub fn secondary_stream(&self) -> Option<usize> {
+        self.secondary.as_ref().map(|request| request.stream)
+    }
+    pub fn cancel_secondary(&mut self, view: &impl View) {
+        self.finish_secondary(view, Status::Unconfirmed, false);
+        view.finished(false);
     }
 
     fn take_output(&mut self) -> Option<String> {
@@ -212,6 +285,7 @@ impl HostSettings {
                     if attempt.send(&host_video::query()?).is_err() {
                         self.confirmation = None;
                         self.pending = None;
+                        self.finish_secondary(view, Status::Unconfirmed, false);
                         view.finished(false);
                     }
                 }
@@ -219,6 +293,24 @@ impl HostSettings {
                 | host_video::Verification::TimedOut) => {
                     let confirmed = status == host_video::Verification::Confirmed;
                     self.confirmation = None;
+                    if let Some(request) = &self.secondary {
+                        crate::event_log::record(
+                            if confirmed { "INFO" } else { "WARN" },
+                            "additional_display_resolution_result",
+                            serde_json::json!({"stream":request.stream,"confirmed":confirmed,"resolution":request.resolution}),
+                        );
+                        self.finish_secondary(
+                            view,
+                            if confirmed {
+                                Status::Confirmed
+                            } else {
+                                Status::Unconfirmed
+                            },
+                            confirmed,
+                        );
+                        view.finished(confirmed);
+                        return Ok(());
+                    }
                     crate::event_log::record(
                         if confirmed { "INFO" } else { "WARN" },
                         if confirmed {
@@ -245,6 +337,7 @@ impl HostSettings {
             self.query_deadline = None;
             self.pending = None;
             self.pending_output = None;
+            self.finish_secondary(view, Status::Unconfirmed, false);
             crate::event_log::record(
                 "WARN",
                 "native_host_video_query_timeout",
@@ -509,6 +602,160 @@ mod tests {
         }
     }
 
+    #[test]
+    fn secondary_resolution_refreshes_preserves_and_confirms_the_selected_stream() {
+        use crate::session_preferences::Resolution;
+        let (attempt, packets) = Attempt::recorded_commands();
+        let view = TestView::default();
+        let mut settings = HostSettings::default();
+        let initial = serde_json::json!({"privateOption":42,"video":[
+            {"output":"first","resolutionX":1920,"resolutionY":1080},
+            {"output":"second","resolutionX":1920,"resolutionY":1080,"encoderFPS":30},
+            {"output":"third","resolutionX":800,"resolutionY":600}]});
+        settings.receive(initial.to_string().as_bytes(), &attempt, &view);
+        assert!(packets().is_empty());
+        for stream in [0, 3, usize::MAX] {
+            assert!(settings
+                .display_resolution(&attempt, &view, stream, Resolution::Host, (0, 0))
+                .is_err());
+        }
+        settings
+            .display_resolution(
+                &attempt,
+                &view,
+                1,
+                Resolution::Fixed(1280, 720),
+                (1920, 1080),
+            )
+            .unwrap();
+        assert_eq!(packets(), vec![host_video::query().unwrap()]);
+        assert!(settings
+            .display_resolution(&attempt, &view, 2, Resolution::Host, (0, 0))
+            .is_err());
+        // Another client changed unrelated settings after our cached snapshot.
+        let mut fresh = initial.clone();
+        fresh["privateOption"] = 77.into();
+        fresh["video"][2]["encoderFPS"] = 60.into();
+        settings.receive(fresh.to_string().as_bytes(), &attempt, &view);
+        let sent = packets();
+        assert_eq!(sent.len(), 1);
+        let actual: serde_json::Value =
+            serde_json::from_slice(&sent[0][13..sent[0].len() - 1]).unwrap();
+        let mut expected = fresh.clone();
+        expected["video"][1]["resolutionX"] = 1280.into();
+        expected["video"][1]["resolutionY"] = 720.into();
+        assert_eq!(actual, expected);
+        settings.poll(&attempt, &view).unwrap();
+        assert!(
+            settings.busy(),
+            "the pre-write reply must not confirm the write"
+        );
+        assert!(packets().iter().all(|p| *p == host_video::query().unwrap()));
+        settings.receive(expected.to_string().as_bytes(), &attempt, &view);
+        assert!(
+            packets().is_empty(),
+            "a repeated host reply must not resend the write"
+        );
+        settings.poll(&attempt, &view).unwrap();
+        assert!(!settings.busy());
+        assert!(view.notifications.borrow().iter().any(|(n, _)| matches!(
+            n,
+            Notification::DisplayResolution {
+                stream: 1,
+                status: Status::Confirmed,
+                resolution: Some(Resolution::Fixed(1280, 720))
+            }
+        )));
+
+        // Query timeout, malformed host reply and missing stream fail locally,
+        // release the transaction and allow a subsequent request.
+        settings
+            .display_resolution(&attempt, &view, 2, Resolution::Host, (0, 0))
+            .unwrap();
+        packets();
+        settings.query_deadline = Some(Instant::now());
+        settings.poll(&attempt, &view).unwrap();
+        assert!(!settings.busy());
+        settings
+            .display_resolution(&attempt, &view, 1, Resolution::Host, (0, 0))
+            .unwrap();
+        packets();
+        settings.receive(b"invalid", &attempt, &view);
+        assert!(!settings.busy());
+        settings
+            .display_resolution(&attempt, &view, 2, Resolution::Host, (0, 0))
+            .unwrap();
+        packets();
+        settings.receive(br#"{"video":[{}]}"#, &attempt, &view);
+        assert!(!settings.busy());
+        assert!(packets().is_empty());
+        let (closed, receiver) = Attempt::recorded_commands();
+        drop(receiver);
+        assert!(settings
+            .display_resolution(&closed, &view, 1, Resolution::Host, (0, 0))
+            .is_err());
+        assert!(!settings.busy());
+    }
+
+    #[test]
+    fn secondary_resolution_owns_the_transaction_and_only_confirms_its_target() {
+        let view = TestView::default();
+        let mut settings = HostSettings {
+            secondary: Some(
+                host_video::ResolutionChange::new(
+                    2,
+                    crate::session_preferences::Resolution::Fixed(1280, 720),
+                    (1920, 1080),
+                )
+                .unwrap(),
+            ),
+            ..Default::default()
+        };
+        view.waiting();
+        assert!(settings.busy());
+        assert_eq!(settings.secondary_stream(), Some(2));
+        settings.finish_secondary(&view, Status::Confirmed, true);
+        view.finished(true);
+        assert!(!settings.busy());
+        assert!(view
+            .notifications
+            .borrow()
+            .iter()
+            .any(|(event, _)| matches!(
+                event,
+                Notification::DisplayResolution {
+                    stream: 2,
+                    status: Status::Confirmed,
+                    resolution: Some(crate::session_preferences::Resolution::Fixed(1280, 720))
+                }
+            )));
+        settings.secondary = Some(
+            host_video::ResolutionChange::new(
+                1,
+                crate::session_preferences::Resolution::Host,
+                (1920, 1080),
+            )
+            .unwrap(),
+        );
+        settings.query_deadline = Some(Instant::now());
+        settings.cancel_secondary(&view);
+        assert!(!settings.busy());
+        assert!(settings.query_deadline.is_none());
+        assert!(settings.confirmation.is_none());
+        assert!(!view.state.video_pending.load(Ordering::Acquire));
+        assert!(view
+            .notifications
+            .borrow()
+            .iter()
+            .any(|(event, _)| matches!(
+                event,
+                Notification::DisplayResolution {
+                    stream: 1,
+                    status: Status::Unconfirmed,
+                    resolution: None
+                }
+            )));
+    }
     #[test]
     fn settings_controller_notifies_without_a_window_and_publishes_pending_first() {
         let view = TestView::default();

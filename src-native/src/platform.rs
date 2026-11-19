@@ -1,27 +1,19 @@
 //! Local desktop services, separate from account transport and remote clipboard.
-use serde::Serialize;
-use std::sync::Mutex;
 
-pub const MAX_TEXT: usize = 1024 * 1024;
-// The remote text protocol reserves one trailing NUL byte.
-const REMOTE_TEXT: usize = 102399;
+#[cfg(test)]
+use {serde::Serialize, std::sync::Mutex};
 
-fn remote_text(mut text: String) -> String {
-    if text.len() > REMOTE_TEXT {
-        let mut end = REMOTE_TEXT;
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        text.truncate(end);
-    }
-    text
-}
+use crate::clipboard_sync::remote_text;
+pub use crate::clipboard_sync::MAX_TEXT;
+#[cfg(test)]
+use crate::clipboard_sync::REMOTE_TEXT;
 
 pub trait Desktop: Send + Sync {
     fn read_text(&self) -> Option<String>;
     fn write_text(&self, text: &str) -> bool;
 }
 
+#[cfg(test)]
 #[derive(Clone, Default, Serialize)]
 pub struct Snapshot {
     pub clipboard_reads: u64,
@@ -32,6 +24,7 @@ pub struct Snapshot {
 #[derive(Default)]
 pub struct Services {
     desktop: Option<Box<dyn Desktop>>,
+    #[cfg(test)]
     stats: Mutex<Snapshot>,
 }
 
@@ -39,6 +32,7 @@ impl Services {
     pub fn new(desktop: Box<dyn Desktop>) -> Self {
         Self {
             desktop: Some(desktop),
+            #[cfg(test)]
             stats: Default::default(),
         }
     }
@@ -48,6 +42,7 @@ impl Services {
         self.stats.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    #[cfg(test)]
     fn outcome(&self, success: bool, update: impl FnOnce(&mut Snapshot)) {
         let mut stats = self.stats.lock().unwrap_or_else(|e| e.into_inner());
         if success {
@@ -62,12 +57,15 @@ impl Services {
         self.try_read_text().unwrap_or_default()
     }
 
+    // The binding is consumed by test-only permission counters.
+    #[cfg_attr(not(test), allow(clippy::let_and_return))]
     pub fn try_read_text(&self) -> Option<String> {
         let text = self
             .desktop
             .as_ref()
             .and_then(|d| d.read_text())
             .filter(|s| s.len() <= MAX_TEXT && !s.contains('\0'));
+        #[cfg(test)]
         self.outcome(text.is_some(), |s| {
             s.clipboard_reads = s.clipboard_reads.saturating_add(1)
         });
@@ -79,10 +77,12 @@ impl Services {
         self.try_read_text().map(remote_text)
     }
 
+    #[cfg_attr(not(test), allow(clippy::let_and_return))]
     pub fn write_text(&self, text: &str) -> bool {
         let ok = text.len() <= MAX_TEXT
             && !text.contains('\0')
             && self.desktop.as_ref().is_some_and(|d| d.write_text(text));
+        #[cfg(test)]
         self.outcome(ok, |s| {
             s.clipboard_writes = s.clipboard_writes.saturating_add(1)
         });
@@ -100,34 +100,30 @@ mod tests {
         assert_eq!(remote_text(String::new()), "");
         assert_eq!(remote_text("Árvíztűrő 🦀".into()), "Árvíztűrő 🦀");
     }
-    struct Fixture;
+    struct Fixture(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
     impl Desktop for Fixture {
         fn read_text(&self) -> Option<String> {
             Some("Árvíztűrő 🦀 secret-sentinel".into())
         }
-        fn write_text(&self, _: &str) -> bool {
+        fn write_text(&self, text: &str) -> bool {
+            self.0.lock().unwrap().push(text.into());
             true
         }
     }
     #[test]
-    fn clipboard_services_reject_invalid_text_and_keep_only_counters() {
-        let s = Services::new(Box::new(Fixture));
+    fn clipboard_services_reject_invalid_text_before_the_os_adapter() {
+        let writes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let s = Services::new(Box::new(Fixture(writes.clone())));
         assert!(s.read_text().contains("🦀"));
-        s.write_text("secret-sentinel");
-        s.write_text("bad\0text");
-        let stats = s.snapshot();
-        assert_eq!(stats.clipboard_reads, 1);
-        assert_eq!(stats.clipboard_writes, 1);
-        assert_eq!(stats.unavailable_or_rejected, 1);
-        assert!(!serde_json::to_string(&stats)
-            .unwrap()
-            .contains("secret-sentinel"));
+        assert!(s.write_text("secret-sentinel"));
+        assert!(!s.write_text("bad\0text"));
+        assert!(!s.write_text(&"x".repeat(MAX_TEXT + 1)));
+        assert_eq!(*writes.lock().unwrap(), ["secret-sentinel"]);
     }
     #[test]
     fn offline_services_have_no_os_side_effects() {
         let s = Services::default();
         assert_eq!(s.read_text(), "");
-        s.write_text("fixture");
-        assert_eq!(s.snapshot().unavailable_or_rejected, 2);
+        assert!(!s.write_text("fixture"));
     }
 }

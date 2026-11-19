@@ -1,8 +1,11 @@
 //! Shared application colors and embedded icons; no runtime assets or per-frame decoding.
 use windows_sys::Win32::{System::LibraryLoader::*, UI::WindowsAndMessaging::*};
 
-pub const BACKGROUND: u32 = 0x00231d19; // #191d23 as Win32 COLORREF
-pub const BLUE: u32 = 0x00ed802f; // #2f80ed as Win32 COLORREF
+pub const fn colorref(rgb: [u8; 3]) -> u32 {
+    rgb[0] as u32 | ((rgb[1] as u32) << 8) | ((rgb[2] as u32) << 16)
+}
+pub const BACKGROUND: u32 = colorref(crate::app_style::BACKGROUND);
+pub const BLUE: u32 = colorref(crate::app_style::BLUE);
 
 pub unsafe fn icon() -> HICON {
     // LoadIcon returns a shared resource owned by Windows, not by the caller.

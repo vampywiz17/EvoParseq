@@ -37,8 +37,10 @@ pub(super) trait Runtime: Desktop {
     fn controllers(&self) -> impl crate::gamepad::polling::Devices;
     fn controller_input_allowed(&self) -> bool;
     fn register_consumer(&self);
+    fn additional_displays(&self) -> &super::multi_display::Displays;
     fn take_events(&self, batch: &mut VecDeque<Event>);
     fn receive_pointer(&self, pointer: &mut pointer::Pointer, frame: &[u8]) -> Result<()>;
+    fn prepare_input(&self, attempt: &transport::Attempt, input: &mut input::Input) -> Result<()>;
     fn send_input(
         &self,
         input: &mut input::Input,
@@ -52,12 +54,7 @@ pub(super) trait Runtime: Desktop {
     fn host_error(&self, code: i32) -> transport::HostStatus;
 }
 
-struct PendingClipboard {
-    text: String,
-    expires: Instant,
-    next_try: Instant,
-    attempts: u8,
-}
+use crate::clipboard_sync::Pending as PendingClipboard;
 
 struct Local {
     video: profile::Video,
@@ -132,49 +129,23 @@ impl Local {
         Ok(true)
     }
     fn receive_clipboard(&mut self, text: &str, desktop: &impl Desktop) {
-        // A newer remote value supersedes pending text, even if it matches the
-        // last successful value. Never retain rejected payloads or permissions.
-        self.pending_clipboard = None;
-        if !desktop.clipboard_allowed()
-            || text == self.last_clipboard
-            || text.len() > crate::platform::MAX_TEXT
-            || text.contains('\0')
-        {
-            return;
-        }
-        let now = Instant::now();
-        self.pending_clipboard = Some(PendingClipboard {
-            text: text.into(),
-            expires: now + Duration::from_secs(1),
-            next_try: now,
-            attempts: 0,
-        });
-        self.retry_clipboard(desktop, now);
+        crate::clipboard_sync::receive(
+            &mut self.last_clipboard,
+            &mut self.pending_clipboard,
+            text,
+            desktop.clipboard_allowed(),
+            Instant::now(),
+            |text| desktop.clipboard().write_text(text),
+        );
     }
     fn retry_clipboard(&mut self, desktop: &impl Desktop, now: Instant) {
-        let Some(pending) = self.pending_clipboard.as_mut() else {
-            return;
-        };
-        if !desktop.clipboard_allowed() || now >= pending.expires {
-            self.pending_clipboard = None;
-            return;
-        }
-        if now < pending.next_try {
-            return;
-        }
-        pending.attempts += 1;
-        if desktop.clipboard().write_text(&pending.text) {
-            self.last_clipboard = self.pending_clipboard.take().unwrap().text;
-        } else if pending.attempts >= 5 {
-            self.pending_clipboard = None;
-            crate::event_log::record(
-                "WARN",
-                "clipboard_write_unavailable",
-                serde_json::json!({"attempts":5}),
-            );
-        } else {
-            pending.next_try = now + Duration::from_millis(200);
-        }
+        crate::clipboard_sync::retry(
+            &mut self.last_clipboard,
+            &mut self.pending_clipboard,
+            desktop.clipboard_allowed(),
+            now,
+            |text| desktop.clipboard().write_text(text),
+        );
     }
     fn clipboard_event(
         &mut self,
@@ -203,10 +174,7 @@ impl Local {
             desktop.acknowledge_clipboard();
             if established && desktop.clipboard_allowed() {
                 if let Some(text) = desktop.clipboard().read_notification_text() {
-                    if text != self.last_clipboard {
-                        send(&crate::control::text(17, 7, &text)?)?;
-                        self.last_clipboard = text;
-                    }
+                    crate::clipboard_sync::send_local(&mut self.last_clipboard, text, &mut send)?;
                 }
             }
         }
@@ -293,6 +261,22 @@ pub(super) fn run(
             let Some(frame) = attempt.pop_control() else {
                 break;
             };
+            if frame.get(12) == Some(&27) && frame.len() >= 13 {
+                let stream = u32::from_be_bytes(frame[..4].try_into().unwrap()) as usize;
+                if stream != 0 {
+                    let status = i32::from_be_bytes(frame[8..12].try_into().unwrap());
+                    crate::event_log::record(
+                        "INFO",
+                        "host_display_ended",
+                        serde_json::json!({"stream":stream,"host_status":status}),
+                    );
+                    platform.additional_displays().close(stream);
+                    if status != 0 {
+                        view.notify(Notification::Status(Status::Failed));
+                    }
+                }
+                continue;
+            }
             if frame.get(12) == Some(&9) {
                 platform.receive_pointer(&mut pointer, &frame)?;
                 continue;
@@ -341,6 +325,12 @@ pub(super) fn run(
                 _ => {}
             }
         }
+        if host_settings
+            .secondary_stream()
+            .is_some_and(|stream| platform.additional_displays().get(stream).is_none())
+        {
+            host_settings.cancel_secondary(view);
+        }
         host_settings.poll(&attempt, view)?;
         if audio_source.is_none() {
             audio_source = attempt.audio_pipeline();
@@ -375,6 +365,9 @@ pub(super) fn run(
                 audio.recycle_handoff(block);
             }
         }
+        if established {
+            platform.prepare_input(&attempt, &mut input)?;
+        }
         platform.take_events(&mut batch);
         for event in batch.drain(..) {
             if matches!(event, Event::InputOverflow) {
@@ -395,6 +388,40 @@ pub(super) fn run(
             local.clipboard_event(&event, established, platform, |frame| attempt.send(frame))?;
             if let Event::NativeSession(action) = &event {
                 match action {
+                    session_model::Command::DisplayResolution {
+                        stream,
+                        resolution,
+                        size,
+                    } => {
+                        if platform.additional_displays().get(*stream).is_some()
+                            && host_settings
+                                .display_resolution(&attempt, view, *stream, *resolution, *size)
+                                .is_err()
+                        {
+                            view.notify(Notification::DisplayResolution {
+                                stream: *stream,
+                                status: Status::Failed,
+                                resolution: None,
+                            });
+                        }
+                    }
+                    session_model::Command::AddDisplay(stream) => {
+                        let result = if host_settings.busy() {
+                            Err(anyhow::anyhow!("Waiting for the previous host request"))
+                        } else {
+                            platform
+                                .additional_displays()
+                                .open(*stream, &attempt, manager.clone())
+                        };
+                        crate::event_log::record(
+                            if result.is_ok() { "INFO" } else { "WARN" },
+                            "additional_display_requested",
+                            serde_json::json!({"stream":stream,"accepted_locally":result.is_ok()}),
+                        );
+                        if result.is_err() {
+                            view.notify(Notification::Status(Status::Failed));
+                        }
+                    }
                     session_model::Command::Disconnect => platform.stop(),
                     session_model::Command::HideButton => {
                         if manager
@@ -493,7 +520,7 @@ pub(super) fn run(
                 local.observed_fullscreen(*active);
                 let _ = manager.update_native(|p| p.video.fullscreen = *active);
             }
-            if matches!(event, Event::Size(..))
+            if matches!(event, Event::Size)
                 && established
                 && local.video.resolution == profile::Resolution::Client
             {
@@ -503,6 +530,7 @@ pub(super) fn run(
                 platform.send_input(&mut input, &attempt, &event)?;
             }
         }
+        platform.additional_displays().poll(&attempt)?;
         let controller_wait = pad_poller.tick(
             &mut pads,
             &mut controllers,

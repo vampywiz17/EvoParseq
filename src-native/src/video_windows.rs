@@ -363,7 +363,8 @@ impl Drop for WorkerWake {
 }
 type WorkerState = (Mutex<Queue>, Condvar, Option<WorkerWake>);
 type Shared = Arc<WorkerState>;
-static PREVIOUS_WORKER: Mutex<Option<std::sync::Weak<WorkerState>>> = Mutex::new(None);
+static PREVIOUS_WORKER: Mutex<[Option<std::sync::Weak<WorkerState>>; 3]> =
+    Mutex::new([None, None, None]);
 // A timed-out driver may still own GPU objects. Do not create an unbounded
 // succession of replacement workers in this process; restarting clears this.
 static NATIVE_STALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -371,6 +372,38 @@ fn check_native(q: &mut Queue, now: Instant) {
     q.check_native_call(now);
     if q.native_stalled {
         NATIVE_STALLED.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+fn previous_worker_busy(previous: &Option<std::sync::Weak<WorkerState>>) -> bool {
+    previous
+        .as_ref()
+        .and_then(std::sync::Weak::upgrade)
+        .is_some_and(|old| {
+            let mut q = old.0.lock().unwrap_or_else(|e| e.into_inner());
+            check_native(&mut q, Instant::now());
+            !q.report.worker_finished
+        })
+}
+
+#[cfg(test)]
+mod display_worker_tests {
+    use super::*;
+    #[test]
+    fn a_live_stream_blocks_only_its_own_replacement_until_finished() {
+        let first = Arc::new((Mutex::new(Queue::default()), Condvar::new(), None));
+        let second = Arc::new((Mutex::new(Queue::default()), Condvar::new(), None));
+        let mut slots = [None, None, None];
+        slots[0] = Some(Arc::downgrade(&first));
+        assert!(previous_worker_busy(&slots[0]));
+        assert!(!previous_worker_busy(&slots[1]));
+        assert!(!previous_worker_busy(&slots[2]));
+        slots[1] = Some(Arc::downgrade(&second));
+        first.0.lock().unwrap().report.worker_finished = true;
+        assert!(!previous_worker_busy(&slots[0]));
+        assert!(previous_worker_busy(&slots[1]));
+        drop(second);
+        assert!(!previous_worker_busy(&slots[1]));
     }
 }
 
@@ -417,15 +450,11 @@ impl Pipeline {
         let state = shared.clone();
         let error_state = shared.clone();
         let preferred_gpu = window.video_gpu();
-        let mut previous = PREVIOUS_WORKER.lock().unwrap_or_else(|e| e.into_inner());
-        let busy = previous
-            .as_ref()
-            .and_then(std::sync::Weak::upgrade)
-            .is_some_and(|old| {
-                let mut q = old.0.lock().unwrap_or_else(|e| e.into_inner());
-                check_native(&mut q, Instant::now());
-                !q.report.worker_finished
-            });
+        let mut workers = PREVIOUS_WORKER.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = &mut workers[window
+            .display_stream
+            .load(std::sync::atomic::Ordering::Acquire)];
+        let busy = previous_worker_busy(previous);
         let spawned = if NATIVE_STALLED.load(std::sync::atomic::Ordering::Acquire) || busy {
             let mut q = error_state.0.lock().unwrap_or_else(|e| e.into_inner());
             q.fail(
@@ -473,7 +502,7 @@ impl Pipeline {
                         .unwrap_or_else(|e| e.into_inner()) = Some(q.report.clone());
                 })
         };
-        drop(previous);
+        drop(workers);
         if spawned.is_err() {
             let mut q = error_state.0.lock().unwrap_or_else(|e| e.into_inner());
             q.fail("video-worker-start", None);
@@ -638,7 +667,7 @@ fn run(
     let mut zero_fallback = None;
     let vsr_quality = window.ai_upscale_quality();
     #[cfg(feature = "vendor-video")]
-    let zero_requested = window.experimental_zero_copy() && vsr_quality == 0;
+    let zero_requested = window.zero_copy() && vsr_quality == 0;
     #[cfg(not(feature = "vendor-video"))]
     let zero_requested = false;
     loop {

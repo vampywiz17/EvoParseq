@@ -17,7 +17,7 @@ The Windows SDK/MSVC toolchain and Rust are build-time requirements. The portabl
 application uses EvoParseq.exe and settings.json; ordinary use does not require
 administrator rights. The configured static CRT and bundled Opus remain in place.
 
-## Experimental DXGI VRR
+## DXGI VRR
 
 Select **Video / Display timing / VRR**, disable Zero copy, save and reconnect.
 This uses the existing normal DXGI renderer with all existing decoder backends;
@@ -373,7 +373,7 @@ cursor hidden by that mode. Existing native cursor-retirement ownership remains.
 
 With event logging enabled, `cursor_image_applied` contains source, client
 reference, output dimensions and hotspot; `cursor_mode_changed` records only
-relative/hidden/suppressed transitions. No continuous positions, PNG pixels,
+stream ID and relative/hidden/suppressed transitions. No continuous positions, PNG pixels,
 keys or video are recorded. These distinguish a local image size issue from a
 host mode transition. A cursor already composited into host video cannot be
 resized independently by this client-side cursor path; that case still needs
@@ -436,3 +436,66 @@ driver; runtime capability checks and MF fallback remain necessary.
 Under the current unified policy, Intel HEVC variants (including VPL 8-bit)
 have not been live-tested: the available Intel test machine has HEVC disabled.
 Earlier hardware observations do not validate the current extended VPL paths.
+
+## Windows multi-display development build
+
+The session overlay's **Add screen** menu requests a second or third host display
+on the existing connection (BUD or WebRTC). The initial implementation exposes
+the host's stream slots 1/2, corresponding to its second/third listed outputs.
+Use extended host displays and normal Parsec mouse/keyboard input. Already-open
+outputs are not opened twice. Live Windows tests have verified two-screen
+playback, independent resolution changes, activating clicks and cross-display
+window dragging with cursor restoration. This does not prove host acceptance
+for every account, display topology or driver.
+
+Each additional window uses the existing D3D11 decoder/presenter once for its
+stream, with its own bounded reference/queue state. No decoded readback, screen
+composition or additional decoded-image copy is introduced. One audio pipeline
+and one connection remain active. Additional windows use the draggable session
+icon for independent Resolution/Apply, Fullscreen, Release/Capture input and
+Close screen; the main window owns session settings and Disconnect. Connection
+stats is disabled on additional windows. Resolution writes refresh the complete
+host configuration, patch only the selected stream's dimensions and confirm that
+slot through the existing bounded readback transaction. Other stream settings
+and unknown host fields are preserved; changes are serialized across windows.
+Normal absolute mouse clicks send the target stream/position before button-down
+on the same ordered input channel. Relative camera input and HID do not receive
+an extra absolute warp. Closing an extra window sends only its stream-disable request. If
+the host rejects it or no picture is decoded within ten seconds, that window
+closes and the event log records its stream/status. Existing presentation-mode
+costs and the project's strict Zero copy definition remain unchanged.
+
+Android/Linux frontends do not enable this feature. The small vendored Rust
+formatting changes accompanying the Windows backend validation are mechanical;
+their media behavior is unchanged.
+
+
+### Parsec virtual display prerequisite
+
+The current Windows Add screen implementation opens host-reported outputs; it
+does not provision Parsec VDD devices. Set the desired count in the stock host's
+**Settings > Host > Virtual Displays**, then reconnect and refresh the display
+list before opening another stream. **Fallback To Virtual Display** is a
+separate single-output feature and is insufficient for multiple virtual screens.
+The host's own driver and account/owner policy still apply. No guest-side VDD
+count-setting contract has been established; see `NATIVE_REFERENCES.md` for the
+specific stock-runtime evidence and its limits. Do not add a speculative VDD
+count field to the existing remote video configuration.
+
+### Multi-display cursor capture recovery
+
+A visible, unsuppressed absolute cursor on another live stream invalidates an
+old stream's hidden/relative cursor request. Clear that stale request without
+changing focus or releasing held buttons/keys. Restore the pointer once through
+the destination stream's current viewport and client-to-screen transform, with
+the existing Disable cursor warp preference respected. Never reuse the old
+display's coordinates. Both possible synthetic-move recipients (source capture
+and destination) suppress the warp echo, including negative client coordinates.
+The destination is held weakly and must remain live/visible; closed/minimized
+windows do not receive a restoration. This lets cross-display window drags return from relative capture
+when the host reports the visible cursor on the destination stream. Hidden or
+relative updates retain the existing SDK/lowlat capture rule; suppressed cursors
+never prove a visible endpoint. Closed/unknown streams do not trigger recovery.
+The reconciliation is transition-only, uses the existing UI messages and logs
+`cursor_capture_released_for_peer` with source/destination stream IDs. No media
+path, timer, thread or dependency is added.

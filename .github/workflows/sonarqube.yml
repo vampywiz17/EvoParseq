@@ -33,6 +33,8 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
+          # Keep the coverage producer and LLVM reader on the validated toolchain.
+          toolchain: 1.98.1
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
@@ -57,8 +59,18 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path coverage -Force | Out-Null
-          cargo llvm-cov --locked --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --lcov --output-path coverage/rust-raw.info -- --test-threads=1
+          cargo llvm-cov clean --workspace --manifest-path src-native/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'Instrumented workspace cleanup failed' }
+          cargo llvm-cov --locked --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --no-report -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'Instrumented Rust tests failed' }
+          # Foreground fixtures run separately to prevent other windows stealing focus.
+          # Merge their actual execution, retaining the normal tests' profiles.
+          cargo llvm-cov --locked --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --no-report -- immersive_native_capture_lifecycle --ignored --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'Instrumented foreground cursor fixture failed' }
+          cargo llvm-cov --locked --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --no-report -- additional_display_native_lifecycle --ignored --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'Instrumented additional display fixture failed' }
+          cargo llvm-cov report --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --lcov --output-path coverage/rust-raw.info
+          if ($LASTEXITCODE -ne 0) { throw 'Merged Rust coverage export failed' }
           # The package must contain the normal executable, never an instrumented build.
           cargo clean --manifest-path src-native/Cargo.toml --release -p libopus_sys
           if ($LASTEXITCODE -ne 0) { throw 'Release Opus cache reset failed' }
