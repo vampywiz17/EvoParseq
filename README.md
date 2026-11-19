@@ -174,7 +174,7 @@ The Windows features below remain available on this branch.
 - **Session overlay:** draggable icon; resolution, bandwidth, FPS, constant FPS,
   orientation, fullscreen and immersive input controls. Switch the current stream
   between host-listed physical or virtual displays.
-- **Windows multi-display (dev):** open up to three host-listed extended outputs
+- **Windows multi-display:** open up to three host-listed extended outputs
   on one BUD/WebRTC connection, with independent resolution controls and one audio
   pipeline. Normal input, activating clicks and cross-display window dragging are
   live-tested with two screens. Additional windows have their own draggable controls;
