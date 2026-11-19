@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 const MAX_SIDE: u32 = 256;
 const MAX_IMAGE: usize = 512 * 1024;
@@ -10,6 +11,37 @@ pub(crate) fn visibility(body: &[u8], output: Option<u32>) -> Option<bool> {
     // independently of cursor positioning or mouse capture.
     let body = body.get(..13)?;
     (output == Some(crate::wire::be(body, 0))).then_some(body[4] == 0)
+}
+
+#[derive(Default)]
+pub(crate) enum VisibilityRecovery {
+    #[default]
+    VisibleOrUnknown,
+    HiddenSince(Instant),
+    RefreshRequested,
+}
+
+impl VisibilityRecovery {
+    pub fn observe(&mut self, visible: bool, now: Instant) {
+        if visible {
+            *self = Self::VisibleOrUnknown;
+        } else if matches!(self, Self::VisibleOrUnknown) {
+            *self = Self::HiddenSince(now);
+        }
+    }
+
+    /// Refresh once per hidden interval, when absolute input resumes after
+    /// the host has had time to switch input desktops.
+    pub fn refresh_after_motion(&mut self, now: Instant) -> bool {
+        let Self::HiddenSince(since) = self else {
+            return false;
+        };
+        if now.saturating_duration_since(*since) < Duration::from_secs(4) {
+            return false;
+        }
+        *self = Self::RefreshRequested;
+        true
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,6 +157,25 @@ fn cursor_visibility_changes_without_a_new_image() {
     assert_eq!(visibility(&body[..12], Some(2)), None);
     body[4] = 0;
     assert_eq!(visibility(&body, Some(2)), Some(true));
+}
+
+#[cfg(test)]
+#[test]
+fn hidden_cursor_refresh_is_delayed_and_limited_until_visible_again() {
+    let now = Instant::now();
+    let later = |seconds| now + Duration::from_secs(seconds);
+    let mut recovery = VisibilityRecovery::default();
+    assert!(!recovery.refresh_after_motion(now));
+    recovery.observe(false, now);
+    recovery.observe(false, later(2));
+    assert!(!recovery.refresh_after_motion(later(3)));
+    assert!(recovery.refresh_after_motion(later(4)));
+    recovery.observe(false, later(5));
+    assert!(!recovery.refresh_after_motion(later(10)));
+    recovery.observe(true, later(11));
+    assert!(!recovery.refresh_after_motion(later(12)));
+    recovery.observe(false, later(13));
+    assert!(recovery.refresh_after_motion(later(17)));
 }
 
 #[cfg(test)]

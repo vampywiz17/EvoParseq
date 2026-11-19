@@ -514,6 +514,7 @@ pub async fn run(
     let mut reliable = wire::Reliable::default();
     let mut audio = crate::audio::Audio::default();
     let mut cursors = crate::cursor::Cursors::default();
+    let mut cursor_visibility = crate::cursor::VisibilityRecovery::default();
     for p in reliable.frame(&wire::hello(sink.raw_audio()))? {
         send(&mut c, &p)?;
     }
@@ -555,6 +556,8 @@ pub async fn run(
         let mut recovery_output = None;
         let mut first_bandwidth_feedback = None;
         let mut controls_sent = 0;
+        let mut absolute_motion_sent = false;
+        let mut hidden_cursor_refresh = false;
         tokio::select! {
             _=heartbeat_timer.tick()=>{
                 c.send(&wire::HEARTBEAT).map_err(|_|anyhow::anyhow!("Phaze heartbeat send failed"))?;
@@ -579,6 +582,7 @@ pub async fn run(
                     let changing_output = selected_output != Some(output);
                     if changing_output {
                         deferred_motion = None;
+                        cursor_visibility = Default::default();
                         sink.cursor_output_changed();
                     }
                     let (stop, start) = wire::video_request(selected_output, output, config, recovering)?;
@@ -611,6 +615,7 @@ pub async fn run(
                             bail!("Phaze input acknowledgment window exhausted; reconnect to continue");
                         }
                         for p in reliable.frame(&command.encode(output))? { send(&mut c,&p)?; }
+                        absolute_motion_sent |= command.is_absolute_motion();
                     }
                 }
                 for control in &controls {
@@ -700,6 +705,7 @@ pub async fn run(
                         if let Some(visible) =
                             crate::cursor::visibility(&frame[1..], selected_output)
                         {
+                            cursor_visibility.observe(visible, arrival);
                             sink.cursor_visibility(visible);
                         }
                     }
@@ -729,15 +735,24 @@ pub async fn run(
                 }
             }
         }
-        if reliable.pending().count() < 48 && cursors.take_refresh_request() {
-            for packet in reliable.frame(&[20])? {
-                send(&mut c, &packet)?;
+        if reliable.fits(1, 48) {
+            let missing_shape = cursors.take_refresh_request();
+            let hidden_after_motion =
+                absolute_motion_sent && cursor_visibility.refresh_after_motion(Instant::now());
+            if missing_shape || hidden_after_motion {
+                for packet in reliable.frame(&[20])? {
+                    send(&mut c, &packet)?;
+                }
+                hidden_cursor_refresh = hidden_after_motion;
             }
         }
         reliable.retry_due(Instant::now(), |packet| send(&mut c, packet))?;
         let transmission_started = Instant::now();
         sent = sent.saturating_add(flush(&mut c, &socket, peer).await?);
         reliable.transmitted(transmission_started);
+        if hidden_cursor_refresh {
+            sink.cursor_refresh_requested();
+        }
         for (index, control) in controls.drain(..).enumerate() {
             sink.control_sent(&control, index < controls_sent);
         }

@@ -217,6 +217,13 @@ impl evoparseq_phaze::Sink for View {
             serde_json::json!({"visible": visible}),
         );
     }
+    fn cursor_refresh_requested(&mut self) {
+        crate::event_log::record(
+            "INFO",
+            "phaze_cursor_refresh_requested",
+            serde_json::json!({}),
+        );
+    }
     fn cursor_image(&mut self, image: evoparseq_phaze::CursorImage<'_>) {
         use crate::cursor::{Frame, Request};
         use evoparseq_phaze::CursorFormat;
