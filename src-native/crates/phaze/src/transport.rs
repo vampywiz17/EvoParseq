@@ -368,7 +368,15 @@ async fn release_and_close(
     // Close is outside the reliable window, so a full/lost input queue cannot
     // prevent the host from ending this peer and releasing its pressed state.
     let _ = c.send(&[0xcd, 1]);
-    let _ = flush(c, socket, peer).await;
+    let _ = tokio::time::timeout(Duration::from_secs(1), flush(c, socket, peer)).await;
+}
+
+fn startup_output(outputs: &[wire::Output]) -> Option<u32> {
+    outputs
+        .iter()
+        .filter(|output| output.active)
+        .min_by_key(|output| !output.primary)
+        .map(|output| output.id)
 }
 async fn handle_stun(
     s: &impl crate::Datagram,
@@ -530,14 +538,19 @@ pub async fn run(
     let mut arrival = reported;
     let mut bandwidth_reported = false;
     loop {
-        ensure!(
-            last_heartbeat.elapsed() < Duration::from_secs(20),
-            "Phaze peer heartbeat timed out"
-        );
-        ensure!(
-            video_received || app_started.elapsed() < Duration::from_secs(20),
-            "Phaze first video timed out"
-        );
+        if last_heartbeat.elapsed() >= Duration::from_secs(20) {
+            release_and_close(&mut c, &mut reliable, &socket, peer).await;
+            bail!("Phaze peer heartbeat timed out");
+        }
+        if !video_received && app_started.elapsed() >= Duration::from_secs(20) {
+            // The host owns session-created displays. Close the authenticated
+            // session even if the first display or video was never ready.
+            release_and_close(&mut c, &mut reliable, &socket, peer).await;
+            if !requested {
+                bail!("Phaze host did not report an active display");
+            }
+            bail!("Phaze first video timed out");
+        }
         let mut stream_request = None;
         let mut recovery_output = None;
         let mut first_bandwidth_feedback = None;
@@ -662,19 +675,18 @@ pub async fn run(
                         let outputs = wire::outputs(&frame[1..])?;
                         sink.outputs(&outputs);
                         if !requested {
-                            let output = outputs
-                                .iter()
-                                .find(|o| o.active && o.primary)
-                                .or_else(|| outputs.iter().find(|o| o.active))
-                                .context("Phaze host has no active display")?;
-                            let config = sink.video_config();
-                            for p in reliable.frame(&config.request(output.id)?)? {
-                                send(&mut c, &p)?;
+                            // A headless host can publish the list before it
+                            // has finished applying the display layout.
+                            if let Some(output) = startup_output(&outputs) {
+                                let config = sink.video_config();
+                                for p in reliable.frame(&config.request(output)?)? {
+                                    send(&mut c, &p)?;
+                                }
+                                selected_output = Some(output);
+                                requested = true;
+                                stream_request = Some((output, config));
+                                sink.stage("video_requested");
                             }
-                            selected_output = Some(output.id);
-                            requested = true;
-                            stream_request = Some((output.id, config));
-                            sink.stage("video_requested");
                         }
                         outputs_available = outputs;
                     }
@@ -750,6 +762,29 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_waits_for_an_active_output_and_prefers_the_primary() {
+        let output = |id, active, primary| wire::Output {
+            id,
+            name: String::new(),
+            width: 1920,
+            height: 1200,
+            active,
+            primary,
+        };
+        assert_eq!(startup_output(&[]), None);
+        assert_eq!(startup_output(&[output(1, false, true)]), None);
+        assert_eq!(
+            startup_output(&[output(1, false, true), output(2, true, false)]),
+            Some(2)
+        );
+        assert_eq!(
+            startup_output(&[output(2, true, false), output(3, true, true)]),
+            Some(3)
+        );
+    }
+
     #[test]
     fn stun_requires_integrity_and_fingerprint() -> Result<()> {
         let mut packet = header(1, [3; 12]);
