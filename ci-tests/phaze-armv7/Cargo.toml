@@ -1,0 +1,13 @@
+[package]
+name = "evoparseq-phaze-armv7"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+aes-gcm = { version = "=0.10.3", default-features = false, features = ["aes"] }
+purecrypto = { version = "=0.10.4", default-features = false, features = ["std", "dtls", "p256-table"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
