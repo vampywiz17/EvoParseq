@@ -33,8 +33,12 @@ Flatpak. All three clients report **0.9.8**.
   when supported.
 - **Windows reliability:** fix a BUD teardown deadlock that could freeze the
   client and remove duplicate scrollbars from information pages.
-- **Android TV updates:** check GitHub for signed stable or preview builds and
-  hand verified APKs to the Android system installer. Android versionCode is 35.
+- **Desktop sign-in:** accept spaced six-digit authenticator codes and show clearer
+  messages for rejected fields, confirmation requirements and rate limits.
+- **Linux updates:** check GitHub for versioned Flatpak releases, verify the
+  bundle and open the system installer for confirmation.
+- **Shared client code:** reuse desktop UI definitions and connection statistics
+  views, and share host frame-rate hints with Android TV. Android versionCode is 35.
 - **Virtual displays:** the guide recommends ParsecDisplay / parsec-vdd for
   configuring host-side virtual outputs using Parsec's installed driver. The
   client opens existing extended outputs reported by the host.
