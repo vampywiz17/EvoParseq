@@ -51,3 +51,18 @@ For this transition, download the stable ZIP directly from
 [the release page](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.5).
 The transition ZIP preserves existing shortcuts; it cannot change an old updater
 before that executable is replaced. EvoParseq v0.9.5 checks the new repository.
+
+## Stable v0.9.6: Windows and Android TV
+
+Windows v0.9.5 users can use Help > Check for updates or extract the new Windows
+ZIP while retaining settings.json under the same Windows account. The legacy
+ParsecWebTurn ZIP carries the identical executable under the old shortcut name.
+Passwords and 2FA codes are not saved; protected sessions are account-bound.
+
+Android distribution-signed dev.2-dev.5 builds can update in place to the stable
+EvoParseq-TV.apk (versionCode 30). The stable update channel offers v0.9.6;
+Include prereleases is not required. Android still confirms installation.
+Old debug-signed previews, including v0.9.6-dev.1, cannot use the distribution
+signature in place: uninstall once and install the signed APK. Uninstalling
+erases private settings and remembered sign-in. Windows packages and Android
+APKs are separate; Linux alpha and macOS work are not part of this release.

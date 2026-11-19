@@ -3,7 +3,7 @@ name: EvoParseq Android TV preview
 on:
   workflow_dispatch:
   push:
-    branches: [dev]
+    branches: [main, dev]
     paths: ['android-tv/**', '.github/workflows/android-tv.yml', 'src-native/src/**', 'src-native/vendor/**', 'src-native/crates/bud/**']
 
 permissions:

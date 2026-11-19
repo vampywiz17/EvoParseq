@@ -2,6 +2,75 @@
 
 ## Unreleased
 
+## v0.9.8 — Multi-display streaming and Linux Flatpak (2026-11-19)
+
+
+This stable release builds on **EvoParseq v0.9.7**. It includes Windows x64
+packages, a distribution-signed Android TV APK and an experimental Linux x86_64
+Flatpak. All three clients report **0.9.8**.
+
+## What's new and improved
+
+- **Windows and Linux multi-display:** open up to three host-reported outputs
+  over one WebRTC or BUD connection, with one decoder per display and one
+  shared audio pipeline. Each additional display has independent resolution,
+  fullscreen and input controls. Resolution changes refresh the host settings
+  before updating the selected display, preserving other outputs' settings.
+  Closing an additional window leaves the other streams running.
+- **Cross-display input:** Windows sends the clicked display and position before
+  forwarding the activating click and restores the cursor on the destination
+  display. Linux uses native Wayland drag-and-drop for held-button handoff
+  between stream windows while retaining focused clipboard access.
+- **Linux Vulkan Video:** H.264, HEVC Main and capability-gated HEVC Main10
+  playback, with saved Intel, AMD or NVIDIA GPU selection. Decode and
+  presentation share one Vulkan device and use GPU timeline synchronization
+  where supported. NV12 and P010 decoder images feed the GPU color conversion
+  pass directly. Main10 presentation is SDR.
+- **Linux desktop and audio:** shared launcher, Settings, session overlay and
+  connection statistics, with secure remembered sign-in through the Secret
+  portal. PipeWire provides local volume and mute, automatic device recovery,
+  stereo Opus and BUD PCM or supported 5.1/7.1 output. Normal keyboard and mouse,
+  opt-in BUD HID, focused text clipboard and controllers with rumble are wired.
+- **Linux networking and session controls:** shared STUN, custom TURN and
+  Cloudflare TURN settings, direct-only and Force TURN modes, and optional
+  DSCP/socket-priority hints. The overlay exposes display, resolution, bitrate,
+  frame-rate and frame-pacing requests. Vulkan adaptive presentation is available
+  when supported.
+- **Windows reliability:** fix a BUD teardown deadlock that could freeze the
+  client and remove duplicate scrollbars from information pages.
+- **Android TV updates:** check GitHub for signed stable or preview builds and
+  hand verified APKs to the Android system installer. Android versionCode is 35.
+- **Virtual displays:** the guide recommends ParsecDisplay / parsec-vdd for
+  configuring host-side virtual outputs using Parsec's installed driver. The
+  client opens existing extended outputs reported by the host.
+
+## Compatibility and validation
+
+Windows requires Windows 11 x64 and Direct3D feature level 11.0+. Android TV
+requires Android 10 (API 29) or later on ARMv7 or ARM64. The Linux preview
+requires Wayland, PipeWire, Flatpak 1.15.6 or later and a graphics driver with
+compatible Vulkan Video support. The maintainer tested Linux H.264 on Intel,
+AMD and NVIDIA, including RTX 3060 on hybrid Nobara, and HEVC on tested Intel
+hardware. Cross-display dragging was tested on Zorin OS 18/GNOME. GPU support
+and Wayland presentation depend on the driver and compositor. Requesting
+adaptive presentation does not verify physical VRR. Linux 4:4:4 and Windows AI
+video processing are outside the Linux preview.
+
+## Requirements and upgrading
+
+**Windows:** close the client and extract **EvoParseq-v0.9.8-win64.zip**.
+**ParsecWebTurn-v0.9.8-win64.zip** contains the identical executable under the
+old filename. The packages exclude user settings and the optional NVIDIA runtime.
+
+**Android TV:** install **EvoParseq-TV.apk** or use **Settings > Updates**.
+**EvoParseq-TV-v0.9.8.zip** includes the same APK, setup guide and license notices.
+The distribution signing certificate is unchanged.
+
+**Linux:** install **EvoParseq-Linux-v0.9.8-x86_64.flatpak**. The existing
+application ID and private settings directory are retained.
+
+Verify downloads with `SHA256SUMS.txt`. [Changes since v0.9.7](https://github.com/vampywiz17/EvoParseq/compare/v0.9.7...v0.9.8)
+
 ## v0.9.8-dev.3 — Linux multi-display and shared-core cleanup (2026-11-16)
 
 This development preview builds on **EvoParseq v0.9.8-dev.2**. It includes
@@ -366,6 +435,184 @@ between OS accounts or machines.
 Source changes since the previous dev release:
 https://github.com/vampywiz17/EvoParseq/compare/v0.9.6-dev.5...v0.9.8-dev.1
 
+
+## v0.9.7 - Release security reports (2026-11-10)
+
+Stable maintenance release since v0.9.6. Publish VirusTotal results for final
+release binaries in the release notes and SECURITY-SCAN.md/JSON attachments.
+Keep releases in draft until completed scans pass; findings and incomplete/error
+results block publication. Report unsupported engines and analysis failures explicitly. Add
+offline scanner tests, a real Flatpak extraction fixture and measured Python
+coverage to the strict SonarQube gate. Flatpak support in the scanner prepares
+future releases; this stable release includes Windows and Android TV only.
+
+Application behavior, permissions and signing keys are unchanged. Only version
+metadata advances to 0.9.7 (Android versionCode 31) so in-place updates work.
+Scan reports are not a safety certification or Google Play Protect approval.
+
+
+## v0.9.6 - Controllers, Android TV and local audio controls (2026-11-07)
+
+This stable release adds shared controller support, Windows playback volume
+controls and the initial Android TV client. The changes below cover implemented
+features and fixes since the previous stable release, **EvoParseq v0.9.5**.
+Windows x64 packages and a distribution-signed Android TV APK are included.
+Linux alpha builds and the proposed macOS port are not part of this release.
+
+## What's new and improved
+
+- **Shared controller support:** one Rust state and protocol pipeline forwards
+  up to four controllers over WebRTC or BUD. Windows uses native XInput;
+  Android reads standard gamepad/joystick events. Forward buttons, D-pad,
+  sticks and analog triggers; preserve trigger precision and avoid duplicate
+  button mapping. Device-supported vibration uses the platform adapter.
+  Joining, focus changes, held-state release, unplug and disconnect are handled
+  explicitly; local menus release held controls without repeatedly removing
+  the host controller. Home/Guide remains owned by the operating system.
+- **Windows local audio controls:** the session overlay now has Mute audio and
+  a 0-100% volume slider for either transport. Muting preserves the chosen level;
+  moving the slider while muted keeps mute enabled. These controls affect only
+  client playback through WASAPI, not the host's volume, and reset when the
+  client restarts.
+- **Android TV interface:** add a Google TV / Android TV-style launcher and
+  computer picker, remote-friendly sign-in and two-factor-code entry, grouped
+  Network/Video/Audio/Diagnostics/Device/Updates settings and device capabilities.
+  Correct text contrast, focus indicators, IME actions and launcher artwork.
+  Keep focused cards within their bounds, prevent settings overlap and retain
+  readable category buttons in a bounded scrolling sidebar with Back accessible.
+- **Protected TV sign-in and settings:** remember only the session token using
+  AES-256-GCM and a non-exportable Android Keystore key in private no-backup
+  storage. Passwords and two-factor codes are never saved. Sign out clears local
+  credentials and requests server-side revocation. Relay credentials are
+  separately protected and excluded from backup and diagnostic output.
+- **Android video and audio:** H.264 and supported HEVC 8/10-bit 4:2:0 decode
+  through hardware MediaCodec to a Surface. Share codec initialization, geometry
+  validation, bounded queues and keyframe recovery. Decoded pixels do not cross
+  JNI as Bitmaps or undergo CPU readback. Shared Rust audio decoding feeds a
+  bounded nonblocking PCM handoff and 48 kHz AAudio pull output.
+- **WebRTC and BUD on TV:** reuse Rust authentication, discovery, signaling,
+  connection preferences, host settings and media handling. Support direct/STUN,
+  Cloudflare or custom TURN, and Force TURN. Preserve WebRTC ICE selection and
+  BUD direct UDP/configured UDP-TLS-TCP relay carriers. Transport selection stays
+  explicit, with no silent switch. Keep useful transport errors and stop reasons
+  visible after returning to the picker; distinguish empty WebRTC messages from
+  channel EOF and retain bounded codec/output recovery.
+- **Phone/computer relay setup:** the TV can open an opt-in HTTPS configuration
+  page on its private LAN. Verify the displayed certificate fingerprint, enter
+  the pairing code, submit STUN/Cloudflare/custom TURN settings, then approve
+  them on the TV. Preserve origin/Host checks, bounded submissions and expiry.
+  Setup stops on exit, stream start or the five-minute deadline. No external
+  provisioning service, public setup listener or port forwarding is required.
+- **TV remote mouse and physical input:** optionally move the pointer with
+  D-pad; short OK clicks, two short presses double-click, held OK right-clicks,
+  and OK plus direction drags on compatible remotes. Physical keyboards/mice use
+  normal Parsec input and optional mouse capture. Ctrl+Shift+M releases input
+  and opens controls. Correct cursor size, hotspot, edge mapping and input-device
+  ownership while keeping gamepad controls separate. Cursor and overlay changes
+  no longer rebuild the video Surface or terminate the session.
+- **Dismissible TV controls and cadence hints:** a compact overlay reports
+  available FPS, selected-pair RTT, incoming bitrate, actual codec/depth and
+  direct/relay routing. Auto-hide after five idle seconds; retain manual Hide,
+  Disconnect and Back/Menu access. Add fixed/dynamic FPS preferences. Hint the
+  Surface rate from the host-confirmed fixed cadence, clearing the hint when
+  dynamic or unknown. Display Android-reported Hz and decoded-output catch-up
+  skips without forcing HDMI modes or introducing another frame scheduler.
+- **Android audio recovery and buffering:** reopen a failed or disconnected
+  AAudio output using bounded retry policy while preserving video and transport.
+  Discard stale queued PCM before resuming; fold multichannel audio down when
+  recovery selects stereo. Settings offers shared validated minimum/maximum
+  buffering from 0-500 ms, with a positive maximum at least equal to the minimum.
+  Defaults remain a zero minimum and 100 ms queue ceiling; larger minima add
+  latency.
+- **BUD PCM and surround on TV:** optionally request raw PCM and verified
+  5.1/7.1 output layouts. Match explicit Android speaker positions to the actual
+  AAudio route and opened stream; unknown or unsupported layouts use stereo.
+  Resolve newer channel-mask APIs optionally so Android 10-12 still loads.
+  API 29-31 uses the stereo fallback. WebRTC remains stereo Opus.
+- **Signed Android updates:** Settings > Updates checks stable or optional dev
+  GitHub releases and downloads the newest compatible APK. Shared Rust verifies
+  bounded HTTPS downloads against published size and SHA-256; Android verifies
+  package ID, version, OS compatibility and the installed signing certificate.
+  Clear obsolete downloads when channels change and use the lifecycle-aware
+  system installer. Release APKs use the persistent distribution signing key;
+  Android still requires the user's installation confirmation.
+- **TV diagnostic export:** optional bounded JSONL operational logging and
+  Save/Share diagnostics export a ZIP through Android's document picker or
+  temporary read-only sharing. Include up to two rotated 5 MiB logs and basic
+  device information; exclude credentials, settings, clipboard, media and logcat.
+  Export work stays outside the audio/video callbacks.
+- **Shared core and dependency maintenance:** reuse Rust session, validation,
+  media ingress, desktop input gestures, controller and audio policy across
+  platforms, retaining explicit MediaCodec/AAudio/Keystore and D3D11/WASAPI
+  adapters. Use common bounded, video-first BUD batches and promptly drain bursts.
+  Remove unused nix AIO features and the resulting unmaintained pin-utils
+  dependency without changing upstream Rust implementation or unrelated versions.
+  Retain third-party licenses and local-change notices in Windows/Android packages.
+- **Quality checks and project documentation:** enforce Sonar Quality Gate
+  results with measured Rust and release-packaging coverage, alongside Clippy,
+  advisory/license/source checks and workflow lint. Pin the affected CI actions
+  to immutable commits and restrict tool downloads/redirects to HTTPS while
+  preserving SHA-256 checks. Add Android ARMv7/ARM64, lint and optional-AAudio-symbol
+  checks. Stabilize the Windows overlay drag regression fixture by waiting for
+  initial window placement before measuring movement, preserving its assertions.
+  Retire temporary TV test overlays while retaining useful errors and regression
+  tests. README now includes AI-development disclosure, main-branch quality badges
+  with dependency-scope context, and a live Star History chart.
+
+## Compatibility and validation
+
+**Windows 11 x64 with Direct3D feature level 11.0+ and compatible drivers** remains
+required. Existing Windows video capabilities and their experimental status
+remain as documented in v0.9.5; this release does not add another Windows decoder,
+HDR, GPU AI mode or verified driver/compositor zero-copy guarantee.
+
+The Android APK requires **Android 10 (API 29)+** and includes **ARMv7 and ARM64**.
+The initial TV client has live validation on Xiaomi TV Box S (3rd Gen) EU,
+Android 14 with 32-bit ARM userspace: H.264, HEVC 8-bit, NVIDIA-host Main10,
+remote mouse and GameSir controller forwarding. Windows wired controller
+forwarding is also live-tested. Other devices, audio routes, surround outputs
+and rumble combinations require their own testing. DirectInput-only Windows
+pads and Sony raw touch/gyro/adaptive-trigger passthrough are not implemented.
+The host's normal controller driver and permissions are still required.
+
+In the tested TV setup BUD at 50 Mbit/s was stable; sustained WebRTC 50 Mbit/s
+still caused delay/video-channel closure, while around 30 Mbit/s was stable.
+This is a transport-specific observation, not a universal hardware bitrate cap.
+The AMD-host TV test returned 8-bit. 10-bit remains SDR, not HDR. Android adds
+no 4:4:4, Windows BUD USB HID mode, VRR, AISR or Windows-equivalent Zero copy mode.
+Surface output avoids application CPU pixel readback; driver/compositor copies
+and physical scanout remain unverified. No quantified latency gain is claimed.
+Some remotes cannot report simultaneous OK and direction presses for dragging.
+Diagnostic export requires a compatible Android document-provider/sharing app.
+
+## Requirements and upgrading
+
+**Windows:** close the client and extract **EvoParseq-v0.9.6-win64.zip**, retaining
+settings.json under the same Windows account. Help > Check for updates offers
+this stable release. Native settings and protected remembered sessions are
+retained; protected credentials are not portable between accounts or machines.
+The legacy **ParsecWebTurn-v0.9.6-win64.zip** contains the identical executable
+under the old filename. Both ZIPs exclude user settings and the optional NVIDIA
+runtime. Older pre-rename updaters may need a one-time manual upgrade.
+
+**Android TV:** install **EvoParseq-TV.apk**, or use **Settings > Updates** in an
+existing distribution-signed installation. Stable v0.9.6 has versionCode 30,
+newer than the signed dev.5 build; Include prereleases is not required to receive
+this stable version. Android confirms installation and may first request install
+permission. Normal signed updates retain settings and remembered sign-in.
+**EvoParseq-TV-v0.9.6.zip** includes the same APK, setup guide and notices.
+
+Old debug-signed previews, including v0.9.6-dev.1, have a different certificate:
+uninstall once and install the distribution-signed APK if the signature is
+rejected. Uninstalling erases private settings and remembered sign-in. Already
+distribution-signed dev.2-dev.5 builds can update in place and should not be
+uninstalled for this upgrade.
+
+Verify downloaded assets with SHA256SUMS.txt. The Windows ZIP and TV APK are
+separate applications for their respective platforms. See README, MIGRATION.md
+and the Android TV README for setup and platform limits. EvoParseq remains
+independent of Parsec, Unity and lowlat; their applicable terms and licenses
+remain in force.
 
 ## v0.9.6-dev.5 — Audio controls, Android TV updates and recovery (2026-11-06)
 
@@ -881,6 +1128,69 @@ User-facing changes are listed below. Native versions marked **dev** are develop
 builds, not published stable releases.
 
 ## Unreleased
+
+
+## What's new and improved
+
+- **Windows and Linux multi-display:** open up to three host-reported outputs
+  over one WebRTC or BUD connection, with one decoder per display and one
+  shared audio pipeline. Each additional display has independent resolution,
+  fullscreen and input controls. Resolution changes refresh the host settings
+  before updating the selected display, preserving other outputs' settings.
+  Closing an additional window leaves the other streams running.
+- **Cross-display input:** Windows sends the clicked display and position before
+  forwarding the activating click and restores the cursor on the destination
+  display. Linux uses native Wayland drag-and-drop for held-button handoff
+  between stream windows while retaining focused clipboard access.
+- **Linux Vulkan Video:** H.264, HEVC Main and capability-gated HEVC Main10
+  playback, with saved Intel, AMD or NVIDIA GPU selection. Decode and
+  presentation share one Vulkan device and use GPU timeline synchronization
+  where supported. NV12 and P010 decoder images feed the GPU color conversion
+  pass directly. Main10 presentation is SDR.
+- **Linux desktop and audio:** shared launcher, Settings, session overlay and
+  connection statistics, with secure remembered sign-in through the Secret
+  portal. PipeWire provides local volume and mute, automatic device recovery,
+  stereo Opus and BUD PCM or supported 5.1/7.1 output. Normal keyboard and mouse,
+  opt-in BUD HID, focused text clipboard and controllers with rumble are wired.
+- **Linux networking and session controls:** shared STUN, custom TURN and
+  Cloudflare TURN settings, direct-only and Force TURN modes, and optional
+  DSCP/socket-priority hints. The overlay exposes display, resolution, bitrate,
+  frame-rate and frame-pacing requests. Vulkan adaptive presentation is available
+  when supported.
+- **Windows reliability:** fix a BUD teardown deadlock that could freeze the
+  client and remove duplicate scrollbars from information pages.
+- **Android TV updates:** check GitHub for signed stable or preview builds and
+  hand verified APKs to the Android system installer. Android versionCode is 35.
+- **Virtual displays:** the guide recommends ParsecDisplay / parsec-vdd for
+  configuring host-side virtual outputs using Parsec's installed driver. The
+  client opens existing extended outputs reported by the host.
+
+## Compatibility and validation
+
+Windows requires Windows 11 x64 and Direct3D feature level 11.0+. Android TV
+requires Android 10 (API 29) or later on ARMv7 or ARM64. The Linux preview
+requires Wayland, PipeWire, Flatpak 1.15.6 or later and a graphics driver with
+compatible Vulkan Video support. The maintainer tested Linux H.264 on Intel,
+AMD and NVIDIA, including RTX 3060 on hybrid Nobara, and HEVC on tested Intel
+hardware. Cross-display dragging was tested on Zorin OS 18/GNOME. GPU support
+and Wayland presentation depend on the driver and compositor. Requesting
+adaptive presentation does not verify physical VRR. Linux 4:4:4 and Windows AI
+video processing are outside the Linux preview.
+
+## Requirements and upgrading
+
+**Windows:** close the client and extract **EvoParseq-v0.9.8-win64.zip**.
+**ParsecWebTurn-v0.9.8-win64.zip** contains the identical executable under the
+old filename. The packages exclude user settings and the optional NVIDIA runtime.
+
+**Android TV:** install **EvoParseq-TV.apk** or use **Settings > Updates**.
+**EvoParseq-TV-v0.9.8.zip** includes the same APK, setup guide and license notices.
+The distribution signing certificate is unchanged.
+
+**Linux:** install **EvoParseq-Linux-v0.9.8-x86_64.flatpak**. The existing
+application ID and private settings directory are retained.
+
+Verify downloads with `SHA256SUMS.txt`. [Changes since v0.9.7](https://github.com/vampywiz17/EvoParseq/compare/v0.9.7...v0.9.8)
 
 - Extend original-surface Zero copy to HEVC Main10 4:2:0 P010. Check optional P010 displayable support at setup; decode directly into displayable P010 DPB textures and retain existing presentation leases. No application pixel copy, RGB target, processor/shader pass or new per-frame format probe is added. Unsupported setup/runtime falls back to normal Media Foundation rendering without a silent 8-bit downgrade.
 - Report original P010 presentation and actual decoded 10-bit depth without claiming final compositor/scanout output depth. HEVC 10-bit 4:2:0 Zero copy is now live-confirmed on tested AMD and NVIDIA systems; Intel HEVC paths under the current decoder policy still require live testing.

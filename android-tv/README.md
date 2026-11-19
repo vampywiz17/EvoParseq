@@ -1,6 +1,6 @@
 # EvoParseq for Android TV
 
-Android dev release: **0.9.6-dev.5** on `dev`. Windows, Android and Linux development now share the `dev` branch. First live device: Xiaomi TV Box S
+Stable release: [**EvoParseq v0.9.8**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8). First live device: Xiaomi TV Box S
 (3rd Gen) EU, Android 14 (32-bit ARM userspace). Google TV / Android TV interface,
 D-pad navigation, two-factor sign-in and shared Rust account/session logic.
 

@@ -26,17 +26,35 @@ requires no browser, WebView or helper executable.
 **This is an independent community project, not affiliated with or endorsed by
 Parsec, Unity or lowlat.** A Parsec account and a compatible host are required.
 
-**This is the development branch: Windows, Android TV and experimental Linux Flatpak support.**
-The latest stable Windows/Android release is
-[**EvoParseq v0.9.7**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.7)
-on `main`. The current dev release,
-[**v0.9.8-dev.3**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8-dev.3),
-includes Windows ZIPs, the signed Android TV APK and the experimental Linux Flatpak.
-All three report version **0.9.8-dev.3**; development continues here on `dev`.
-Linux development artifacts are also available from successful
-[dev Linux CI runs](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Adev).
-Windows previews are installed manually; signed Android builds can check the
-prerelease channel in Settings > Updates. Platform capabilities differ; see below.
+The stable [**EvoParseq v0.9.8**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8)
+release includes Windows x64, the signed Android TV APK and an experimental
+Linux x86_64 Flatpak. Development continues on `dev`.
+
+## Code quality
+
+Live SonarQube results for `main`. Select a badge to open the dashboard.
+
+| Metric | `main` |
+| --- | --- |
+| Quality Gate | [![main: Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=vampywiz17_EvoParseq&branch=main&metric=alert_status)](https://sonarcloud.io/dashboard?id=vampywiz17_EvoParseq&branch=main) |
+| Coverage (overall code) | [![main: Coverage (overall code)](https://sonarcloud.io/api/project_badges/measure?project=vampywiz17_EvoParseq&branch=main&metric=coverage)](https://sonarcloud.io/dashboard?id=vampywiz17_EvoParseq&branch=main) |
+| Security (overall code) | [![main: Security (overall code)](https://sonarcloud.io/api/project_badges/measure?project=vampywiz17_EvoParseq&branch=main&metric=security_rating)](https://sonarcloud.io/dashboard?id=vampywiz17_EvoParseq&branch=main) |
+| Reliability (overall code) | [![main: Reliability (overall code)](https://sonarcloud.io/api/project_badges/measure?project=vampywiz17_EvoParseq&branch=main&metric=reliability_rating)](https://sonarcloud.io/dashboard?id=vampywiz17_EvoParseq&branch=main) |
+| Maintainability (overall code) | [![main: Maintainability (overall code)](https://sonarcloud.io/api/project_badges/measure?project=vampywiz17_EvoParseq&branch=main&metric=sqale_rating)](https://sonarcloud.io/dashboard?id=vampywiz17_EvoParseq&branch=main) |
+| Duplicated lines (overall code) | [![main: Duplicated lines (overall code)](https://sonarcloud.io/api/project_badges/measure?project=vampywiz17_EvoParseq&branch=main&metric=duplicated_lines_density)](https://sonarcloud.io/dashboard?id=vampywiz17_EvoParseq&branch=main) |
+
+The metric badges describe **overall code**, not just newly changed lines.
+The Quality Gate applies the configured **new-code** requirements; a passing
+gate does not mean that overall coverage is 100% or that all existing findings
+have been resolved. The dashboard shows both scopes. GitHub may briefly cache
+badge images after a new analysis.
+
+Sonar also analyzes checked-in dependencies, including upstream test fixtures
+and configuration files. Their findings count toward the overall results,
+especially the Security rating, so the badges are not a score of EvoParseq's
+own implementation alone and can give a misleading impression without that
+context. Dependency findings still require review; upstream origin does not
+automatically make a finding harmless or a false positive.
 
 ## Linux Flatpak preview
 
@@ -48,8 +66,8 @@ prerelease channel in Settings > Updates. Platform capabilities differ; see belo
   WebRTC/BUD, media ingress, normal input and diagnostic models are reused.
   Linux adapters provide Vulkan Video/Vulkan, PipeWire, Wayland input and
   Secret portal credential protection.
-- **Playback:** WebRTC and explicit BUD selection, progressive H.264 or capability-gated HEVC Main 8-bit 4:2:0
-  and stereo WebRTC Opus or BUD Opus/PCM with optional matched 5.1/7.1 output. Original NV12 decoder surfaces feed the same-device Vulkan
+- **Playback:** WebRTC and explicit BUD selection, progressive H.264 or capability-gated HEVC Main/Main10 4:2:0
+  and stereo WebRTC Opus or BUD Opus/PCM with optional matched 5.1/7.1 output. Original NV12 and P010 decoder surfaces feed the same-device Vulkan
   presentation shader; no application-side decoded-image copy or CPU readback.
   Shader conversion still costs GPU work: this is GPU-resident rendering,
   **not the application's Zero copy mode**.
@@ -94,7 +112,7 @@ The successful Nobara test shows that hybrid hardware alone is not a blocker;
 no alternative decoder or cross-GPU copy fallback has been introduced.
 
 HEVC Main10/P010 decoding is now available after selected-device capability checks,
-with SDR presentation and live validation pending. Display timing VRR requests
+with SDR presentation. Main10 has been tested on the maintainer's Intel ARL system. Display timing VRR requests
 adaptive presentation; physical VRR remains unverified.
 
 **Not yet integrated on Linux:** 4:4:4 playback, the application's
