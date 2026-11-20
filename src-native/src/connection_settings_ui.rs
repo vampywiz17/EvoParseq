@@ -833,11 +833,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
         INPUT_MODE,
         242,
         &InputMode::LABELS,
-        if page.model.phaze {
-            s.phaze_input_mode
-        } else {
-            InputMode::current(&s)
-        } as usize,
+        InputMode::for_service(&s, page.model.phaze) as usize,
     );
     row_label(
         hwnd,
@@ -1432,11 +1428,7 @@ unsafe fn save(hwnd: HWND, page: &mut Page) {
         #[cfg(feature = "bud")]
         {
             if let Some(mode) = InputMode::ALL.get(selection(hwnd, INPUT_MODE)).copied() {
-                if model.phaze {
-                    s.phaze_input_mode = mode;
-                } else {
-                    mode.apply(s);
-                }
+                mode.apply_for_service(s, model.phaze);
             }
         }
     }

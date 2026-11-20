@@ -652,12 +652,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         rtt: None,
         audio_bytes: 0,
         raw_audio: saved.allow_raw_audio,
-        hid_devices: match saved.phaze_input_mode {
-            crate::connection_settings::InputMode::Standard => (false, false),
-            crate::connection_settings::InputMode::HidMouse => (true, false),
-            crate::connection_settings::InputMode::HidKeyboard => (false, true),
-            crate::connection_settings::InputMode::HidBoth => (true, true),
-        },
+        hid_devices: saved.phaze_input_mode.devices(),
         audio_codec: None,
         authenticated: false,
         last_clipboard: String::new(),
