@@ -259,7 +259,9 @@ impl Device {
         if initial || self.id == KEYBOARD_ID && self.idle != 0 {
             self.last_sent = Some(Instant::now());
         }
-        let mut payload = vec![0; 4];
+        // The Phaze interrupt completion uses a signed transfer count.
+        // Nonnegative values are the number of data bytes, not a status code.
+        let mut payload = (report.len as i32).to_le_bytes().to_vec();
         payload.extend_from_slice(report.data());
         Some((request, payload, initial))
     }
@@ -354,7 +356,9 @@ mod tests {
         for _ in 0..3 {
             assert!(keyboard.enqueue_read([0; 33]));
         }
-        assert_eq!(keyboard.complete().unwrap().1, [0; 33]);
+        let neutral = keyboard.complete().unwrap().1;
+        assert_eq!(&neutral[..4], &29i32.to_le_bytes());
+        assert_eq!(&neutral[4..], &[0; 29]);
         for down in [true, false] {
             keyboard.input(Input::Key {
                 usage: 4,

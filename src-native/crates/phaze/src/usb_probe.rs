@@ -452,7 +452,7 @@ mod tests {
             let (reply, initial_device) = usb.next_device_frame().unwrap();
             assert_eq!(initial_device, Some(device));
             assert_eq!(reply[9], 19);
-            assert_eq!(&reply[42..46], &[0; 4]);
+            assert_eq!(le(&reply[42..46]) as usize, neutral);
             assert_eq!(reply.len() - 46, neutral);
             device_request(
                 &mut usb.devices,
