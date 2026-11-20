@@ -6,6 +6,7 @@ const PREFIX: usize = 8;
 const HEADER: usize = 33;
 const MAX_BODY: usize = 128 * 1024;
 pub(crate) const LINK_REPLY: &[u8] = &[16, 1];
+pub(crate) const PONG_BYTES: usize = 1 + PREFIX + HEADER;
 
 #[derive(Default)]
 pub(crate) struct Probe {
@@ -14,6 +15,7 @@ pub(crate) struct Probe {
     acknowledged: bool,
     failed: bool,
     pending: Vec<u8>,
+    pong: Option<[u8; PONG_BYTES]>,
 }
 
 impl Probe {
@@ -22,6 +24,7 @@ impl Probe {
             self.link_seen = false;
             self.acknowledged = false;
             self.pending.clear();
+            self.pong = None;
         }
         self.controls_host = granted;
     }
@@ -43,6 +46,11 @@ impl Probe {
     pub(crate) fn disable(&mut self) {
         self.failed = true;
         self.pending.clear();
+        self.pong = None;
+    }
+
+    pub(crate) fn take_pong(&mut self) -> Option<[u8; PONG_BYTES]> {
+        self.pong.take()
     }
 
     pub(crate) fn receive(
@@ -77,6 +85,14 @@ impl Probe {
                 "Phaze USB probe payload length mismatch"
             );
             observe(body[0], payload_len);
+            if self.controls_host && self.acknowledged && body[0] == 10 && payload_len == 0 {
+                let mut pong = [0; PONG_BYTES];
+                pong[0] = 15;
+                pong[5..9].copy_from_slice(&(HEADER as u32).to_le_bytes());
+                pong[9..].copy_from_slice(body);
+                pong[9] = 11;
+                self.pong = Some(pong);
+            }
             consumed = body_start + body_len;
         }
         self.pending.drain(..consumed);
@@ -110,6 +126,30 @@ mod tests {
         assert!(probe
             .receive(&[0, 0, 0, 0, 255, 255, 255, 255], |_, _| {})
             .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn usb_ping_echoes_request_fields_without_submitting_input() -> Result<()> {
+        let mut ping = [0; PREFIX + HEADER];
+        ping[4..8].copy_from_slice(&(HEADER as u32).to_le_bytes());
+        ping[8] = 10;
+        ping[13..37].fill(0x42);
+        let mut probe = Probe::default();
+        probe.receive(&ping, |_, _| {})?;
+        assert!(probe.take_pong().is_none());
+        probe.control(true);
+        probe.link_state(0);
+        probe.replied();
+        probe.receive(&ping, |_, _| {})?;
+        let pong = probe.take_pong().unwrap();
+        ping[8] = 11;
+        assert_eq!(pong[0], 15);
+        assert_eq!(pong[1..], ping);
+        ping[8] = 10;
+        probe.receive(&ping, |_, _| {})?;
+        probe.control(false);
+        assert!(probe.take_pong().is_none());
         Ok(())
     }
 

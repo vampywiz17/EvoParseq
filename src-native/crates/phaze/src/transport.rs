@@ -790,6 +790,14 @@ pub async fn run(
                 probe.replied();
                 sink.usb_probe_event("link_reply_queued", Some(reply[1]), 1);
             }
+            if reliable.fits(crate::usb_probe::PONG_BYTES, 48) {
+                if let Some(pong) = probe.take_pong() {
+                    for packet in reliable.frame(&pong)? {
+                        send(&mut c, &packet)?;
+                    }
+                    sink.usb_probe_event("pong_queued", Some(11), 0);
+                }
+            }
         }
         if reliable.pending().count() < 48 && cursors.take_refresh_request() {
             for packet in reliable.frame(&[20])? {
