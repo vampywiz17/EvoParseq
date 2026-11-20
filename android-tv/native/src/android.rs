@@ -249,7 +249,7 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_settings(
                     })),
                 "Unavailable TV setting"
             );
-            value.select(&field, index)?;
+            value.select_for_service(&field, index, service == account::Service::Parsec)?;
         }
         Ok(value.view_for(service))
     })();

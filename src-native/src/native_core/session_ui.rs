@@ -5,7 +5,8 @@ use super::{
     profile::Video,
     session_model::{
         current_choice, resolution_text, Command, Notification, PanelFields, State, Status, View,
-        BANDWIDTH_CHOICES, FPS_CHOICES, HOST_RESOLUTION, RESOLUTION_CHOICES,
+        FPS_CHOICES, HOST_RESOLUTION, PARSEC_BANDWIDTH_CHOICES, PHAZE_BANDWIDTH_CHOICES,
+        RESOLUTION_CHOICES,
     },
     ui::{draw_button, wide},
 };
@@ -91,6 +92,7 @@ struct Panel {
     scroll: i32,
     controls: [HWND; 6],
     initial_fields: [String; 3],
+    saved_video: Video,
     display_ids: Vec<String>,
     fullscreen: HWND,
     font: HFONT,
@@ -140,7 +142,10 @@ unsafe fn collect(p: &Panel) -> Result<Video> {
         immersive: crate::input_state::immersive_value(select(5) as usize),
         fullscreen: SendMessageW(p.fullscreen, BM_GETCHECK, 0, 0) == BST_CHECKED as isize,
     }
-    .parse()
+    .parse_preserving(
+        !(&*p.window).session.phaze.load(Ordering::Acquire),
+        Some(&p.saved_video),
+    )
     .map(|video| (&*p.window).session.supported_video(video))
 }
 unsafe fn close(hwnd: HWND) {
@@ -883,9 +888,8 @@ pub unsafe fn toggle(
         SetFocus(parent);
         return;
     }
-    let video = window
-        .session
-        .panel_video(manager.view().0.native_core.video);
+    let saved_video = manager.view().0.native_core.video;
+    let video = window.session.panel_video(saved_video.clone());
     let mut panel = Box::new(Panel {
         window,
         window_owned: false,
@@ -893,9 +897,13 @@ pub unsafe fn toggle(
         controls: [null_mut(); 6],
         initial_fields: [
             resolution_text(video.resolution),
-            video.bandwidth_mbps.unwrap().to_string(),
+            video
+                .requested_bandwidth(!window.session.phaze.load(Ordering::Acquire))
+                .unwrap_or(10)
+                .to_string(),
             video.fps.unwrap().to_string(),
         ],
+        saved_video,
         display_ids: Vec::new(),
         fullscreen: null_mut(),
         font: super::ui::font(16, 400),
@@ -1058,7 +1066,18 @@ pub unsafe fn toggle(
         );
     }
     p.controls[0] = combo(hwnd, p, 20, 250, RESOLUTION_CHOICES, &p.initial_fields[0]);
-    p.controls[1] = combo(hwnd, p, 21, 294, BANDWIDTH_CHOICES, &p.initial_fields[1]);
+    p.controls[1] = combo(
+        hwnd,
+        p,
+        21,
+        294,
+        if window.session.phaze.load(Ordering::Acquire) {
+            PHAZE_BANDWIDTH_CHOICES
+        } else {
+            PARSEC_BANDWIDTH_CHOICES
+        },
+        &p.initial_fields[1],
+    );
     p.controls[2] = combo(hwnd, p, 22, 338, FPS_CHOICES, &p.initial_fields[2]);
     p.controls[3] = combo(
         hwnd,
@@ -1364,6 +1383,33 @@ mod tests {
             let panel = panel(&window);
             assert!(!panel.is_null());
             assert_eq!(text(GetDlgItem(panel, PHAZE_GUESTS as i32)), "Guests");
+            let bandwidth = GetDlgItem(panel, 21);
+            assert_eq!(
+                SendMessageW(bandwidth, CB_GETCOUNT, 0, 0),
+                PHAZE_BANDWIDTH_CHOICES.len() as isize
+            );
+            for choice in PHAZE_BANDWIDTH_CHOICES {
+                assert_ne!(
+                    SendMessageW(
+                        bandwidth,
+                        CB_FINDSTRINGEXACT,
+                        usize::MAX,
+                        wide(choice).as_ptr() as isize
+                    ),
+                    CB_ERR as isize
+                );
+            }
+            for choice in ["3", "7", "100", "150"] {
+                assert_eq!(
+                    SendMessageW(
+                        bandwidth,
+                        CB_FINDSTRINGEXACT,
+                        usize::MAX,
+                        wide(choice).as_ptr() as isize
+                    ),
+                    CB_ERR as isize
+                );
+            }
             assert!(GetDlgItem(panel, ADD_SCREEN as i32).is_null());
             for id in [
                 20,
@@ -1613,9 +1659,15 @@ mod tests {
                 resolution.top - card.bottom >= 12,
                 "Performance card needs space before the controls"
             );
+            // Parsec owns two additional bitrate presets; the Phaze list is
+            // intentionally unchanged and is tested in its own panel.
+            assert_eq!(
+                &PARSEC_BANDWIDTH_CHOICES[crate::session_preferences::LEGACY_BANDWIDTH_CHOICES.len()..],
+                &["100", "150"]
+            );
             for (id, choices) in [
                 (20, RESOLUTION_CHOICES),
-                (21, BANDWIDTH_CHOICES),
+                (21, PARSEC_BANDWIDTH_CHOICES),
                 (22, FPS_CHOICES),
             ] {
                 let control = GetDlgItem(panel, id);
@@ -1773,7 +1825,7 @@ mod tests {
         let mut events = std::collections::VecDeque::new();
         events.clear();
         window.events.take_batch(&mut events);
-        assert!(events.iter().any(|e|matches!(e,crate::window::Event::NativeSession(Command::Apply(v)) if v.resolution==Resolution::Host && v.immersive==0 && v.fps==Some(90) && v.bandwidth_mbps==Some(35))));
+        assert!(events.iter().any(|e|matches!(e,crate::window::Event::NativeSession(Command::Apply(v)) if v.resolution==Resolution::Host && v.immersive==0 && v.fps==Some(90) && v.requested_bandwidth(true)==Some(35))));
         unsafe {
             select_text(panel, 22, "120");
             SendMessageW(panel, WM_COMMAND, 22 | ((CBN_SELCHANGE as usize) << 16), 0);
@@ -1809,7 +1861,7 @@ mod tests {
             }
             events.clear();
             window.events.take_batch(&mut events);
-            assert!(events.iter().any(|event|matches!(event,crate::window::Event::NativeSession(Command::Apply(v)) if v.resolution==Resolution::Fixed(1280,720) && v.bandwidth_mbps==Some(15) && v.fps==Some(60) && v.constant_fps==Some(true) && v.rotated==Some(true) && v.immersive==mode && v.fullscreen)));
+            assert!(events.iter().any(|event|matches!(event,crate::window::Event::NativeSession(Command::Apply(v)) if v.resolution==Resolution::Fixed(1280,720) && v.requested_bandwidth(true)==Some(15) && v.fps==Some(60) && v.constant_fps==Some(true) && v.rotated==Some(true) && v.immersive==mode && v.fullscreen)));
         }
         unsafe {
             SendMessageW(panel, WM_COMMAND, SECURE_ATTENTION, 0);

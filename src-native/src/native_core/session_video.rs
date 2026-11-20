@@ -572,7 +572,7 @@ impl HostSettings {
         crate::event_log::record(
             "INFO",
             "native_host_video_requested",
-            serde_json::json!({"fps":video.fps,"constant_fps":video.constant_fps,"bandwidth_mbps":video.bandwidth_mbps,"rotated":video.rotated,"resolution":video.resolution}),
+            serde_json::json!({"fps":video.fps,"constant_fps":video.constant_fps,"bandwidth_mbps":video.requested_bandwidth(true),"rotated":video.rotated,"resolution":video.resolution}),
         );
         self.confirmation = Some(confirmation);
         Ok(())
