@@ -1,12 +1,12 @@
 //! Android TV request presets. Rust owns validation; the TV view only renders
 //! these choices. Decoder support and actual host replies are separate checks.
 use crate::session_preferences::{
-    bandwidth_choices, PanelFields, BANDWIDTH_CHOICES, FPS_CHOICES, PARSEC_BANDWIDTH_CHOICES,
-    RESOLUTION_CHOICES,
+    BANDWIDTH_CHOICES, FPS_CHOICES, PARSEC_BANDWIDTH_CHOICES, PanelFields, RESOLUTION_CHOICES,
+    bandwidth_choices,
 };
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -397,10 +397,12 @@ mod tests {
         assert!(value.select("unknown", 0).is_err());
         value.select("video", 2).unwrap();
         assert_eq!(value.video, 2);
-        assert!(Preferences::parse(
-            "{\"transport\":99,\"video\":0,\"resolution\":0,\"fps\":0,\"bandwidth\":0}"
-        )
-        .is_err());
+        assert!(
+            Preferences::parse(
+                "{\"transport\":99,\"video\":0,\"resolution\":0,\"fps\":0,\"bandwidth\":0}"
+            )
+            .is_err()
+        );
         assert!(Preferences::parse(&"x".repeat(4097)).is_err());
     }
 }

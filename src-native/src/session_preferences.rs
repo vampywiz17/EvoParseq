@@ -1,5 +1,5 @@
 //! Shared video requests, presets and validation. No window, codec, storage or OS APIs.
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_BANDWIDTH_MBPS: u32 = 100;
@@ -168,6 +168,7 @@ pub const BANDWIDTH_CHOICES: &[&str] = &[
 pub const PARSEC_BANDWIDTH_CHOICES: &[&str] = &[
     "3", "5", "7", "10", "15", "20", "25", "30", "35", "40", "45", "50", "100", "150",
 ];
+#[cfg(any(target_os = "linux", target_os = "android", test))]
 pub fn bandwidth_choices(parsec: bool) -> &'static [&'static str] {
     if parsec {
         PARSEC_BANDWIDTH_CHOICES
@@ -198,10 +199,12 @@ pub struct PanelFields<'a> {
     pub fullscreen: bool,
 }
 impl PanelFields<'_> {
+    #[cfg(test)]
     pub fn parse(&self) -> Result<Video> {
         self.parse_for_service(false)
     }
 
+    #[cfg(any(target_os = "android", test))]
     pub fn parse_for_service(&self, parsec: bool) -> Result<Video> {
         self.parse_preserving(parsec, None)
     }
