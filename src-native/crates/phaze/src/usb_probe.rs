@@ -31,6 +31,11 @@ pub(crate) struct Probe {
     pong: Option<[u8; REPLY_HEADER]>,
     devices: Vec<Device>,
     outgoing: VecDeque<Vec<u8>>,
+    // Physical usages that pressed on ordinary input before their HID device
+    // became available. Keep the entire keyboard/mouse on that route until
+    // these presses are released, avoiding stuck modifiers and drag buttons.
+    standard_keys: [u64; 4],
+    standard_buttons: u8,
 }
 
 impl Probe {
@@ -48,9 +53,12 @@ impl Probe {
 
     pub(crate) fn input(&mut self, input: Input) -> bool {
         if input == Input::Release {
+            self.standard_keys.fill(0);
+            self.standard_buttons = 0;
             for device in &mut self.devices {
                 device.release();
             }
+            // Always send the standard session release as well.
             return false;
         }
         let id = if matches!(input, Input::Key { .. }) {
@@ -58,15 +66,57 @@ impl Probe {
         } else {
             MOUSE_ID
         };
-        if let Some(device) = self.devices.iter_mut().find(|dev| dev.id == id) {
-            // A selected but unavailable HID device must not swallow the
-            // command: the caller can still send it over ordinary Phaze input.
-            if self.controls_host && !self.failed && device.opened {
-                device.input(input);
-                return true;
+        let available = self.controls_host
+            && !self.failed
+            && self.devices.iter().any(|dev| dev.id == id && dev.opened);
+        match input {
+            Input::Key { usage, down, .. } => {
+                // Keyboard::key emits physical HID usages in the byte range.
+                let index = usize::from(usage);
+                if index >= 256 {
+                    return false;
+                }
+                if !available || self.standard_keys.iter().any(|bits| *bits != 0) {
+                    let bits = &mut self.standard_keys[index / 64];
+                    let mask = 1_u64 << (index % 64);
+                    if down {
+                        *bits |= mask;
+                    } else {
+                        *bits &= !mask;
+                    }
+                    return false;
+                }
             }
+            Input::Button { button, down, .. } => {
+                if !(1..=5).contains(&button) {
+                    return false;
+                }
+                if !available || self.standard_buttons != 0 {
+                    let mask = 1_u8 << (button - 1);
+                    if down {
+                        self.standard_buttons |= mask;
+                    } else {
+                        self.standard_buttons &= !mask;
+                    }
+                    return false;
+                }
+            }
+            Input::Motion { .. } | Input::Scroll { .. } => {
+                // A standard-path drag must keep its position and wheel on the
+                // same route, even if the HID mouse opens mid-drag.
+                if !available || self.standard_buttons != 0 {
+                    return false;
+                }
+            }
+            Input::Release => unreachable!("handled above"),
         }
-        false
+        // Only an opened and permitted device can consume the event.
+        self.devices
+            .iter_mut()
+            .find(|dev| dev.id == id && dev.opened)
+            .expect("checked selected HID device")
+            .input(input);
+        true
     }
 
     pub(crate) fn control(&mut self, granted: bool) {
@@ -554,13 +604,96 @@ mod tests {
             assert!(device.enqueue_read([0; HEADER]));
             let payload = device.complete().unwrap().1;
             let expected_len = if device.id == MOUSE_ID { 8 } else { 29 };
-            assert_eq!(&payload[..4], &(expected_len as i32).to_le_bytes());
+            assert_eq!(&payload[..4], &expected_len.to_le_bytes());
             if device.id == MOUSE_ID {
                 assert_eq!(&payload[4..], &[3, 0, 0, 0, 0, 0, 0, 0]);
             } else {
                 assert_eq!(&payload[4..], &[0; 29]);
             }
         }
+    }
+
+    #[test]
+    fn opening_hid_mid_press_keeps_key_up_and_modifiers_on_standard_input() {
+        let mut probe = Probe::new(false, true);
+        let key = |usage, down| Input::Key {
+            usage,
+            scan: 30,
+            modifiers: 0,
+            down,
+        };
+        let key_index = probe.devices.iter().position(|d| d.id == KEYBOARD_ID).unwrap();
+
+        // User presses Shift while the host has not opened its USB keyboard.
+        assert!(!probe.input(key(225, true)));
+        probe.control(true);
+        probe.devices[key_index].open();
+        // Typing during the outstanding Shift must also stay on normal input.
+        assert!(!probe.input(key(4, true)));
+        assert!(!probe.input(key(4, false)));
+        assert!(!probe.input(key(225, false)));
+
+        // After the final normal-path release, new presses may use HID.
+        assert!(probe.input(key(4, true)));
+        assert!(probe.input(key(4, false)));
+    }
+
+    #[test]
+    fn opening_hid_mid_drag_keeps_button_release_and_motion_on_standard_input() {
+        let mut probe = Probe::new(true, false);
+        let button = |number, down| Input::Button {
+            button: number,
+            x: 100,
+            y: 200,
+            down,
+        };
+        let motion = Input::Motion {
+            x: 101,
+            y: 201,
+            relative: false,
+        };
+        // Press before permission, then host opens HID in the middle of drag.
+        assert!(!probe.input(button(1, true)));
+        probe.control(true);
+        probe.devices[0].open();
+        assert!(!probe.input(motion));
+        assert!(!probe.input(button(2, true)));
+        assert!(!probe.input(button(1, false)));
+        assert!(!probe.input(Input::Scroll { x: 0, y: 120 }));
+        assert!(!probe.input(button(2, false)));
+        // Only after both buttons are released can HID take new input.
+        assert!(probe.input(motion));
+        assert!(probe.input(button(1, true)));
+        assert!(probe.input(button(1, false)));
+    }
+
+    #[test]
+    fn control_regrant_during_standard_key_press_and_focus_release_reset_routes() {
+        let mut probe = Probe::new(true, true);
+        let key = |down| Input::Key {
+            usage: 4,
+            scan: 30,
+            modifiers: 0,
+            down,
+        };
+        let keyboard = probe.devices.iter().position(|d| d.id == KEYBOARD_ID).unwrap();
+        probe.control(true);
+        probe.devices[keyboard].open();
+        assert!(probe.input(key(true)));
+        assert!(probe.input(key(false)));
+
+        probe.control(false);
+        assert!(!probe.input(key(true)));
+        probe.control(true);
+        probe.devices[keyboard].open();
+        assert!(!probe.input(key(false)));
+        assert!(probe.input(key(true)));
+        // Focus loss releases both the standard input and HID reports.
+        assert!(!probe.input(Input::Release));
+        assert_eq!(probe.standard_keys, [0; 4]);
+        assert_eq!(probe.standard_buttons, 0);
+        assert!(probe.input(key(true)));
+        assert!(probe.input(key(false)));
     }
 
     #[test]
