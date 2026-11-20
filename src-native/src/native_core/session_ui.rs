@@ -1632,9 +1632,12 @@ mod tests {
                 resolution.top - card.bottom >= 12,
                 "Performance card needs space before the controls"
             );
+            // Parsec owns two additional bitrate presets; the Phaze list is
+            // intentionally unchanged and is tested in its own panel.
+            assert_eq!(&PARSEC_BANDWIDTH_CHOICES[BANDWIDTH_CHOICES.len()..], &["100", "150"]);
             for (id, choices) in [
                 (20, RESOLUTION_CHOICES),
-                (21, BANDWIDTH_CHOICES),
+                (21, PARSEC_BANDWIDTH_CHOICES),
                 (22, FPS_CHOICES),
             ] {
                 let control = GetDlgItem(panel, id);

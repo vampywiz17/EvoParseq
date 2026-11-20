@@ -52,6 +52,9 @@ mod audio_android;
 #[cfg(target_os = "android")]
 mod phaze_android;
 #[cfg(target_os = "android")]
+// Android reuses the cross-platform Phaze adapter, whose optional HID builder
+// is currently selected by the Linux UI only. Keep the adapter unchanged.
+#[allow(dead_code)]
 #[path = "../../../src-native/src/phaze_client.rs"]
 mod phaze_client;
 #[cfg(target_os = "android")]
