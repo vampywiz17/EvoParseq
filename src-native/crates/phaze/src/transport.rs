@@ -443,7 +443,10 @@ pub async fn run(
     .await
     .context("Phaze candidate probing timed out")??;
     sink.stage("stun_authenticated");
-    let cid = ((own_cid as u64) << 32 | a.cid as u64)
+    // The authenticated answer assigns the ID used by host guest and controller
+    // messages. The client-chosen CID is only the initiating half of the DTLS CID.
+    let guest_id = a.cid;
+    let cid = ((own_cid as u64) << 32 | guest_id as u64)
         .to_le_bytes()
         .to_vec();
     let config = Config::builder()
@@ -730,10 +733,10 @@ pub async fn run(
                                 probe.control(
                                     guests
                                         .iter()
-                                        .any(|guest| guest.id == own_cid && guest.has_control),
+                                        .any(|guest| guest.id == guest_id && guest.has_control),
                                 );
                             }
-                            sink.peer_state(own_cid, state)
+                            sink.peer_state(guest_id, state)
                         }
                         Some(crate::control::HostControl::Removed(code)) => {
                             bail!("Phaze host ended the session (reason {code})");
@@ -763,7 +766,14 @@ pub async fn run(
                         let controller = wire::be(&frame, 1);
                         if let Some(probe) = &mut usb_probe {
                             usb_controller = Some(controller);
-                            probe.control(controller == own_cid);
+                            let granted = controller == guest_id;
+                            probe.control(granted);
+                            let event = if granted {
+                                "control_granted"
+                            } else {
+                                "control_not_granted"
+                            };
+                            sink.usb_probe_event(event, None, 0);
                         }
                         sink.controller(controller);
                     }
