@@ -517,6 +517,10 @@ pub async fn run(
     let mut usb_probe = sink
         .usb_probe_enabled()
         .then(crate::usb_probe::Probe::default);
+    let mut usb_controller = None;
+    if usb_probe.is_some() {
+        sink.usb_probe_event("started", None, 0);
+    }
     for p in reliable.frame(&wire::hello(sink.raw_audio()))? {
         send(&mut c, &p)?;
     }
@@ -720,7 +724,9 @@ pub async fn run(
                             sink.clipboard_text(text)
                         }
                         Some(crate::control::HostControl::Peers(state)) => {
-                            if let (Some(probe), Some(guests)) = (&mut usb_probe, &state.guests) {
+                            if let (Some(probe), Some(guests), None) =
+                                (&mut usb_probe, &state.guests, usb_controller)
+                            {
                                 probe.control(
                                     guests
                                         .iter()
@@ -753,7 +759,14 @@ pub async fn run(
                             sink.usb_probe_event("link_state", Some(frame[1]), 1);
                         }
                     }
-                    Some(17) if frame.len() == 5 => sink.controller(wire::be(&frame, 1)),
+                    Some(17) if frame.len() == 5 => {
+                        let controller = wire::be(&frame, 1);
+                        if let Some(probe) = &mut usb_probe {
+                            usb_controller = Some(controller);
+                            probe.control(controller == own_cid);
+                        }
+                        sink.controller(controller);
+                    }
                     _ => {}
                 }
             }
