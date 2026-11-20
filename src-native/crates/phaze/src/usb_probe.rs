@@ -622,7 +622,11 @@ mod tests {
             modifiers: 0,
             down,
         };
-        let key_index = probe.devices.iter().position(|d| d.id == KEYBOARD_ID).unwrap();
+        let key_index = probe
+            .devices
+            .iter()
+            .position(|d| d.id == KEYBOARD_ID)
+            .unwrap();
 
         // User presses Shift while the host has not opened its USB keyboard.
         assert!(!probe.input(key(225, true)));
@@ -676,7 +680,11 @@ mod tests {
             modifiers: 0,
             down,
         };
-        let keyboard = probe.devices.iter().position(|d| d.id == KEYBOARD_ID).unwrap();
+        let keyboard = probe
+            .devices
+            .iter()
+            .position(|d| d.id == KEYBOARD_ID)
+            .unwrap();
         probe.control(true);
         probe.devices[keyboard].open();
         assert!(probe.input(key(true)));
