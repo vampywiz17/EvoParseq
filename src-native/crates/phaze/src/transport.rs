@@ -790,7 +790,16 @@ pub async fn run(
                 probe.replied();
                 sink.usb_probe_event("link_reply_queued", Some(reply[1]), 1);
             }
-            if reliable.fits(crate::usb_probe::PONG_BYTES, 48) {
+            // Both USB management responses fit one reliable packet each.
+            if reliable.fits(1, 48) {
+                if let Some(hello) = probe.take_hello() {
+                    for packet in reliable.frame(&hello)? {
+                        send(&mut c, &packet)?;
+                    }
+                    sink.usb_probe_event("hello_queued", Some(1), 130);
+                }
+            }
+            if reliable.fits(1, 48) {
                 if let Some(pong) = probe.take_pong() {
                     for packet in reliable.frame(&pong)? {
                         send(&mut c, &packet)?;

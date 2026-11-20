@@ -6,7 +6,10 @@ const PREFIX: usize = 8;
 const HEADER: usize = 33;
 const MAX_BODY: usize = 128 * 1024;
 pub(crate) const LINK_REPLY: &[u8] = &[16, 1];
-pub(crate) const PONG_BYTES: usize = 1 + PREFIX + HEADER;
+const REPLY_HEADER: usize = 1 + PREFIX + HEADER;
+const HELLO_BYTES: usize = REPLY_HEADER + 130;
+const USB_VERSION: [u8; 2] = 9u16.to_le_bytes();
+const PROBE_NAME: &[u8] = b"EvoParseq HID probe";
 
 #[derive(Default)]
 pub(crate) struct Probe {
@@ -15,7 +18,8 @@ pub(crate) struct Probe {
     acknowledged: bool,
     failed: bool,
     pending: Vec<u8>,
-    pong: Option<[u8; PONG_BYTES]>,
+    hello: Option<[u8; HELLO_BYTES]>,
+    pong: Option<[u8; REPLY_HEADER]>,
 }
 
 impl Probe {
@@ -24,6 +28,7 @@ impl Probe {
             self.link_seen = false;
             self.acknowledged = false;
             self.pending.clear();
+            self.hello = None;
             self.pong = None;
         }
         self.controls_host = granted;
@@ -46,10 +51,15 @@ impl Probe {
     pub(crate) fn disable(&mut self) {
         self.failed = true;
         self.pending.clear();
+        self.hello = None;
         self.pong = None;
     }
 
-    pub(crate) fn take_pong(&mut self) -> Option<[u8; PONG_BYTES]> {
+    pub(crate) fn take_hello(&mut self) -> Option<[u8; HELLO_BYTES]> {
+        self.hello.take()
+    }
+
+    pub(crate) fn take_pong(&mut self) -> Option<[u8; REPLY_HEADER]> {
         self.pong.take()
     }
 
@@ -85,19 +95,34 @@ impl Probe {
                 "Phaze USB probe payload length mismatch"
             );
             observe(body[0], payload_len);
-            if self.controls_host && self.acknowledged && body[0] == 10 && payload_len == 0 {
-                let mut pong = [0; PONG_BYTES];
-                pong[0] = 15;
-                pong[5..9].copy_from_slice(&(HEADER as u32).to_le_bytes());
-                pong[9..].copy_from_slice(body);
-                pong[9] = 11;
-                self.pong = Some(pong);
+            if self.controls_host && self.acknowledged {
+                match (body[0], &body[HEADER..]) {
+                    (0, hello) if hello.len() == 66 && hello.starts_with(&USB_VERSION) => {
+                        let mut reply = response::<HELLO_BYTES>(1, body);
+                        reply[REPLY_HEADER..REPLY_HEADER + 2].copy_from_slice(&USB_VERSION);
+                        reply[REPLY_HEADER + 2..REPLY_HEADER + 2 + PROBE_NAME.len()]
+                            .copy_from_slice(PROBE_NAME);
+                        self.hello = Some(reply);
+                    }
+                    (10, []) => self.pong = Some(response(11, body)),
+                    _ => {}
+                }
             }
             consumed = body_start + body_len;
         }
         self.pending.drain(..consumed);
         Ok(())
     }
+}
+
+fn response<const N: usize>(kind: u8, request: &[u8]) -> [u8; N] {
+    let mut reply = [0; N];
+    reply[0] = 15;
+    reply[5..9].copy_from_slice(&((N - 1 - PREFIX) as u32).to_le_bytes());
+    reply[9] = kind;
+    reply[14..38].copy_from_slice(&request[5..29]);
+    reply[38..42].copy_from_slice(&((N - REPLY_HEADER) as u32).to_le_bytes());
+    reply
 }
 
 fn le(bytes: &[u8]) -> u32 {
@@ -126,6 +151,31 @@ mod tests {
         assert!(probe
             .receive(&[0, 0, 0, 0, 255, 255, 255, 255], |_, _| {})
             .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn usb_hello_uses_the_probe_name_only_for_the_observed_version() -> Result<()> {
+        let mut hello = [0; PREFIX + HEADER + 66];
+        hello[4..8].copy_from_slice(&99u32.to_le_bytes());
+        hello[13..37].fill(0x21);
+        hello[37..41].copy_from_slice(&66u32.to_le_bytes());
+        let mut probe = Probe::default();
+        probe.control(true);
+        probe.replied();
+        probe.receive(&hello, |_, _| {})?;
+        assert!(probe.take_hello().is_none());
+        hello[41..43].copy_from_slice(&USB_VERSION);
+        hello[43..].fill(b'X');
+        probe.receive(&hello, |_, _| {})?;
+        let reply = probe.take_hello().unwrap();
+        assert_eq!((reply[0], reply[9]), (15, 1));
+        assert_eq!(le(&reply[5..9]), 163);
+        assert_eq!(le(&reply[38..42]), 130);
+        assert_eq!(&reply[14..38], &hello[13..37]);
+        assert_eq!(&reply[42..44], &USB_VERSION);
+        assert_eq!(&reply[44..44 + PROBE_NAME.len()], PROBE_NAME);
+        assert!(reply[44 + PROBE_NAME.len()..].iter().all(|&byte| byte == 0));
         Ok(())
     }
 
