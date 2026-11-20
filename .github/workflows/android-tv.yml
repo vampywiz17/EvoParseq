@@ -71,6 +71,7 @@ jobs:
             fi
           done
       - name: Restore protected release signing key
+        if: github.event_name != 'pull_request'
         env:
           KEYSTORE: ${{ secrets.ANDROID_TV_KEYSTORE_BASE64 }}
           PASSWORD: ${{ secrets.ANDROID_TV_KEYSTORE_PASSWORD }}
@@ -81,17 +82,24 @@ jobs:
           printf '%s' "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/evoparseq-tv.p12"
           keytool -list -keystore "$RUNNER_TEMP/evoparseq-tv.p12" -storetype PKCS12 -storepass:env PASSWORD -alias evoparseq-tv > /dev/null
       - name: Build and lint TV application
+        if: github.event_name != 'pull_request'
         working-directory: android-tv
         env:
           ANDROID_TV_KEYSTORE: ${{ runner.temp }}/evoparseq-tv.p12
           ANDROID_TV_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_TV_KEYSTORE_PASSWORD }}
         run: gradle --no-daemon assembleRelease lintRelease
+      - name: Build and lint isolated PR debug APK without release keys
+        if: github.event_name == 'pull_request'
+        working-directory: android-tv
+        run: gradle --no-daemon assembleDebug lintDebug
       - name: Verify signed APK
+        if: github.event_name != 'pull_request'
         run: '"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs android-tv/app/build/outputs/apk/release/app-release.apk'
       - name: Remove temporary signing key
         if: always()
         run: rm -f "$RUNNER_TEMP/evoparseq-tv.p12"
       - name: Describe preview artifact
+        if: github.event_name != 'pull_request'
         run: |
           mkdir -p dist/android-tv
           cp android-tv/app/build/outputs/apk/release/app-release.apk dist/android-tv/EvoParseq-TV.apk
@@ -137,7 +145,14 @@ jobs:
           sha256sum dist/android-tv/EvoParseq-TV.apk > dist/android-tv/SHA256.txt
           cp android-tv/app/build/reports/lint-results-release.html dist/android-tv/
       - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
         with:
           name: EvoParseq-Android-TV-preview
           path: dist/android-tv/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'pull_request'
+        with:
+          name: EvoParseq-Android-TV-PR-debug
+          path: android-tv/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
