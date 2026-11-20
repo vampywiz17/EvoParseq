@@ -183,7 +183,7 @@ pub fn bandwidth_choices(parsec: bool) -> &'static [&'static str] {
     }
 }
 /// Show a saved, non-preset value without making it a new selectable preset.
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", target_os = "linux", test))]
 pub fn bandwidth_menu(parsec: bool, current: &str) -> (Vec<String>, usize) {
     let presets = bandwidth_choices(parsec);
     let mut choices: Vec<String> = presets.iter().map(|value| (*value).to_owned()).collect();
