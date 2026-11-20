@@ -179,20 +179,16 @@ impl Device {
                 relative: true,
             } => self.mouse_report(x, y, 0, 0),
             Input::Button { button, down, .. } => {
-                let bit = match button {
-                    1 => 0,
-                    3 => 1,
-                    2 => 2,
-                    4 => 3,
-                    5 => 4,
-                    _ => return,
-                };
+                if !(1..=5).contains(&button) {
+                    return;
+                }
+                let bit = button - 1;
                 self.buttons = (self.buttons & !(1 << bit)) | (u8::from(down) << bit);
                 self.mouse_report(0, 0, 0, 0)
             }
             Input::Scroll { x, y } => {
                 self.wheel[0] = self.wheel[0].saturating_add(x);
-                self.wheel[1] = self.wheel[1].saturating_sub(y);
+                self.wheel[1] = self.wheel[1].saturating_add(y);
                 let [x, y] = self.wheel.map(|units| (units / 120).clamp(-127, 127));
                 if x == 0 && y == 0 {
                     return;
@@ -373,13 +369,25 @@ mod tests {
         mouse.open();
         assert!(mouse.enqueue_read([0; 33]));
         assert_eq!(&mouse.complete().unwrap().1[4..], &[3, 0, 0, 0, 0, 0, 0, 0]);
-        assert!(mouse.enqueue_read([0; 33]));
-        mouse.input(Input::Button {
-            button: 3,
-            down: true,
-            x: 0,
-            y: 0,
-        });
-        assert_eq!(mouse.complete().unwrap().1[5], 2);
+        for (button, mask) in [(1, 1), (2, 2), (3, 4)] {
+            for down in [true, false] {
+                assert!(mouse.enqueue_read([0; 33]));
+                mouse.input(Input::Button {
+                    button,
+                    down,
+                    x: 0,
+                    y: 0,
+                });
+                assert_eq!(mouse.complete().unwrap().1[5], if down { mask } else { 0 });
+            }
+        }
+        for direction in [1, -1] {
+            assert!(mouse.enqueue_read([0; 33]));
+            mouse.input(Input::Scroll {
+                x: 0,
+                y: direction * 120,
+            });
+            assert_eq!(mouse.complete().unwrap().1[10], direction as u8);
+        }
     }
 }
