@@ -853,11 +853,14 @@ pub async fn run(
                 if !reliable.fits(1, 48) {
                     break;
                 }
-                let Some(frame) = probe.next_device_frame() else {
+                let Some((frame, initial_device)) = probe.next_device_frame() else {
                     break;
                 };
                 for packet in reliable.frame(&frame)? {
                     send(&mut c, &packet)?;
+                }
+                if let Some(id) = initial_device {
+                    sink.usb_probe_event("neutral_report_queued", Some(id as u8), frame.len() - 46);
                 }
             }
         }

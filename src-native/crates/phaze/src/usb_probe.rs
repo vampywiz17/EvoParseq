@@ -120,7 +120,7 @@ impl Probe {
         if self.outgoing.is_empty() {
             for device in &mut self.devices {
                 device.release();
-                if let Some((request, payload)) = device.complete() {
+                if let Some((request, payload, _)) = device.complete() {
                     frames.push(record(19, &request, &payload));
                 }
             }
@@ -130,12 +130,16 @@ impl Probe {
         frames
     }
 
-    pub(crate) fn next_device_frame(&mut self) -> Option<Vec<u8>> {
+    pub(crate) fn next_device_frame(&mut self) -> Option<(Vec<u8>, Option<u32>)> {
         if let Some(frame) = self.outgoing.pop_front() {
-            return Some(frame);
+            return Some((frame, None));
         }
-        let (request, payload) = self.devices.iter_mut().find_map(Device::complete)?;
-        Some(record(19, &request, &payload))
+        for device in &mut self.devices {
+            if let Some((request, payload, initial)) = device.complete() {
+                return Some((record(19, &request, &payload), initial.then_some(device.id)));
+            }
+        }
+        None
     }
 
     pub(crate) fn take_hello(&mut self) -> Option<[u8; HELLO_BYTES]> {
@@ -237,6 +241,10 @@ fn device_request(
         }
         return Ok(());
     }
+    // The host sends this management request while enumerating each device.
+    if req[0] == 22 && payload.is_empty() {
+        return enqueue(queue, record(23, req, &[0; 4]));
+    }
     let id = le(&req[25..29]);
     let Some(device) = devices.iter_mut().find(|device| device.id == id) else {
         return Ok(());
@@ -271,8 +279,8 @@ fn device_request(
             enqueue(queue, record(14, req, &data))?;
         }
         18 => {
-            // The little-endian endpoint address is the first word.
-            let endpoint = payload.get(..4).map(le);
+            // The transfer word carries the USB endpoint in its low byte.
+            let endpoint = payload.get(..4).map(|word| word[0]);
             if endpoint != Some(0x81) || !device.enqueue_read(*req) {
                 enqueue(queue, record(19, req, &STALL))?;
             }
@@ -429,6 +437,11 @@ mod tests {
             assert_eq!(first[9], 39);
             assert_eq!(le(&first[38..42]) as usize, OPEN_PAYLOAD);
             usb.outgoing.clear();
+            req[0] = 22;
+            device_request(&mut usb.devices, &mut usb.outgoing, &req, &[])?;
+            let status = usb.outgoing.pop_front().unwrap();
+            assert_eq!(status[9], 23);
+            assert_eq!(&status[42..], &[0; 4]);
             req[0] = 18;
             device_request(
                 &mut usb.devices,
@@ -436,7 +449,8 @@ mod tests {
                 &req,
                 &0x81u32.to_le_bytes(),
             )?;
-            let reply = usb.next_device_frame().unwrap();
+            let (reply, initial_device) = usb.next_device_frame().unwrap();
+            assert_eq!(initial_device, Some(device));
             assert_eq!(reply[9], 19);
             assert_eq!(&reply[42..46], &[0; 4]);
             assert_eq!(reply.len() - 46, neutral);

@@ -7,21 +7,13 @@ use std::{
 
 pub(crate) const MOUSE_ID: u32 = 1;
 pub(crate) const KEYBOARD_ID: u32 = 2;
-// USB-IF reserved testing identity. Never impersonate a physical peripheral.
+// Synthetic identity, following the existing EvoParseq BUD HID convention.
 pub(crate) const VID: u16 = 0xffff;
 const MAX_REPORTS: usize = 128;
 const MAX_READS: usize = 64;
 const STALL: i32 = -32;
 
-// HID 1.11 report descriptors. Mouse report 1 is position only. Report 2
-// owns the buttons in both coordinate modes, including during drags.
-const MOUSE_REPORT: &[u8] = &[
-    0x05, 1, 0x09, 2, 0xa1, 1, 0x85, 1, 0x05, 1, 0x09, 0x30, 0x09, 0x31, 0x15, 0, 0x26, 0xff, 0x7f,
-    0x75, 16, 0x95, 2, 0x81, 2, 0x85, 2, 0x05, 9, 0x19, 1, 0x29, 5, 0x15, 0, 0x25, 1, 0x75, 1,
-    0x95, 5, 0x81, 2, 0x75, 3, 0x95, 1, 0x81, 3, 0x05, 1, 0x09, 0x30, 0x09, 0x31, 0x16, 1, 0x80,
-    0x26, 0xff, 0x7f, 0x75, 16, 0x95, 2, 0x81, 6, 0x09, 0x38, 0x15, 0x81, 0x25, 127, 0x75, 8, 0x95,
-    1, 0x81, 6, 0x05, 0x0c, 0x0a, 0x38, 2, 0x81, 6, 0xc0,
-];
+use lowlat_core::hid::MOUSE_REPORT;
 const KEYBOARD_REPORT: &[u8] = &[
     0x05, 1, 0x09, 6, 0xa1, 1, 0x05, 7, 0x19, 0xe0, 0x29, 0xe7, 0x15, 0, 0x25, 1, 0x75, 1, 0x95, 8,
     0x81, 2, 0x19, 0, 0x29, 0xdf, 0x95, 0xe0, 0x81, 2, 0x05, 8, 0x19, 1, 0x29, 5, 0x95, 5, 0x91, 2,
@@ -222,7 +214,7 @@ impl Device {
         let [xl, xh] = axis(x);
         let [yl, yh] = axis(y);
         Report::new(&[
-            2,
+            3,
             self.buttons,
             xl,
             xh,
@@ -250,7 +242,7 @@ impl Device {
         }
     }
 
-    pub(crate) fn complete(&mut self) -> Option<([u8; 33], Vec<u8>)> {
+    pub(crate) fn complete(&mut self) -> Option<([u8; 33], Vec<u8>, bool)> {
         if self.reads.is_empty() {
             return None;
         }
@@ -263,12 +255,13 @@ impl Device {
             .then(|| self.state_report())
         })?;
         let request = self.reads.pop_front()?;
-        if self.id == KEYBOARD_ID {
+        let initial = self.last_sent.is_none();
+        if initial || self.id == KEYBOARD_ID && self.idle != 0 {
             self.last_sent = Some(Instant::now());
         }
         let mut payload = vec![0; 4];
         payload.extend_from_slice(report.data());
-        Some((request, payload))
+        Some((request, payload, initial))
     }
 
     pub(crate) fn control(&mut self, setup: [u8; 8], data: &[u8]) -> Vec<u8> {
@@ -309,7 +302,7 @@ impl Device {
             (0xa1, 2) if interface == 0 => Some(vec![self.idle]),
             (0xa1, 1) if interface == 0 && descriptor == 1 => match (self.id, index) {
                 (MOUSE_ID, 1) => Some(self.position.data().to_vec()),
-                (MOUSE_ID, 2) | (KEYBOARD_ID, 0) => Some(self.state_report().data().to_vec()),
+                (MOUSE_ID, 3) | (KEYBOARD_ID, 0) => Some(self.state_report().data().to_vec()),
                 _ => None,
             },
             (0xa1, 1) if self.id == KEYBOARD_ID && interface == 0 && value == 0x0200 => {
@@ -375,7 +368,7 @@ mod tests {
         let mut mouse = Device::new(MOUSE_ID);
         mouse.open();
         assert!(mouse.enqueue_read([0; 33]));
-        assert_eq!(&mouse.complete().unwrap().1[4..], &[2, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(&mouse.complete().unwrap().1[4..], &[3, 0, 0, 0, 0, 0, 0, 0]);
         assert!(mouse.enqueue_read([0; 33]));
         mouse.input(Input::Button {
             button: 3,
