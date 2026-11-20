@@ -579,7 +579,7 @@ pub async fn run(
                     let changing_output = selected_output != Some(output);
                     if changing_output {
                         deferred_motion = None;
-                        sink.cursor_output_changed();
+                        sink.cursor_mode(false, true);
                     }
                     let (stop, start) = wire::video_request(selected_output, output, config, recovering)?;
                     for command in stop.as_ref().map(<[u8; 5]>::as_slice).into_iter().chain([start.as_slice()]) {

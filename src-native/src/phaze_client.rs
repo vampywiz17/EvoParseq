@@ -23,7 +23,7 @@ pub trait Platform {
         input: &mut Vec<Input>,
         controls: &mut Vec<ClientControl>,
     ) -> Result<bool>;
-    fn cursor_visibility(&mut self, _visible: bool) {}
+    fn cursor_mode(&mut self, relative: bool, visible: bool);
     fn clipboard(&mut self, _text: &str) {}
     fn control_sent(&mut self, _control: &ClientControl, _sent: bool) {}
     fn peer_state(&mut self, _local_id: u32, _state: evoparseq_phaze::PeerState) {}
@@ -148,11 +148,8 @@ impl<P: Platform> Sink for Client<P> {
     ) -> Result<bool> {
         self.platform.poll(&mut self.state, output, input, controls)
     }
-    fn cursor_visibility(&mut self, visible: bool) {
-        self.platform.cursor_visibility(visible);
-    }
-    fn cursor_output_changed(&mut self) {
-        self.platform.cursor_visibility(true);
+    fn cursor_mode(&mut self, relative: bool, visible: bool) {
+        self.platform.cursor_mode(relative, visible);
     }
     fn clipboard_text(&mut self, text: &str) {
         self.platform.clipboard(text);
@@ -172,6 +169,10 @@ pub struct DesktopInput {
 }
 
 impl DesktopInput {
+    pub fn cursor_mode(&mut self, relative: bool, visible: bool) {
+        self.engine.pointer_mode(relative, !visible);
+    }
+
     pub fn event(&mut self, event: Event, size: (u32, u32), input: &mut Vec<Input>) -> Result<()> {
         self.engine.geometry(size);
         let keys = &mut self.keys;
@@ -192,10 +193,6 @@ impl DesktopInput {
 }
 
 fn translate(action: Action, keys: &mut Keyboard, size: (u32, u32), commands: &mut Vec<Input>) {
-    let normal = |value: i32, extent: u32| {
-        (i64::from(value) * 65535 / i64::from(extent.saturating_sub(1).max(1))).clamp(0, 65535)
-            as i32
-    };
     match action {
         Action::Key(usage, mods, down) => commands.extend(keys.key(usage as u16, mods, down)),
         Action::Motion(x, y, true) => commands.push(Input::Motion {
@@ -204,28 +201,16 @@ fn translate(action: Action, keys: &mut Keyboard, size: (u32, u32), commands: &m
             relative: true,
         }),
         Action::Motion(x, y, false) => commands.push(Input::Motion {
-            x: normal(x, size.0),
-            y: normal(y, size.1),
+            x: phaze_session::normalized_axis(i64::from(x), size.0),
+            y: phaze_session::normalized_axis(i64::from(y), size.1),
             relative: false,
         }),
-        Action::Button(button, down, x, y, relative) => {
-            if down && !relative {
-                let position = Input::Motion {
-                    x: normal(x, size.0),
-                    y: normal(y, size.1),
-                    relative: false,
-                };
-                if commands.last() != Some(&position) {
-                    commands.push(position);
-                }
-            }
-            commands.push(Input::Button {
-                button: button as u8,
-                down,
-                x,
-                y,
-            });
-        }
+        Action::Button(button, down, x, y) => commands.push(Input::Button {
+            button: button as u8,
+            down,
+            x,
+            y,
+        }),
         Action::Scroll(x, y) => commands.push(Input::Scroll {
             x,
             y: y.saturating_neg(),
@@ -242,7 +227,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn linux_phaze_preserves_physical_mouse_buttons_and_positions_click_first() -> Result<()> {
+    fn phaze_host_mode_switches_captured_motion_and_preserves_focus_release() -> Result<()> {
+        let mut desktop = DesktopInput::default();
+        let size = (101, 101);
+        let mut commands = Vec::new();
+        desktop.event(Event::Focus(true), size, &mut commands)?;
+        let pointer = crate::desktop_input::Pointer {
+            x: -3.,
+            y: 4.,
+            relative: true,
+            moved: true,
+            viewport: size,
+            buttons: 0,
+            wheel: (0, 0),
+        };
+        desktop.cursor_mode(true, true);
+        desktop.event(Event::Pointer(pointer), size, &mut commands)?;
+        assert_eq!(
+            commands,
+            [Input::Motion {
+                x: -3,
+                y: 4,
+                relative: true
+            }]
+        );
+
+        desktop.cursor_mode(false, false);
+        commands.clear();
+        desktop.event(Event::Pointer(pointer), size, &mut commands)?;
+        assert!(matches!(
+            commands.as_slice(),
+            [Input::Motion {
+                relative: false,
+                ..
+            }]
+        ));
+        desktop.event(Event::Focus(false), size, &mut commands)?;
+        assert_eq!(commands.last(), Some(&Input::Release));
+        Ok(())
+    }
+
+    #[test]
+    fn phaze_physical_buttons_keep_their_coordinates_without_extra_motion() -> Result<()> {
         let mut desktop = DesktopInput::default();
         let mut commands = Vec::new();
         let size = (101, 101);
@@ -280,11 +306,6 @@ mod tests {
             assert_eq!(
                 commands,
                 [
-                    Input::Motion {
-                        x: 32767,
-                        y: 16383,
-                        relative: false
-                    },
                     Input::Button {
                         button,
                         x: 50,

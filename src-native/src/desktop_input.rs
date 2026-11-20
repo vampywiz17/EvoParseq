@@ -202,7 +202,7 @@ mod pointing {
         Key(i32, i32, bool),
         Motion(i32, i32, bool),
         /// Physical order is left, right, middle, back, forward.
-        Button(i32, bool, i32, i32, bool),
+        Button(i32, bool, i32, i32),
         Scroll(i32, i32),
         Release,
     }
@@ -220,8 +220,7 @@ mod pointing {
                     Ok(())
                 }
                 Self::Motion(x, y, relative) => send(&header(3, i32::from(relative), x, y)),
-                Self::Button(button, down, x, y, relative) => {
-                    let _ = (x, y, relative); // Parsec sends pointer position separately.
+                Self::Button(button, down, ..) => {
                     let wire = [1, 3, 2, 4, 5][(button - 1) as usize];
                     send(&header(1, wire, i32::from(down), 0))
                 }
@@ -308,6 +307,9 @@ mod pointing {
                 self.restore_position();
             }
             self.cursor_initialized = true;
+            self.pointer_mode(relative, hidden);
+        }
+        pub fn pointer_mode(&mut self, relative: bool, hidden: bool) {
             if self.relative != relative {
                 self.remainder = (0., 0.);
             }
@@ -341,7 +343,6 @@ mod pointing {
                         mask & bit != 0,
                         self.x.round() as i32,
                         self.y.round() as i32,
-                        self.relative,
                     ))?;
                 }
             }
@@ -481,7 +482,9 @@ mod pointing {
                             self.directions |= 1 << key;
                             if self.center.is_some() && !self.right && !self.drag {
                                 self.drag = true;
-                                send(self.abs())?;
+                                if !self.relative {
+                                    send(self.abs())?;
+                                }
                                 self.mouse_buttons(0, &mut send)?;
                             }
                         } else {
@@ -493,7 +496,9 @@ mod pointing {
                             self.right = false;
                             if self.directions != 0 {
                                 self.drag = true;
-                                send(self.abs())?;
+                                if !self.relative {
+                                    send(self.abs())?;
+                                }
                                 self.mouse_buttons(0, &mut send)?;
                             }
                         } else if !down && self.center.take().is_some() {

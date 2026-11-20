@@ -48,7 +48,7 @@ pub fn run(
         pcm,
         saved.allow_raw_audio,
     );
-    account::phaze_runtime(async {
+    let result = account::phaze_runtime(async {
         let servers = if saved.force_relay {
             Some(manager.resolve_configuration().await?.ice_servers)
         } else {
@@ -68,7 +68,9 @@ pub fn run(
             }) => result,
             result = stopped => result,
         }
-    })?;
+    });
+    playback.set_phaze_cursor_mode(false, true);
+    result?;
     Ok("Phaze stream disconnected".into())
 }
 
@@ -87,6 +89,11 @@ struct Adapter<'a> {
 }
 
 impl phaze_client::Platform for Adapter<'_> {
+    fn cursor_mode(&mut self, relative: bool, visible: bool) {
+        self.desktop.cursor_mode(relative, visible);
+        self.playback.set_phaze_cursor_mode(relative, visible);
+    }
+
     fn stage(&mut self, stage: &'static str) {
         self.authenticated |= stage == "dtls_authenticated";
         crate::event_log::record(

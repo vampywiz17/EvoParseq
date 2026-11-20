@@ -191,11 +191,6 @@ impl evoparseq_phaze::Sink for View {
             serde_json::json!({"output": output}),
         );
     }
-    fn cursor_output_changed(&mut self) {
-        self.window.set_host_relative_mouse(false);
-        self.window
-            .set_cursor(crate::cursor::Request::Visible(true));
-    }
     fn traffic(&mut self, received: u64, sent: u64) {
         self.received = received;
         self.sent = sent;
@@ -475,13 +470,6 @@ impl evoparseq_phaze::Sink for View {
                     } else if !self.stream.pending() {
                         self.window.result(true);
                     }
-                }
-                Event::RelativeMode(acquired) => {
-                    crate::event_log::record(
-                        "INFO",
-                        "phaze_relative_mouse_capture",
-                        serde_json::json!({"acquired": acquired}),
-                    );
                 }
                 event => {
                     let kind = match &event {
@@ -907,7 +895,7 @@ mod tests {
             assert!(!window.native_relative_mouse());
             view.cursor_mode(true, true);
             assert!(window.native_relative_mouse());
-            view.cursor_output_changed();
+            view.cursor_mode(false, true);
             assert!(!window.native_relative_mouse());
             let pixel = [200, 100, 50, 128];
             for (format, bytes) in [

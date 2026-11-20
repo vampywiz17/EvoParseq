@@ -16,11 +16,14 @@ pub fn supported_video(mut video: Video) -> Video {
 
 pub fn normalized(viewport: Option<Viewport>, x: i32, y: i32) -> Option<(i32, i32)> {
     let [left, top, right, bottom] = viewport?.rect()?;
-    let axis = |value: i32, start: i32, end: i32| {
-        ((i64::from(value) - i64::from(start)) * 65535 / i64::from(end - start - 1).max(1))
-            .clamp(0, 65535) as i32
-    };
-    Some((axis(x, left, right), axis(y, top, bottom)))
+    Some((
+        normalized_axis(i64::from(x) - i64::from(left), (right - left) as u32),
+        normalized_axis(i64::from(y) - i64::from(top), (bottom - top) as u32),
+    ))
+}
+
+pub fn normalized_axis(value: i64, extent: u32) -> i32 {
+    (value * 65535 / i64::from(extent.saturating_sub(1).max(1))).clamp(0, 65535) as i32
 }
 
 pub fn button(

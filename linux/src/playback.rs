@@ -62,6 +62,7 @@ pub struct Playback {
     pub(crate) native_drag: AtomicBool,
     pub(crate) drag_activation: AtomicBool,
     pub(crate) host_relative: AtomicBool,
+    pub(crate) phaze_cursor_hidden: AtomicBool,
 }
 
 impl Playback {
@@ -116,6 +117,7 @@ impl Playback {
             native_drag: AtomicBool::new(false),
             drag_activation: AtomicBool::new(false),
             host_relative: AtomicBool::new(false),
+            phaze_cursor_hidden: AtomicBool::new(false),
         })
     }
     pub fn set_hevc(&self, enabled: bool) {
@@ -301,6 +303,15 @@ impl Playback {
     }
     pub fn set_capture(&self, capture: bool) {
         if self.capture.swap(capture, Ordering::AcqRel) != capture {
+            self.ui.request_repaint();
+        }
+    }
+    pub fn set_phaze_cursor_mode(&self, relative: bool, visible: bool) {
+        self.host_relative.store(relative, Ordering::Release);
+        let hidden = !visible;
+        let visibility_changed = self.phaze_cursor_hidden.swap(hidden, Ordering::AcqRel) != hidden;
+        self.set_capture(relative);
+        if visibility_changed {
             self.ui.request_repaint();
         }
     }

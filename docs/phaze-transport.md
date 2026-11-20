@@ -58,8 +58,10 @@ packets, the last absolute position in an input batch can wait for space.
 A newer position replaces it. Releases and output changes clear it.
 Phaze host cursor visibility (opcode 6), cursor images (opcode 12), and cached
 image IDs (opcode 19) feed the shared Win32 cursor owner. Visibility updates
-retain the last shape. Windows uses the separate relative-mode flag to select
-the existing raw mouse input path and leaves host positioning independent.
+retain the last shape. Windows and Wayland use the separate relative-mode flag
+to select their existing relative mouse input paths. Android uses the same flag
+to send relative deltas from its existing pointer capture or D-pad mouse mode.
+Android's local Mouse capture control still governs physical mouse capture.
 In opcode 6, bit 0 of the mouse-mode flags reports relative mode and bit 1
 reports a hidden cursor.
 Only the selected display's visibility updates apply to the client window.
