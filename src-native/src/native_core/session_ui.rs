@@ -5,7 +5,7 @@ use super::{
     profile::Video,
     session_model::{
         current_choice, resolution_text, Command, Notification, PanelFields, State, Status, View,
-        BANDWIDTH_CHOICES, FPS_CHOICES, HOST_RESOLUTION, PARSEC_BANDWIDTH_CHOICES,
+        FPS_CHOICES, HOST_RESOLUTION, PARSEC_BANDWIDTH_CHOICES, PHAZE_BANDWIDTH_CHOICES,
         RESOLUTION_CHOICES,
     },
     ui::{draw_button, wide},
