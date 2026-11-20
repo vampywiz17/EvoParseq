@@ -220,7 +220,8 @@ mod pointing {
                     Ok(())
                 }
                 Self::Motion(x, y, relative) => send(&header(3, i32::from(relative), x, y)),
-                Self::Button(button, down, ..) => {
+                Self::Button(button, down, x, y) => {
+                    let _ = (x, y); // Parsec sends pointer position separately.
                     let wire = [1, 3, 2, 4, 5][(button - 1) as usize];
                     send(&header(1, wire, i32::from(down), 0))
                 }
