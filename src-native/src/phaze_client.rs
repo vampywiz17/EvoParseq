@@ -227,7 +227,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn phaze_host_mode_switches_captured_motion_and_preserves_focus_release() -> Result<()> {
+    fn linux_phaze_host_mode_switches_captured_motion_and_preserves_focus_release() -> Result<()> {
         let mut desktop = DesktopInput::default();
         let size = (101, 101);
         let mut commands = Vec::new();
@@ -268,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn phaze_physical_buttons_keep_their_coordinates_without_extra_motion() -> Result<()> {
+    fn linux_phaze_physical_buttons_keep_their_coordinates_without_extra_motion() -> Result<()> {
         let mut desktop = DesktopInput::default();
         let mut commands = Vec::new();
         let size = (101, 101);
