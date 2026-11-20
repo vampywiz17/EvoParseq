@@ -50,6 +50,8 @@ Phaze crate. Windows drains its existing event queue and retains focus, viewport
 fullscreen and detach policy. It sends button presses inside the video as a
 single button message and allows releases outside it. It releases remote state
 on focus loss/detach/queue failure and sends reset opcode 13.
+On Windows, an activating click first positions the absolute pointer if the
+focused stream has yet to send any absolute movement.
 No Parsec input packet is forwarded to a Phaze host.
 
 Both Windows clients use the same adjacent-movement merging and preserve

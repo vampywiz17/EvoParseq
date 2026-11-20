@@ -35,6 +35,7 @@ struct View {
     keys: evoparseq_phaze::Keyboard,
     events: VecDeque<Event>,
     input_logged: [Option<&'static str>; 4],
+    needs_initial_position: bool,
     interval_motion: u32,
     interval_buttons: [u32; 2],
     interval_keys: [u32; 2],
@@ -479,6 +480,7 @@ impl evoparseq_phaze::Sink for View {
                         self.window.result(true);
                     }
                 }
+                Event::Focus(true) => self.needs_initial_position = true,
                 event => {
                     let kind = match &event {
                         Event::Motion(..) | Event::RelativeMotion(..) => Some((0, "motion")),
@@ -496,6 +498,15 @@ impl evoparseq_phaze::Sink for View {
                     let allowed = blocked_by.is_none();
                     let before = commands.len();
                     translate(event, &mut self.keys, viewport, allowed, commands)?;
+                    if self.needs_initial_position && commands.len() != before {
+                        align_initial_pointer(
+                            &mut self.needs_initial_position,
+                            self.window.native_relative_mouse(),
+                            viewport,
+                            commands,
+                            before,
+                        );
+                    }
                     if let Some((index, kind)) = kind {
                         let queued = commands.len() != before;
                         match index {
@@ -603,6 +614,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         keys: Default::default(),
         events: VecDeque::new(),
         input_logged: [None; 4],
+        needs_initial_position: true,
         interval_motion: 0,
         interval_buttons: [0; 2],
         interval_keys: [0; 2],
@@ -665,6 +677,37 @@ async fn connect(
         },
     )
     .await
+}
+
+fn align_initial_pointer(
+    pending: &mut bool,
+    relative: bool,
+    viewport: Option<crate::viewport::Viewport>,
+    commands: &mut Vec<evoparseq_phaze::Input>,
+    first: usize,
+) {
+    use evoparseq_phaze::Input;
+    match commands[first] {
+        Input::Motion {
+            relative: false, ..
+        } => *pending = false,
+        Input::Button {
+            down: true, x, y, ..
+        } if !relative => {
+            if let Some((x, y)) = normalized(viewport, x, y) {
+                commands.insert(
+                    first,
+                    Input::Motion {
+                        x,
+                        y,
+                        relative: false,
+                    },
+                );
+                *pending = false;
+            }
+        }
+        _ => {}
+    }
 }
 
 fn translate(
@@ -757,6 +800,7 @@ mod tests {
                 keys: Default::default(),
                 events: VecDeque::new(),
                 input_logged: [None; 4],
+                needs_initial_position: true,
                 interval_motion: 0,
                 interval_buttons: [0; 2],
                 interval_keys: [0; 2],
@@ -1059,6 +1103,39 @@ mod tests {
         }
         std::fs::remove_dir_all(directory)?;
         Ok(())
+    }
+    #[test]
+    fn first_click_aligns_only_an_unpositioned_absolute_pointer() {
+        use evoparseq_phaze::Input;
+        let viewport = Some(crate::viewport::Viewport {
+            source: (101, 101),
+            client: (101, 101),
+        });
+        let down = Input::Button {
+            button: 1,
+            x: 50,
+            y: 25,
+            down: true,
+        };
+        let position = Input::Motion {
+            x: 32767,
+            y: 16383,
+            relative: false,
+        };
+        let mut pending = true;
+        let mut commands = vec![down];
+        align_initial_pointer(&mut pending, true, viewport, &mut commands, 0);
+        assert!(pending);
+        assert_eq!(commands, [down]);
+        align_initial_pointer(&mut pending, false, viewport, &mut commands, 0);
+        assert!(!pending);
+        assert_eq!(commands, [position, down]);
+
+        pending = true;
+        commands = vec![position];
+        align_initial_pointer(&mut pending, false, viewport, &mut commands, 0);
+        assert!(!pending);
+        assert_eq!(commands, [position]);
     }
     #[test]
     fn phaze_click_sends_only_the_button_and_focus_loss_releases() -> Result<()> {
