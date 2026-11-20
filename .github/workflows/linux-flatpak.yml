@@ -3,7 +3,7 @@ name: EvoParseq Linux Flatpak
 on:
   workflow_dispatch:
   push:
-    branches: [dev]
+    branches: [main, dev]
     paths: ['ci-tests/wayland-input/**', 'linux/**', '.github/workflows/linux-flatpak.yml', 'src-native/**', 'assets/evoparseq.svg', 'assets/evoparseq.png']
 
 permissions:
@@ -35,7 +35,7 @@ jobs:
           timeout 90s dbus-run-session -- bash ci-tests/wayland-input/run.sh "$PWD/ci-tests/wayland-input/target/$(rustc -vV | sed -n 's/^host: //p')/debug/evoparseq-wayland-input-fixture"
   flatpak:
     needs: native-wayland-input
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -54,11 +54,9 @@ jobs:
           cargo vendor --manifest-path linux/Cargo.toml --locked --versioned-dirs vendor > .cargo/config.toml
       - name: Install Flatpak SDK
         run: |
-          # input-device permission needs Flatpak >= 1.15.6. The project's
-          # upstream-maintained PPA supplies current Flatpak on Ubuntu LTS.
-          sudo add-apt-repository --yes ppa:flatpak/stable
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends flatpak flatpak-builder librsvg2-common
+          dpkg --compare-versions "$(flatpak --version | cut -d ' ' -f 2)" ge 1.15.6
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 org.freedesktop.Sdk.Extension.rust-stable//25.08 org.freedesktop.Sdk.Extension.llvm21//25.08
       - name: Build and bundle

@@ -1,7 +1,16 @@
 > [!NOTE]
-> EvoParseq is human-led and developed with substantial AI assistance. The
-> maintainer sets the architecture and priorities, reviews changes, and tests
-> builds on real hardware.
+> **EvoParseq is developed with substantial AI assistance.** AI generates most of the
+> implementation code, while the project’s concept, architecture, scope, platform choices,
+> and development priorities are defined by its human maintainer.
+>
+> Development remains human-led. The maintainer directs the work, tests the application on
+> real hardware, investigates reported problems, and oversees patches and fixes.
+> Responsibility for reviewing and accepting changes stays with the maintainer.
+>
+> The project owner has a formal IT education and works in Kubernetes and DevOps. The
+> primary motivation for using AI is to save time and make effective use of LLM
+> capabilities, allowing more effort to go into design decisions, integration, and practical
+> testing.
 
 <p align="center">
   <img src="assets/evoparseq-wordmark.svg" width="360" alt="EvoParseq">
@@ -14,9 +23,39 @@ Windows, Linux Flatpak, and Android TV. A shared Rust core handles accounts,
 networking, and session logic. Each platform uses its native video, audio,
 and input APIs. Both services work with their stock hosts.
 
+The stable [**EvoParseq v0.9.8**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8)
+release includes Windows x64, the signed Android TV APK and an experimental
+Linux x86_64 Flatpak. Development continues on `dev`.
+
+## Code quality
+
+Live SonarQube results for `main`. Select a badge to open the dashboard.
+
+| Metric | `main` |
+| --- | --- |
+| Quality Gate | [![main: Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=vampywiz17_EvoParseq&branch=main&metric=alert_status)](https://sonarcloud.io/dashboard?id=vampywiz17_EvoParseq&branch=main) |
+| Coverage (overall code) | [![main: Coverage (overall code)](https://sonarcloud.io/api/project_badges/measure?project=vampywiz17_EvoParseq&branch=main&metric=coverage)](https://sonarcloud.io/dashboard?id=vampywiz17_EvoParseq&branch=main) |
+| Security (overall code) | [![main: Security (overall code)](https://sonarcloud.io/api/project_badges/measure?project=vampywiz17_EvoParseq&branch=main&metric=security_rating)](https://sonarcloud.io/dashboard?id=vampywiz17_EvoParseq&branch=main) |
+| Reliability (overall code) | [![main: Reliability (overall code)](https://sonarcloud.io/api/project_badges/measure?project=vampywiz17_EvoParseq&branch=main&metric=reliability_rating)](https://sonarcloud.io/dashboard?id=vampywiz17_EvoParseq&branch=main) |
+| Maintainability (overall code) | [![main: Maintainability (overall code)](https://sonarcloud.io/api/project_badges/measure?project=vampywiz17_EvoParseq&branch=main&metric=sqale_rating)](https://sonarcloud.io/dashboard?id=vampywiz17_EvoParseq&branch=main) |
+| Duplicated lines (overall code) | [![main: Duplicated lines (overall code)](https://sonarcloud.io/api/project_badges/measure?project=vampywiz17_EvoParseq&branch=main&metric=duplicated_lines_density)](https://sonarcloud.io/dashboard?id=vampywiz17_EvoParseq&branch=main) |
+
+The metric badges describe **overall code**, not just newly changed lines.
+The Quality Gate applies the configured **new-code** requirements; a passing
+gate does not mean that overall coverage is 100% or that all existing findings
+have been resolved. The dashboard shows both scopes. GitHub may briefly cache
+badge images after a new analysis.
+
+Sonar also analyzes checked-in dependencies, including upstream test fixtures
+and configuration files. Their findings count toward the overall results,
+especially the Security rating, so the badges are not a score of EvoParseq's
+own implementation alone and can give a misleading impression without that
+context. Dependency findings still require review; upstream origin does not
+automatically make a finding harmless or a false positive.
+
 ## Phaze preview
 
-This branch adds experimental Phaze support alongside Parsec. Select **Phaze**
+Development builds include experimental Phaze support. Select **Phaze**
 on the sign-in screen, sign in with your Phaze account, and choose a host with
 an active physical or virtual display.
 
@@ -71,6 +110,74 @@ hybrid Pop!_OS system reproduced its NVIDIA presentation failure in native
 on a Xiaomi TV Box S (3rd Gen) running Android 14.
 [Linux setup and diagnostics](linux/README.md) · [Android TV setup and capabilities](android-tv/README.md)
 
+### Linux Flatpak for Parsec
+
+- **Wayland + Vulkan:** egui desktop UI follows the Windows client's shared
+  wording, logical dimensions and layout, with native desktop window decorations.
+  Login/computer picker and Settings have fixed sizes; the stream is resizable
+  and uses centered aspect fitting. Connection stats is a separate fixed-size native window.
+- **Shared Rust core:** account/2FA, discovery, session preferences, settings,
+  WebRTC/BUD, media ingress, normal input and diagnostic models are reused.
+  Linux adapters provide Vulkan Video/Vulkan, PipeWire, Wayland input and
+  Secret portal credential protection.
+- **Playback:** WebRTC and explicit BUD selection, progressive H.264 or capability-gated HEVC Main/Main10 4:2:0
+  and stereo WebRTC Opus or BUD Opus/PCM with optional matched 5.1/7.1 output. Original NV12 and P010 decoder surfaces feed the same-device Vulkan
+  presentation shader; no application-side decoded-image copy or CPU readback.
+  Shader conversion still costs GPU work: this is GPU-resident rendering,
+  **not the application's Zero copy mode**.
+- **Controls:** normal or opt-in BUD HID mouse/keyboard, controllers/rumble,
+  focused text clipboard, orientation and immersive input. A
+  draggable session icon, host display selection, resolution/bitrate/FPS/pacing
+  requests, fullscreen, local PipeWire mute/volume and Disconnect. Host settings
+  replies and Apply confirmation use the shared Rust models.
+- **Diagnostics:** live overlay and Connection stats, with four Overview cards
+  in a 2-by-2 layout. CPU/RSS are sampled at most once per second and only while
+  Connection stats is open. No GPU utilization sampler or extra render pass is
+  introduced; unavailable measurements remain explicitly unavailable.
+- **Updates:** Help → About and GitHub Flatpak checks; verified Linux packages open
+  in the system installer for user confirmation. CI artifacts must first be
+  published as versioned release assets to be discoverable.
+- **Network:** shared Windows STUN/custom TURN/Cloudflare configuration,
+  direct-only and Force TURN for WebRTC and BUD; protected relay secrets and
+  optional in-memory Cloudflare credentials. The QoS switch enables Linux DSCP AF21
+  and SO_PRIORITY 6; network equipment may ignore these hints.
+- **Persistence:** Windows-compatible `settings.json` schema and encrypted
+  remembered sessions through the Linux Secret portal. Passwords and 2FA codes
+  are never saved; protected credentials are not portable between platforms.
+
+HEVC Main10/P010 decoding is now available after selected-device capability checks,
+with SDR presentation. Main10 has been tested on the maintainer's Intel ARL system. Display timing VRR requests
+adaptive presentation; physical VRR remains unverified.
+
+### Android TV for Parsec
+
+- Google TV / Android TV interface with D-pad navigation, 2FA, grouped settings
+  and encrypted remembered sign-in using Android Keystore.
+- Shared Rust account, session, WebRTC/BUD, controller and input models; Android
+  adapters provide MediaCodec Surface video, AAudio and OS input/lifecycle.
+- Direct or STUN/TURN connections, Force TURN and temporary **local-only HTTPS**
+  relay setup from a phone/computer, with fingerprint verification and TV approval.
+- H.264 and HEVC 8/10-bit 4:2:0, fixed/adaptive FPS, hidden-by-default session
+  controls after five idle seconds, plus FPS/RTT/bitrate/codec/route information.
+- Standard gamepads; optional remote D-pad mouse, short/long OK clicks and
+  supported OK + direction dragging. Physical mouse/keyboard use normal input
+  with optional capture. Windows HID passthrough is not an Android feature.
+- AAudio device recovery, optional custom buffering, BUD PCM and capability-gated
+  5.1/7.1 output; diagnostic logging with save/share export. These additions need
+  live audio-device validation; WebRTC remains stereo Opus.
+
+Live-tested on Xiaomi TV Box S (3rd Gen), Android 14, including BUD at 50 Mbit/s,
+NVIDIA-encoded Main10, remote mouse and a GameSir controller. WebRTC at sustained
+50 Mbit/s still closed its video channel in this setup; around 30 Mbit/s was
+stable. This is a transport-specific observation, **not a universal hardware limit**.
+MediaCodec submits frames to Surface without CPU pixel readback; physical scanout
+and internal driver/compositor copies are not verified.
+
+Install the signed **EvoParseq-TV.apk** from the
+[stable release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8)
+or use **Settings > Updates** on an existing distribution-signed installation.
+See the [Android TV setup, build and compatibility guide](android-tv/README.md).
+
 ## Video rendering modes
 
 ![Animated comparison of normal GPU rendering, Zero copy and optional AI upscaling.](assets/evoparseq-rendering-modes.gif)
@@ -91,11 +198,11 @@ MediaCodec output to a Surface.
 
 ## Download and run
 
-| Platform | Requirements and installation | Phaze branch builds |
+| Platform | Requirements and installation | Development builds |
 | --- | --- | --- |
-| Windows | Windows 11 x64, Direct3D feature level 11.0 or later, and a compatible video driver. Extract the ZIP to a writable folder and run **EvoParseq.exe**. | [Windows CI](https://github.com/vampywiz17/EvoParseq/actions/workflows/native-core.yml?query=branch%3Acodex%2Fphaze-protocol) |
-| Linux | An x86_64 Wayland session, PipeWire, and a working Vulkan Video driver. Install the **.flatpak** bundle. | [Flatpak CI](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Acodex%2Fphaze-protocol) |
-| Android TV | ARM64 or ARMv7. Sideload the signed **EvoParseq-TV.apk**. | [Android TV CI](https://github.com/vampywiz17/EvoParseq/actions/workflows/android-tv.yml?query=branch%3Acodex%2Fphaze-protocol) |
+| Windows | Windows 11 x64, Direct3D feature level 11.0 or later, and a compatible video driver. Extract the ZIP to a writable folder and run **EvoParseq.exe**. | [Windows CI](https://github.com/vampywiz17/EvoParseq/actions/workflows/native-core.yml?query=branch%3Adev) |
+| Linux | An x86_64 Wayland session, PipeWire, and a working Vulkan Video driver. Install the **.flatpak** bundle. | [Flatpak CI](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Adev) |
+| Android TV | ARM64 or ARMv7. Sideload the signed **EvoParseq-TV.apk**. | [Android TV CI](https://github.com/vampywiz17/EvoParseq/actions/workflows/android-tv.yml?query=branch%3Adev) |
 
 Download the artifact from a successful branch run. Published packages are
 listed on the [releases page](https://github.com/vampywiz17/EvoParseq/releases).

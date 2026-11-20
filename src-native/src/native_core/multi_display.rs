@@ -357,12 +357,22 @@ impl Displays {
     }
 
     pub(super) fn poll(&self, attempt: &Attempt) -> Result<()> {
+        self.poll_with_events(attempt, |screen, events| {
+            screen.window.events.take_batch(events);
+        })
+    }
+
+    fn poll_with_events(
+        &self,
+        attempt: &Attempt,
+        take_events: impl Fn(&Screen, &mut std::collections::VecDeque<Event>),
+    ) -> Result<()> {
         for stream in 1..STREAMS {
             let Some(screen) = self.get(stream) else {
                 continue;
             };
             let mut events = screen.batch.lock().unwrap_or_else(|e| e.into_inner());
-            screen.window.events.take_batch(&mut events);
+            take_events(&screen, &mut events);
             let snapshot = screen.video.snapshot();
             let mut closing = screen.failed.load(std::sync::atomic::Ordering::Acquire)
                 || screen.window.stop.stopped()
@@ -486,6 +496,23 @@ mod tests {
         )));
         let displays = &primary.displays;
         let (attempt, packets) = Attempt::recorded_commands();
+        let poll = || {
+            displays.poll_with_events(&attempt, |screen, events| {
+                screen.window.events.take_batch(events);
+                // Win32 can queue focus changes between showing the two windows.
+                // This fixture exercises commands; focus ownership is tested below.
+                events.retain(|event| {
+                    matches!(
+                        event,
+                        Event::NativeSession(_)
+                            | Event::Shortcut(_)
+                            | Event::Clipboard
+                            | Event::CursorReady
+                            | Event::InputOverflow
+                    )
+                });
+            })
+        };
         displays.flags.store(9, Ordering::Release);
         for stream in [0, STREAMS, usize::MAX] {
             assert!(displays.open(stream, &attempt, manager.clone()).is_err());
@@ -578,7 +605,7 @@ mod tests {
         ] {
             second.window.events.push(event);
         }
-        displays.poll(&attempt).unwrap();
+        poll().unwrap();
         primary.events.take_batch(&mut primary_events);
         assert!(primary_events.iter().any(|event| matches!(event,
             Event::NativeSession(Command::DisplayResolution { stream: 1, resolution: r, size })
@@ -592,13 +619,13 @@ mod tests {
             .window
             .events
             .push(Event::Shortcut(Shortcut::ReleaseInput));
-        displays.poll(&attempt).unwrap();
+        poll().unwrap();
         assert_eq!(packets(), vec![crate::control::header(24, 0, 0, 0)]);
 
         // An overflow closes only its additional display, using stream-specific
         // control. The other worker and primary window remain alive.
         second.window.events.push(Event::InputOverflow);
-        displays.poll(&attempt).unwrap();
+        poll().unwrap();
         assert_eq!(packets(), vec![enable(1, false).unwrap()]);
         assert!(displays.get(1).is_none());
         assert!(displays.get(2).is_some());
@@ -607,7 +634,7 @@ mod tests {
             .window
             .events
             .push(Event::NativeSession(Command::Disconnect));
-        displays.poll(&attempt).unwrap();
+        poll().unwrap();
         assert_eq!(packets(), vec![enable(2, false).unwrap()]);
         assert!(displays.get(2).is_none());
         displays.synchronize_input(&attempt, &mut input).unwrap();

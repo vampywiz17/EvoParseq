@@ -1,6 +1,6 @@
 # Experimental Phaze media/input and TURN investigation
 
-This work is confined to `codex/phaze-protocol`. Windows, Linux Flatpak and
+Windows, Linux Flatpak and
 Android TV expose Phaze through the shared Rust protocol and session code.
 The protocol source is original Rust, derived from wire-format observations
 under authorized interoperability testing. No proprietary Phaze implementation

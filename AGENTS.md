@@ -18,7 +18,7 @@ The user's standing requirement is to keep current and future development standa
 
 ## Pull requests and Gitar OSS review
 
-- Keep one open GitHub pull request into `dev` for each active feature branch. Use `codex/phaze-protocol` → `dev` for Phaze and push follow-up changes to the same feature branch.
+- Keep one open GitHub pull request into `dev` for each active feature branch. Push follow-up changes to the same feature branch.
 - Keep an open `dev` → `main` pull request for the next stable release. Merge it only with explicit release approval after the required checks pass. Open the next pull request when new release changes are available.
 - Use Gitar OSS for review and suggestions only. Keep automatic fixes and other Gitar write automation disabled. Leave auto-apply opt-ins such as `gitar-managed` off the pull requests and do not ask Gitar to apply fixes. Codex assesses the findings, implements warranted fixes, and verifies them in GitHub CI.
 

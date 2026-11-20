@@ -1,7 +1,6 @@
 # EvoParseq Linux Flatpak preview
 
-Current preview: **0.9.8-dev.3**, developed on `dev`. This is an
-experimental Linux client for unmodified Parsec hosts, not a stable release.
+The experimental Linux Flatpak is included with **EvoParseq v0.9.8** for unmodified Parsec hosts.
 Windows and Android TV feature availability differs; see the [root README](../README.md).
 
 ## Current support
@@ -33,12 +32,11 @@ additional host displays or activate paid host-side virtual displays.
 
 ## Install and run
 
-Download the `EvoParseq-Linux-Flatpak` artifact from a successful
-[Linux CI run](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Adev),
-then extract `EvoParseq-Linux-v0.9.8-dev.3-x86_64.flatpak` from the artifact ZIP.
+Download the x86_64 Flatpak from the [v0.9.8 release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8).
+Flatpak 1.15.6 or later supports the package's input-device permission.
 
 ```sh
-flatpak install --user --reinstall EvoParseq-Linux-v0.9.8-dev.3-x86_64.flatpak
+flatpak install --user --reinstall EvoParseq-Linux-v0.9.8-x86_64.flatpak
 flatpak run io.github.vampywiz17.EvoParseq
 ```
 
