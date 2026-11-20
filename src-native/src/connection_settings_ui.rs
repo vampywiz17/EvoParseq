@@ -1044,7 +1044,7 @@ unsafe fn layout(hwnd: HWND) {
         }
         Tab::Input => {
             if page.model.phaze {
-                340
+                580
             } else {
                 680
             }
