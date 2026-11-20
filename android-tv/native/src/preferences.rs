@@ -1,12 +1,12 @@
 //! Android TV request presets. Rust owns validation; the TV view only renders
 //! these choices. Decoder support and actual host replies are separate checks.
 use crate::session_preferences::{
-    BANDWIDTH_CHOICES, FPS_CHOICES, PARSEC_BANDWIDTH_CHOICES, PanelFields, RESOLUTION_CHOICES,
-    bandwidth_choices,
+    bandwidth_choices, PanelFields, BANDWIDTH_CHOICES, FPS_CHOICES, PARSEC_BANDWIDTH_CHOICES,
+    RESOLUTION_CHOICES,
 };
-use anyhow::{Result, ensure};
+use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -301,9 +301,10 @@ mod tests {
     #[test]
     fn saved_tv_limits_are_encoded_in_the_phaze_stream_request() -> Result<()> {
         let mut saved = Preferences::default();
-        saved.select(
+        saved.select_for_service(
             "bandwidth",
             BANDWIDTH_CHOICES.iter().position(|v| *v == "50").unwrap(),
+            false,
         )?;
         saved.select("fps", FPS_CHOICES.iter().position(|v| *v == "120").unwrap())?;
         let restored = Preferences::parse(&serde_json::to_string(&saved)?)?;
@@ -397,12 +398,10 @@ mod tests {
         assert!(value.select("unknown", 0).is_err());
         value.select("video", 2).unwrap();
         assert_eq!(value.video, 2);
-        assert!(
-            Preferences::parse(
-                "{\"transport\":99,\"video\":0,\"resolution\":0,\"fps\":0,\"bandwidth\":0}"
-            )
-            .is_err()
-        );
+        assert!(Preferences::parse(
+            "{\"transport\":99,\"video\":0,\"resolution\":0,\"fps\":0,\"bandwidth\":0}"
+        )
+        .is_err());
         assert!(Preferences::parse(&"x".repeat(4097)).is_err());
     }
 }

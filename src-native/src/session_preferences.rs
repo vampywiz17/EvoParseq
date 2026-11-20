@@ -1,5 +1,5 @@
 //! Shared video requests, presets and validation. No window, codec, storage or OS APIs.
-use anyhow::{Result, ensure};
+use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_BANDWIDTH_MBPS: u32 = 100;
