@@ -65,7 +65,7 @@ pub use crate::session_controls::{Command, Status};
 
 pub use crate::session_preferences::{
     current_choice, resolution_text, PanelFields, BANDWIDTH_CHOICES, FPS_CHOICES, HOST_RESOLUTION,
-    RESOLUTION_CHOICES,
+    PARSEC_BANDWIDTH_CHOICES, RESOLUTION_CHOICES,
 };
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Notification {
@@ -300,6 +300,7 @@ mod tests {
         let saved = Video {
             resolution: Resolution::Fixed(1920, 1080),
             bandwidth_mbps: Some(50),
+            parsec_bandwidth_mbps: None,
             fps: Some(60),
             constant_fps: Some(true),
             rotated: Some(false),
