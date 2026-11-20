@@ -9,6 +9,7 @@ mod datagram;
 mod input;
 mod transport;
 pub mod turn;
+mod usb_probe;
 mod wire;
 use anyhow::{bail, ensure, Context, Result};
 pub use audio::AudioCodec;
@@ -219,6 +220,10 @@ pub trait Sink {
     fn bandwidth_feedback_started(&mut self, _lower_rate: f64, _upper_rate: f64) {}
     fn peer_state(&mut self, _local_id: u32, _state: PeerState) {}
     fn host_flags(&mut self, _flags: u32) {}
+    fn usb_probe_enabled(&self) -> bool {
+        false
+    }
+    fn usb_probe_event(&mut self, _event: &str, _kind: Option<u8>, _bytes: usize) {}
     fn controller(&mut self, _id: u32) {}
     fn clipboard_text(&mut self, _text: &str) {}
     fn control_sent(&mut self, _control: &ClientControl, _sent: bool) {}

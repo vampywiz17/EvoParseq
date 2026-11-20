@@ -111,6 +111,18 @@ impl View {
     }
 }
 impl evoparseq_phaze::Sink for View {
+    fn usb_probe_enabled(&self) -> bool {
+        std::env::var_os("EVOPARSEQ_PHAZE_USB_PROBE").is_some_and(|value| value == "1")
+    }
+
+    fn usb_probe_event(&mut self, event: &str, kind: Option<u8>, bytes: usize) {
+        crate::event_log::record(
+            "INFO",
+            "phaze_usb_probe",
+            serde_json::json!({"event":event,"kind":kind,"bytes":bytes}),
+        );
+    }
+
     fn peer_state(&mut self, local_id: u32, state: evoparseq_phaze::PeerState) {
         let mut peers = self
             .window

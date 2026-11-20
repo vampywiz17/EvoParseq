@@ -514,6 +514,9 @@ pub async fn run(
     let mut reliable = wire::Reliable::default();
     let mut audio = crate::audio::Audio::default();
     let mut cursors = crate::cursor::Cursors::default();
+    let mut usb_probe = sink
+        .usb_probe_enabled()
+        .then(crate::usb_probe::Probe::default);
     for p in reliable.frame(&wire::hello(sink.raw_audio()))? {
         send(&mut c, &p)?;
     }
@@ -717,6 +720,13 @@ pub async fn run(
                             sink.clipboard_text(text)
                         }
                         Some(crate::control::HostControl::Peers(state)) => {
+                            if let (Some(probe), Some(guests)) = (&mut usb_probe, &state.guests) {
+                                probe.control(
+                                    guests
+                                        .iter()
+                                        .any(|guest| guest.id == own_cid && guest.has_control),
+                                );
+                            }
                             sink.peer_state(own_cid, state)
                         }
                         Some(crate::control::HostControl::Removed(code)) => {
@@ -724,9 +734,38 @@ pub async fn run(
                         }
                         None => {}
                     },
+                    Some(15) => {
+                        if let Some(probe) = &mut usb_probe {
+                            if probe
+                                .receive(&frame[1..], |kind, len| {
+                                    sink.usb_probe_event("message", Some(kind), len);
+                                })
+                                .is_err()
+                            {
+                                probe.disable();
+                                sink.usb_probe_event("invalid_framing", None, frame.len() - 1);
+                            }
+                        }
+                    }
+                    Some(16) if frame.len() == 2 => {
+                        if let Some(probe) = &mut usb_probe {
+                            probe.link_state(frame[1]);
+                            sink.usb_probe_event("link_state", Some(frame[1]), 1);
+                        }
+                    }
                     Some(17) if frame.len() == 5 => sink.controller(wire::be(&frame, 1)),
                     _ => {}
                 }
+            }
+        }
+        if let Some(probe) = &mut usb_probe {
+            let reply = crate::usb_probe::LINK_REPLY;
+            if probe.wants_reply() && reliable.fits(reply.len(), 48) {
+                for packet in reliable.frame(reply)? {
+                    send(&mut c, &packet)?;
+                }
+                probe.replied();
+                sink.usb_probe_event("link_reply_queued", Some(reply[1]), 1);
             }
         }
         if reliable.pending().count() < 48 && cursors.take_refresh_request() {
