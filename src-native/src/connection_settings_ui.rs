@@ -833,17 +833,22 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
         INPUT_MODE,
         242,
         &InputMode::LABELS,
-        InputMode::current(&s) as usize,
+        InputMode::for_service(&s, page.model.phaze) as usize,
     );
     row_label(
         hwnd,
         page,
         crate::app_style::forms::HID_REQUIREMENTS.label,
-        crate::app_style::forms::HID_REQUIREMENTS.help,
+        if page.model.phaze {
+            "Allow USB devices from clients on the Phaze host. HID mouse uses the primary display."
+        } else {
+            crate::app_style::forms::HID_REQUIREMENTS.help
+        },
         354,
         0,
         64,
     );
+    page.building_feature = Feature::ParsecNetwork;
     row_label(
         hwnd,
         page,
@@ -855,7 +860,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
     );
 
     page.building_feature = Feature::Common;
-    let capture_y = if page.model.phaze { 242 } else { 580 };
+    let capture_y = if page.model.phaze { 466 } else { 580 };
     row_label(
         hwnd,
         page,
@@ -1035,7 +1040,7 @@ unsafe fn layout(hwnd: HWND) {
         }
         Tab::Input => {
             if page.model.phaze {
-                340
+                580
             } else {
                 680
             }
@@ -1358,7 +1363,7 @@ unsafe fn update_enabled(hwnd: HWND) {
     }
     check(hwnd, CHROMA_444, page.model.values.experimental_chroma_444);
     for (id, on) in [
-        (INPUT_MODE, enabled.bud),
+        (INPUT_MODE, enabled.bud || page.model.phaze),
         (AUDIO_MIN, enabled.audio_limits),
         (AUDIO_MAX, enabled.audio_limits),
         (AUDIO_RAW, enabled.bud || page.model.phaze),
@@ -1420,13 +1425,14 @@ unsafe fn save(hwnd: HWND, page: &mut Page) {
         {
             s.zero_copy = checked(hwnd, ZERO_COPY);
         }
-        #[cfg(feature = "bud")]
-        {
-            if let Some(mode) = InputMode::ALL
-                .get(selection(hwnd, INPUT_MODE))
-                .filter(|_| !model.phaze)
-            {
-                mode.apply(s);
+        // Phaze USB HID is independent of the optional Parsec BUD backend.
+        if let Some(mode) = InputMode::ALL.get(selection(hwnd, INPUT_MODE)).copied() {
+            if model.phaze {
+                mode.apply_for_service(s, true);
+            }
+            #[cfg(feature = "bud")]
+            if !model.phaze {
+                mode.apply_for_service(s, false);
             }
         }
     }
@@ -2343,10 +2349,12 @@ mod tests {
             assert_no_overlaps(page);
             capture(page, "phaze-audio");
             SendMessageW(page, WM_COMMAND, INPUT_TAB, 0);
-            assert_eq!(
+            assert_ne!(
                 GetWindowLongW(GetDlgItem(page, INPUT_MODE as i32), GWL_STYLE) as u32 & WS_VISIBLE,
                 0
             );
+            assert_ne!(IsWindowEnabled(GetDlgItem(page, INPUT_MODE as i32)), 0);
+            select(page, INPUT_MODE, InputMode::HidBoth as usize);
             assert_ne!(
                 GetWindowLongW(GetDlgItem(page, IMMERSIVE as i32), GWL_STYLE) as u32 & WS_VISIBLE,
                 0
@@ -2360,6 +2368,7 @@ mod tests {
             let state = &mut *(GetWindowLongPtrW(page, GWLP_USERDATA) as *mut Page);
             save(page, state);
             assert!(manager.view().0.allow_raw_audio);
+            assert_eq!(manager.view().0.phaze_input_mode, InputMode::HidBoth);
             DestroyWindow(page);
             DestroyWindow(parent);
         }

@@ -27,7 +27,7 @@ Parsec Opus decoding is unchanged. Original synthetic silent AAC blocks validate
 actual decode, continuity, mode changes, bounds and error recovery in CI; live
 AAC-host interoperability and latency still need user validation.
 
-### USB/HID investigation (not implemented)
+### Virtual USB HID mouse and keyboard
 
 The official client's USB send/receive settings govern USB forwarding; they do
 not establish compatibility with Parsec HID input messages. Static symbol
@@ -39,7 +39,15 @@ SDK. We do not call these proprietary entry points. Device descriptors, report
 transport, host creation/acceptance and lifecycle/release behavior must be
 established before an independent implementation. Existing common HID report
 models may be reusable; the Phaze transport must be original and separately
-validated. The HID/USB controls remain unavailable in EvoParseq Phaze mode.
+validated.
+
+The Windows client implements an experimental USB HID mode. It announces its
+own virtual devices in response to the host's device-list request. The shared
+Rust code handles USB descriptors, endpoint polling, neutral reports, and
+pressed state. Normal disconnect completes pending reads with neutral state
+when possible, then sends USB link-down before closing the Phaze session.
+The Phaze host still controls whether USB forwarding is allowed. Live testing
+must confirm enumeration, input, and removal with the stock host.
 
 Input opcodes 8/9/10/11 carry keyboard/wheel/button/motion messages. Each has
 five big-endian words: selected output plus four event fields. Absolute motion

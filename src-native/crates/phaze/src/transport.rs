@@ -359,7 +359,43 @@ async fn release_and_close(
     reliable: &mut wire::Reliable,
     socket: &impl crate::Datagram,
     peer: SocketAddr,
+    usb: Option<&mut crate::usb_probe::Probe>,
 ) {
+    let usb_frames = usb.map_or_else(Vec::new, crate::usb_probe::Probe::disconnect);
+    if !usb_frames.is_empty() {
+        for frame in usb_frames {
+            if let Ok(packets) = reliable.frame(&frame) {
+                for packet in packets {
+                    let _ = send(c, &packet);
+                }
+            }
+        }
+        // Flush the reliable USB release and link-down before the media close.
+        // Allow one bounded ACK window so the close cannot overtake them.
+        let _ = tokio::time::timeout(Duration::from_millis(350), async {
+            if flush(c, socket, peer).await.is_err() {
+                return;
+            }
+            let mut datagram = [0; 4096];
+            while reliable.pending().count() != 0 {
+                let Ok((len, source)) = socket.recv_from(&mut datagram).await else {
+                    break;
+                };
+                if socket.endpoint(source) != Some(peer) || c.feed(&datagram[..len]).is_err() {
+                    continue;
+                }
+                while let Ok(bytes) = c.recv() {
+                    if bytes.is_empty() {
+                        break;
+                    }
+                    if let Some(wire::Envelope::Reliable(payload)) = wire::envelope(&bytes) {
+                        let _ = reliable.receive_at(payload, Instant::now());
+                    }
+                }
+            }
+        })
+        .await;
+    }
     if let Ok(packets) = reliable.frame(&crate::Input::Release.encode(0)) {
         for packet in packets {
             let _ = send(c, &packet);
@@ -443,7 +479,10 @@ pub async fn run(
     .await
     .context("Phaze candidate probing timed out")??;
     sink.stage("stun_authenticated");
-    let cid = ((own_cid as u64) << 32 | a.cid as u64)
+    // The authenticated answer assigns the ID used by host guest and controller
+    // messages. The client-chosen CID is only the initiating half of the DTLS CID.
+    let guest_id = a.cid;
+    let cid = ((own_cid as u64) << 32 | guest_id as u64)
         .to_le_bytes()
         .to_vec();
     let config = Config::builder()
@@ -514,6 +553,14 @@ pub async fn run(
     let mut reliable = wire::Reliable::default();
     let mut audio = crate::audio::Audio::default();
     let mut cursors = crate::cursor::Cursors::default();
+    let (hid_mouse, hid_keyboard) = sink.usb_hid_devices();
+    let usb_diagnostics = sink.usb_probe_enabled();
+    let mut usb_probe = (hid_mouse || hid_keyboard || usb_diagnostics)
+        .then(|| crate::usb_probe::Probe::new(hid_mouse, hid_keyboard));
+    let mut usb_controller = None;
+    if usb_probe.is_some() {
+        sink.usb_probe_event("started", None, 0);
+    }
     for p in reliable.frame(&wire::hello(sink.raw_audio()))? {
         send(&mut c, &p)?;
     }
@@ -539,13 +586,13 @@ pub async fn run(
     let mut bandwidth_reported = false;
     loop {
         if last_heartbeat.elapsed() >= Duration::from_secs(20) {
-            release_and_close(&mut c, &mut reliable, &socket, peer).await;
+            release_and_close(&mut c, &mut reliable, &socket, peer, usb_probe.as_mut()).await;
             bail!("Phaze peer heartbeat timed out");
         }
         if !video_received && app_started.elapsed() >= Duration::from_secs(20) {
             // The host owns session-created displays. Close the authenticated
             // session even if the first display or video was never ready.
-            release_and_close(&mut c, &mut reliable, &socket, peer).await;
+            release_and_close(&mut c, &mut reliable, &socket, peer, usb_probe.as_mut()).await;
             if !requested {
                 bail!("Phaze host did not report an active display");
             }
@@ -564,7 +611,7 @@ pub async fn run(
                 input.clear();
                 let running=sink.poll(selected_output,&mut input,&mut controls);
                 if !matches!(running,Ok(true)) {
-                    release_and_close(&mut c,&mut reliable,&socket,peer).await;
+                    release_and_close(&mut c,&mut reliable,&socket,peer,usb_probe.as_mut()).await;
                     return running.map(|_|());
                 }
                 let recovering = selected_output.is_some()
@@ -599,6 +646,7 @@ pub async fn run(
                     });
                     let mut commands = deferred.into_iter().chain(input.drain(..)).peekable();
                     while let Some(command) = commands.next() {
+                        if usb_probe.as_mut().is_some_and(|usb| usb.input(command)) { continue; }
                         let outstanding = reliable.pending().count();
                         // Preserve room for button and key transitions when the
                         // peer is slow to acknowledge a burst of positions.
@@ -607,7 +655,7 @@ pub async fn run(
                             break;
                         }
                         if outstanding >= 63 {
-                            release_and_close(&mut c,&mut reliable,&socket,peer).await;
+                            release_and_close(&mut c,&mut reliable,&socket,peer,usb_probe.as_mut()).await;
                             bail!("Phaze input acknowledgment window exhausted; reconnect to continue");
                         }
                         for p in reliable.frame(&command.encode(output))? { send(&mut c,&p)?; }
@@ -717,15 +765,102 @@ pub async fn run(
                             sink.clipboard_text(text)
                         }
                         Some(crate::control::HostControl::Peers(state)) => {
-                            sink.peer_state(own_cid, state)
+                            if let (Some(probe), Some(guests), None) =
+                                (&mut usb_probe, &state.guests, usb_controller)
+                            {
+                                probe.control(
+                                    guests
+                                        .iter()
+                                        .any(|guest| guest.id == guest_id && guest.has_control),
+                                );
+                            }
+                            sink.peer_state(guest_id, state)
                         }
                         Some(crate::control::HostControl::Removed(code)) => {
                             bail!("Phaze host ended the session (reason {code})");
                         }
                         None => {}
                     },
-                    Some(17) if frame.len() == 5 => sink.controller(wire::be(&frame, 1)),
+                    Some(15) => {
+                        if let Some(probe) = &mut usb_probe {
+                            if probe
+                                .receive(&frame[1..], |kind, len| {
+                                    if usb_diagnostics || !matches!(kind, 10 | 18) {
+                                        sink.usb_probe_event("message", Some(kind), len);
+                                    }
+                                })
+                                .is_err()
+                            {
+                                probe.disable();
+                                sink.usb_probe_event("invalid_framing", None, frame.len() - 1);
+                            }
+                        }
+                    }
+                    Some(16) if frame.len() == 2 => {
+                        if let Some(probe) = &mut usb_probe {
+                            probe.link_state(frame[1]);
+                            sink.usb_probe_event("link_state", Some(frame[1]), 1);
+                        }
+                    }
+                    Some(17) if frame.len() == 5 => {
+                        let controller = wire::be(&frame, 1);
+                        if let Some(probe) = &mut usb_probe {
+                            usb_controller = Some(controller);
+                            let granted = controller == guest_id;
+                            probe.control(granted);
+                            let event = if granted {
+                                "control_granted"
+                            } else {
+                                "control_not_granted"
+                            };
+                            sink.usb_probe_event(event, None, 0);
+                        }
+                        sink.controller(controller);
+                    }
                     _ => {}
+                }
+            }
+        }
+        if let Some(probe) = &mut usb_probe {
+            let reply = crate::usb_probe::LINK_REPLY;
+            if probe.wants_reply() && reliable.fits(reply.len(), 48) {
+                for packet in reliable.frame(reply)? {
+                    send(&mut c, &packet)?;
+                }
+                probe.replied();
+                sink.usb_probe_event("link_reply_queued", Some(reply[1]), 1);
+            }
+            // Both USB management responses fit one reliable packet each.
+            if reliable.fits(1, 48) {
+                if let Some(hello) = probe.take_hello() {
+                    for packet in reliable.frame(&hello)? {
+                        send(&mut c, &packet)?;
+                    }
+                    sink.usb_probe_event("hello_queued", Some(1), 130);
+                }
+            }
+            if reliable.fits(1, 48) {
+                if let Some(pong) = probe.take_pong() {
+                    for packet in reliable.frame(&pong)? {
+                        send(&mut c, &packet)?;
+                    }
+                    if usb_diagnostics {
+                        sink.usb_probe_event("pong_queued", Some(11), 0);
+                    }
+                }
+            }
+            for _ in 0..4 {
+                if !reliable.fits(1, 48) {
+                    break;
+                }
+                let Some((frame, initial_device)) = probe.next_device_frame() else {
+                    break;
+                };
+                for packet in reliable.frame(&frame)? {
+                    send(&mut c, &packet)?;
+                }
+                if let Some(id) = initial_device {
+                    sink.usb_probe_event("neutral_report_queued", Some(id as u8), frame.len() - 46);
                 }
             }
         }

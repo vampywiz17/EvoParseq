@@ -47,7 +47,8 @@ pub fn run(
         },
         pcm,
         saved.allow_raw_audio,
-    );
+    )
+    .with_hid_devices(saved.phaze_input_mode.devices());
     let result = account::phaze_runtime(async {
         let servers = if saved.force_relay {
             Some(manager.resolve_configuration().await?.ice_servers)
@@ -243,10 +244,13 @@ impl phaze_client::Platform for Adapter<'_> {
                                 session.stream.apply(config, output);
                             }
                             Command::SelectDisplay(id) => {
-                                anyhow::ensure!(
-                                    host.outputs.iter().any(|o| o.id == id),
-                                    "Display is unavailable"
-                                );
+                                // Reuse the Windows policy: USB HID mouse targets the
+                                // host's primary display, not another selected output.
+                                crate::host_displays::Displays {
+                                    outputs: host.outputs.clone(),
+                                    ..Default::default()
+                                }
+                                .validate_selection(&id, session.hid_devices.0)?;
                                 self.desktop.event(Desktop::Release, geometry, input)?;
                                 session.stream.select(id.parse()?);
                             }

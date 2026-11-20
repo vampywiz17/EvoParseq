@@ -37,6 +37,8 @@ pub struct State {
     pub audio_bytes: u64,
     pub route: &'static str,
     pub carrier: &'static str,
+    /// Selected virtual USB devices, independent of the normal Parsec BUD profile.
+    pub hid_devices: (bool, bool),
 }
 
 pub struct Client<P> {
@@ -60,8 +62,15 @@ impl<P: Platform> Client<P> {
                 audio_bytes: 0,
                 route: "Direct",
                 carrier: "direct UDP",
+                hid_devices: (false, false),
             },
         }
+    }
+
+    /// Opt in to the shared Phaze virtual USB state machine for this session.
+    pub fn with_hid_devices(mut self, devices: (bool, bool)) -> Self {
+        self.state.hid_devices = devices;
+        self
     }
 
     pub async fn connect(
@@ -94,6 +103,10 @@ impl<P: Platform> Client<P> {
 }
 
 impl<P: Platform> Sink for Client<P> {
+    fn usb_hid_devices(&self) -> (bool, bool) {
+        self.state.hid_devices
+    }
+
     fn raw_audio(&self) -> bool {
         self.raw_audio
     }
@@ -225,6 +238,24 @@ fn translate(action: Action, keys: &mut Keyboard, size: (u32, u32), commands: &m
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_client_forwards_selected_usb_hid_devices() {
+        struct Offline;
+        impl Platform for Offline {
+            fn video(&mut self, _: &[u8], _: PacketInfo) -> Result<()> { Ok(()) }
+            fn reset_video(&mut self) {}
+            fn take_recovery(&mut self) -> bool { false }
+            fn poll(&mut self, _: &mut State, _: Option<u32>, _: &mut Vec<Input>, _: &mut Vec<ClientControl>) -> Result<bool> { Ok(false) }
+            fn cursor_mode(&mut self, _: bool, _: bool) {}
+        }
+        for devices in [(false, false), (true, false), (false, true), (true, true)] {
+            let client = Client::new(
+                Offline, VideoConfig::default(), DecodedPcm::stereo(50), false,
+            ).with_hid_devices(devices);
+            assert_eq!(Sink::usb_hid_devices(&client), devices);
+        }
+    }
 
     #[test]
     fn linux_phaze_host_mode_switches_captured_motion_and_preserves_focus_release() -> Result<()> {

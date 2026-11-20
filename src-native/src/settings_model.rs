@@ -151,7 +151,9 @@ impl Form {
         }
     }
     pub fn supports(&self, feature: Feature) -> bool {
-        !self.phaze || matches!(feature, Feature::Common | Feature::RawAudio)
+        !self.phaze
+            || matches!(feature, Feature::Common | Feature::RawAudio)
+            || (cfg!(any(windows, target_os = "linux")) && feature == Feature::Hid)
     }
     pub fn notice(&self) -> &'static str {
         if self.phaze {
@@ -159,7 +161,8 @@ impl Form {
                 Tab::Network => "Phaze: Force TURN uses the configured relay. Other modes use direct UDP.",
                 Tab::Video => "Video changes apply on your next connection. Check Connection stats for the actual format and decoder.",
                 Tab::Audio => "Phaze supports stereo AAC-LC or PCM. Audio changes apply on your next connection.",
-                Tab::Input => "Phaze supports keyboard, mouse and scrolling. HID and USB forwarding are unavailable.",
+                Tab::Input if cfg!(any(windows, target_os = "linux")) => "USB HID is experimental and requires permission on the Phaze host. Reconnect after changing the input mode.",
+                Tab::Input => "Phaze supports keyboard, mouse and scrolling.",
             }
         } else {
             self.active_tab.notice()
@@ -681,7 +684,11 @@ mod vsr_tests {
             form.phaze = phaze;
             assert!(form.supports(Feature::Common));
             assert!(form.supports(Feature::RawAudio));
-            for feature in [Feature::ParsecNetwork, Feature::SurroundAudio, Feature::Hid] {
+            assert_eq!(
+                form.supports(Feature::Hid),
+                !phaze || cfg!(any(windows, target_os = "linux"))
+            );
+            for feature in [Feature::ParsecNetwork, Feature::SurroundAudio] {
                 assert_eq!(form.supports(feature), !phaze);
             }
             assert_eq!(form.video_formats().len(), if phaze { 2 } else { 3 });

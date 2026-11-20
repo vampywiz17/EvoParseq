@@ -25,6 +25,7 @@ struct View {
     rtt: Option<Duration>,
     audio_bytes: u64,
     raw_audio: bool,
+    hid_devices: (bool, bool),
     audio_codec: Option<evoparseq_phaze::AudioCodec>,
     authenticated: bool,
     last_clipboard: String,
@@ -111,6 +112,22 @@ impl View {
     }
 }
 impl evoparseq_phaze::Sink for View {
+    fn usb_hid_devices(&self) -> (bool, bool) {
+        self.hid_devices
+    }
+
+    fn usb_probe_enabled(&self) -> bool {
+        std::env::var_os("EVOPARSEQ_PHAZE_USB_PROBE").is_some_and(|value| value == "1")
+    }
+
+    fn usb_probe_event(&mut self, event: &str, kind: Option<u8>, bytes: usize) {
+        crate::event_log::record(
+            "INFO",
+            "phaze_usb_probe",
+            serde_json::json!({"event":event,"kind":kind,"bytes":bytes}),
+        );
+    }
+
     fn peer_state(&mut self, local_id: u32, state: evoparseq_phaze::PeerState) {
         let mut peers = self
             .window
@@ -312,6 +329,7 @@ impl evoparseq_phaze::Sink for View {
                 })
                 .collect();
             displays.loading = false;
+            displays.hid_mouse = self.hid_devices.0;
         }
         self.window.notify(Notification::DisplaysChanged);
         crate::event_log::record(
@@ -472,7 +490,7 @@ impl evoparseq_phaze::Sink for View {
                                     .displays
                                     .lock()
                                     .unwrap_or_else(|e| e.into_inner())
-                                    .validate_selection(&id, false)?;
+                                    .validate_selection(&id, self.hid_devices.0)?;
                                 self.keys.reset();
                                 commands.clear();
                                 commands.push(Input::Release);
@@ -634,6 +652,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         rtt: None,
         audio_bytes: 0,
         raw_audio: saved.allow_raw_audio,
+        hid_devices: saved.phaze_input_mode.devices(),
         audio_codec: None,
         authenticated: false,
         last_clipboard: String::new(),
@@ -823,6 +842,7 @@ mod tests {
                 rtt: None,
                 audio_bytes: 0,
                 raw_audio: false,
+                hid_devices: (false, false),
                 audio_codec: None,
                 authenticated: false,
                 last_clipboard: String::new(),

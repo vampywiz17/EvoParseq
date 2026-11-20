@@ -71,7 +71,7 @@ impl Desktop {
             + egui::vec2(((ui.available_width() - s::WIDTH as f32) / 2.).max(24.), 0.);
         let r = |rect| rect_at(origin, s::positioned(rect));
         let footer = if phaze {
-            [860, 1034, 626, 340]
+            [860, 1034, 626, 570]
         } else {
             [1150, 1034, 750, 570]
         }[self.ui_state.tab];
@@ -147,8 +147,6 @@ impl Desktop {
                         f::TRANSPORT.label,
                         f::TCP_TLS_QOS.label,
                         f::SPEAKER_LAYOUT.label,
-                        f::INPUT_MODE.label,
-                        f::HID_REQUIREMENTS.label,
                         f::COMPATIBILITY.label,
                     ]
                     .contains(&row.label)
@@ -178,6 +176,8 @@ impl Desktop {
                         "Choose direct UDP or explicitly force TURN.\nThere is no automatic direct/relay fallback."
                     } else if phaze && row.label == f::VIDEO_FORMAT.label {
                         "Request H.264 or HEVC 8-bit.\nThe host may select H.264; reconnect after changing."
+                    } else if phaze && row.label == f::HID_REQUIREMENTS.label {
+                        "Allow USB devices from clients on the Phaze host. HID mouse uses the primary display."
                     } else {
                         row.help
                     },
@@ -304,7 +304,7 @@ impl Desktop {
                 });
             } else if row.label == f::INPUT_MODE.label {
                 use crate::connection_settings::InputMode;
-                let mut mode = InputMode::current(&draft.values);
+                let mut mode = InputMode::for_service(&draft.values, phaze);
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     egui::ComboBox::from_id_salt(row.label)
                         .width(400.)
@@ -313,6 +313,7 @@ impl Desktop {
                             for (item, text) in InputMode::ALL.into_iter().zip(InputMode::LABELS) {
                                 ui.add_enabled_ui(
                                     item == InputMode::Standard
+                                        || phaze
                                         || self.transport == connection::Mode::Bud,
                                     |ui| {
                                         ui.selectable_value(&mut mode, item, text);
@@ -321,7 +322,7 @@ impl Desktop {
                             }
                         });
                 });
-                mode.apply(&mut draft.values);
+                mode.apply_for_service(&mut draft.values, phaze);
             } else if tab == 2 {
                 use crate::connection_settings::BinaryChoice;
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
