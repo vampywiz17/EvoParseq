@@ -92,6 +92,7 @@ struct Panel {
     scroll: i32,
     controls: [HWND; 6],
     initial_fields: [String; 3],
+    saved_video: Video,
     display_ids: Vec<String>,
     fullscreen: HWND,
     font: HFONT,
@@ -141,7 +142,10 @@ unsafe fn collect(p: &Panel) -> Result<Video> {
         immersive: crate::input_state::immersive_value(select(5) as usize),
         fullscreen: SendMessageW(p.fullscreen, BM_GETCHECK, 0, 0) == BST_CHECKED as isize,
     }
-    .parse_for_service(!(&*p.window).session.phaze.load(Ordering::Acquire))
+    .parse_preserving(
+        !(&*p.window).session.phaze.load(Ordering::Acquire),
+        Some(&p.saved_video),
+    )
     .map(|video| (&*p.window).session.supported_video(video))
 }
 unsafe fn close(hwnd: HWND) {
@@ -884,9 +888,8 @@ pub unsafe fn toggle(
         SetFocus(parent);
         return;
     }
-    let video = window
-        .session
-        .panel_video(manager.view().0.native_core.video);
+    let saved_video = manager.view().0.native_core.video;
+    let video = window.session.panel_video(saved_video.clone());
     let mut panel = Box::new(Panel {
         window,
         window_owned: false,
@@ -900,6 +903,7 @@ pub unsafe fn toggle(
                 .to_string(),
             video.fps.unwrap().to_string(),
         ],
+        saved_video,
         display_ids: Vec::new(),
         fullscreen: null_mut(),
         font: super::ui::font(16, 400),

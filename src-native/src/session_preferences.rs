@@ -55,11 +55,19 @@ impl Video {
     }
 
     pub fn set_bandwidth(&mut self, parsec: bool, value: u32) -> Result<()> {
-        let max = if parsec { MAX_PARSEC_BANDWIDTH_MBPS } else { MAX_BANDWIDTH_MBPS };
+        let max = if parsec {
+            MAX_PARSEC_BANDWIDTH_MBPS
+        } else {
+            MAX_BANDWIDTH_MBPS
+        };
         ensure!((1..=max).contains(&value), "Value must be 1–{max}.");
-        self.parsec_bandwidth_mbps =
-            (parsec && value > MAX_BANDWIDTH_MBPS).then_some(value);
-        self.bandwidth_mbps = self.parsec_bandwidth_mbps.is_none().then_some(value);
+        if parsec {
+            // Do not overwrite a previously saved Phaze/legacy bandwidth.
+            self.parsec_bandwidth_mbps = Some(value);
+        } else {
+            // Likewise, adjusting Phaze does not erase a Parsec preference.
+            self.bandwidth_mbps = Some(value);
+        }
         Ok(())
     }
 
@@ -195,18 +203,31 @@ impl PanelFields<'_> {
     }
 
     pub fn parse_for_service(&self, parsec: bool) -> Result<Video> {
+        self.parse_preserving(parsec, None)
+    }
+
+    /// GUI adapters supply the saved profile so changing one service's
+    /// bandwidth never clears the other service's preference.
+    pub fn parse_preserving(&self, parsec: bool, saved: Option<&Video>) -> Result<Video> {
         let mut video = Video {
             resolution: resolution(self.resolution)?,
-            bandwidth_mbps: None,
-            parsec_bandwidth_mbps: None,
+            bandwidth_mbps: saved.and_then(|v| v.bandwidth_mbps),
+            parsec_bandwidth_mbps: saved.and_then(|v| v.parsec_bandwidth_mbps),
             fps: number(self.fps, MAX_FPS)?,
             constant_fps: Some(self.constant_fps),
             rotated: Some(self.rotated),
             immersive: self.immersive,
             fullscreen: self.fullscreen,
         };
-        let max = if parsec { MAX_PARSEC_BANDWIDTH_MBPS } else { MAX_BANDWIDTH_MBPS };
-        video.set_bandwidth(parsec, number(self.bandwidth, max)?.expect("panel bandwidth required"))?;
+        let max = if parsec {
+            MAX_PARSEC_BANDWIDTH_MBPS
+        } else {
+            MAX_BANDWIDTH_MBPS
+        };
+        video.set_bandwidth(
+            parsec,
+            number(self.bandwidth, max)?.expect("panel bandwidth required"),
+        )?;
         video.validate()?;
         Ok(video)
     }
@@ -318,6 +339,29 @@ mod parsec_bandwidth_tests {
         assert_eq!(video.requested_bandwidth(true), Some(50));
         assert_eq!(video.requested_bandwidth(false), Some(50));
         assert!(video.set_bandwidth(false, 150).is_err());
+
+        // This is the persisted state transition that must remain harmless
+        // when a user connects to Parsec after a Phaze session.
+        let saved = video.clone();
+        let fields = PanelFields {
+            resolution: HOST_RESOLUTION,
+            bandwidth: "150",
+            fps: "60",
+            constant_fps: false,
+            rotated: false,
+            immersive: 0,
+            fullscreen: false,
+        };
+        let parsec = fields.parse_preserving(true, Some(&saved))?;
+        assert_eq!(parsec.requested_bandwidth(false), Some(50));
+        assert_eq!(parsec.requested_bandwidth(true), Some(150));
+        let restored: Video = serde_json::from_str(&serde_json::to_string(&parsec)?)?;
+        assert_eq!(restored.requested_bandwidth(false), Some(50));
+        assert_eq!(restored.requested_bandwidth(true), Some(150));
+        let phaze_fields = PanelFields { bandwidth: "40", ..fields };
+        let changed_phaze = phaze_fields.parse_preserving(false, Some(&restored))?;
+        assert_eq!(changed_phaze.requested_bandwidth(false), Some(40));
+        assert_eq!(changed_phaze.requested_bandwidth(true), Some(150));
         Ok(())
     }
 }

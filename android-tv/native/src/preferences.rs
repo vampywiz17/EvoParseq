@@ -20,6 +20,9 @@ pub struct Preferences {
     pub resolution: usize,
     pub fps: usize,
     pub bandwidth: usize,
+    /// Parsec-only selection; legacy bandwidth is retained for Phaze.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parsec_bandwidth: Option<usize>,
     #[serde(default)]
     pub pacing: usize,
 }
@@ -43,6 +46,7 @@ impl Default for Preferences {
             resolution: 0,
             fps: FPS_CHOICES.iter().position(|s| *s == "60").unwrap(),
             bandwidth: BANDWIDTH_CHOICES.iter().position(|s| *s == "20").unwrap(),
+            parsec_bandwidth: None,
         }
     }
 }
@@ -64,7 +68,7 @@ impl Preferences {
                 "bandwidth",
                 "Bandwidth limit request (Mbps)",
                 PARSEC_BANDWIDTH_CHOICES,
-                self.bandwidth,
+                self.parsec_bandwidth.unwrap_or(self.bandwidth),
             ),
         ]
     }
@@ -75,6 +79,7 @@ impl Preferences {
         for (_, _, choices, index) in value.fields() {
             ensure!(index < choices.len(), "Invalid TV setting.");
         }
+        ensure!(value.bandwidth < BANDWIDTH_CHOICES.len(), "Invalid Phaze bandwidth.");
         // Reuse the Windows panel's parsing/limits rather than duplicating them.
         value.host_request()?;
         value.audio.validate()?;
@@ -87,6 +92,10 @@ impl Preferences {
     }
 
     pub fn select(&mut self, field: &str, index: usize) -> Result<()> {
+        self.select_for_service(field, index, true)
+    }
+
+    pub fn select_for_service(&mut self, field: &str, index: usize, parsec: bool) -> Result<()> {
         let mut audio = self.audio;
         let boolean = || {
             ensure!(index < 2, "Invalid audio setting");
@@ -110,26 +119,30 @@ impl Preferences {
                 self.logging = boolean()?;
                 return Ok(());
             }
-            _ => return self.select_video(field, index),
+            _ => return self.select_video(field, index, parsec),
         }
         audio.validate()?;
         self.audio = audio;
         Ok(())
     }
 
-    fn select_video(&mut self, field: &str, index: usize) -> Result<()> {
-        let choices = self
-            .fields()
-            .into_iter()
-            .find(|(key, _, _, _)| *key == field)
-            .ok_or_else(|| anyhow::anyhow!("Unknown TV setting."))?
-            .2;
+    fn select_video(&mut self, field: &str, index: usize, parsec: bool) -> Result<()> {
+        let choices = if field == "bandwidth" && !parsec {
+            BANDWIDTH_CHOICES
+        } else {
+            self.fields()
+                .into_iter()
+                .find(|(key, _, _, _)| *key == field)
+                .ok_or_else(|| anyhow::anyhow!("Unknown TV setting."))?
+                .2
+        };
         ensure!(index < choices.len(), "Invalid TV setting.");
         match field {
             "transport" => self.transport = index,
             "video" => self.video = index,
             "resolution" => self.resolution = index,
             "fps" => self.fps = index,
+            "bandwidth" if parsec => self.parsec_bandwidth = Some(index),
             "bandwidth" => self.bandwidth = index,
             "pacing" => self.pacing = index,
             _ => unreachable!(),
@@ -149,7 +162,7 @@ impl Preferences {
                 let (choices, selected) = if phaze && key == "video" {
                     (&choices[..2], selected.min(1))
                 } else if phaze && key == "bandwidth" {
-                    (bandwidth_choices(false), selected.min(BANDWIDTH_CHOICES.len() - 1))
+                    (bandwidth_choices(false), self.bandwidth)
                 } else {
                     (choices, selected)
                 };
@@ -208,7 +221,11 @@ impl Preferences {
                 .get(self.resolution)
                 .ok_or_else(|| anyhow::anyhow!("Invalid resolution."))?,
             bandwidth: bandwidth_choices(parsec)
-                .get(self.bandwidth.min(bandwidth_choices(parsec).len() - 1))
+                .get(if parsec {
+                    self.parsec_bandwidth.unwrap_or(self.bandwidth)
+                } else {
+                    self.bandwidth
+                })
                 .ok_or_else(|| anyhow::anyhow!("Invalid bandwidth."))?,
             fps: FPS_CHOICES
                 .get(self.fps)
@@ -240,6 +257,8 @@ mod tests {
     #[test]
     fn parsec_bandwidth_presets_do_not_raise_phaze_stream_limit() -> Result<()> {
         let mut saved = Preferences::default();
+        let legacy = BANDWIDTH_CHOICES.iter().position(|v| *v == "50").unwrap();
+        saved.select_for_service("bandwidth", legacy, false)?;
         for mbps in [100_u32, 150] {
             let choice = mbps.to_string();
             let index = PARSEC_BANDWIDTH_CHOICES.iter().position(|v| *v == choice).unwrap();
@@ -247,12 +266,18 @@ mod tests {
             let parsed = Preferences::parse(&serde_json::to_string(&saved)?)?;
             assert_eq!(parsed.host_request()?.requested_bandwidth(true), Some(mbps));
             assert_eq!(parsed.phaze_video_config()?.mbps, 50);
+            assert_eq!(parsed.bandwidth, legacy);
+            assert_eq!(parsed.parsec_bandwidth, Some(index));
             let view = parsed.view_for(crate::account::Service::Phaze);
             let bandwidth = view["rows"].as_array().unwrap().iter()
                 .find(|row| row["key"] == "bandwidth").unwrap();
             assert_eq!(bandwidth["selected"].as_u64(), Some((BANDWIDTH_CHOICES.len() - 1) as u64));
             assert_eq!(bandwidth["choices"].as_array().unwrap().len(), BANDWIDTH_CHOICES.len());
         }
+        // A later Phaze selection must not discard the Parsec-specific 150.
+        saved.select_for_service("bandwidth", 0, false)?;
+        assert_eq!(saved.bandwidth, 0);
+        assert_eq!(saved.host_request()?.requested_bandwidth(true), Some(150));
         Ok(())
     }
 
