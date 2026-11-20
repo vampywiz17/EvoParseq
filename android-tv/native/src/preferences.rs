@@ -239,7 +239,7 @@ impl Preferences {
             immersive: 0,
             fullscreen: true,
         }
-        .parse_for_service(parsec)
+        .parse_preserving(parsec, None)
     }
 
     #[cfg(any(target_os = "android", test))]

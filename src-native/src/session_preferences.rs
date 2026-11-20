@@ -204,7 +204,7 @@ impl PanelFields<'_> {
         self.parse_for_service(false)
     }
 
-    #[cfg(any(target_os = "android", test))]
+    #[cfg(test)]
     pub fn parse_for_service(&self, parsec: bool) -> Result<Video> {
         self.parse_preserving(parsec, None)
     }
