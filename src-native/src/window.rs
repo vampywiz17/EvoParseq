@@ -566,8 +566,16 @@ impl Window {
             }
         }
     }
-    fn release_buttons(&self) {
+    fn release_buttons(&self, reason: &'static str) {
         let pressed = self.pressed_buttons.swap(0, Ordering::AcqRel);
+        if pressed != 0 && self.session.phaze.load(Ordering::Acquire) && crate::event_log::enabled()
+        {
+            crate::event_log::record(
+                "INFO",
+                "phaze_mouse_capture_released",
+                serde_json::json!({"reason":reason,"held_button_count":pressed.count_ones()}),
+            );
+        }
         for button in 0..5 {
             if pressed & (1 << button) != 0 {
                 self.push(Event::Button(false, button, 0, 0));
@@ -1620,14 +1628,14 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                     .unwrap_or_else(|e| e.into_inner())
                     .set(hwnd, false);
                 s.apply_relative_mouse(false);
-                s.release_buttons();
+                s.release_buttons("focus_lost");
                 let mut pressed = s.pressed_keys.lock().unwrap_or_else(|e| e.into_inner());
                 for code in std::mem::take(&mut *pressed) {
                     s.push(Event::Key(false, code, 0));
                 }
                 s.push(Event::Focus(false));
             }
-            WM_CAPTURECHANGED => s.release_buttons(),
+            WM_CAPTURECHANGED => s.release_buttons("capture_changed"),
             WM_MOUSEMOVE if !s.relative_mouse.load(Ordering::Acquire) => {
                 let echo = s.warp_echo.swap(0, Ordering::AcqRel);
                 if let Some(event) = crate::input_windows::motion(lp, echo) {

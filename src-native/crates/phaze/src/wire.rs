@@ -208,12 +208,25 @@ pub struct Reliable {
     outgoing: BTreeMap<u64, Pending>,
     rtt: Option<(Instant, Duration)>,
     buffered: usize,
+    input_packets: u64,
+    input_retries: u64,
 }
 struct Pending {
     bytes: Vec<u8>,
     last_sent: Option<Instant>,
     retries: u8,
+    input: bool,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InputDelivery {
+    pub sent: u64,
+    /// Acknowledged by the remote transport, independently of OS injection.
+    pub acknowledged: u64,
+    pub retransmitted: u64,
+    pub oldest_unacknowledged_attempt: Option<Duration>,
+}
+
 const RETRY_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_RETRIES: u8 = 20;
 impl Reliable {
@@ -232,6 +245,7 @@ impl Reliable {
             count > 0 && count <= u16::MAX as usize,
             "Invalid fragment count"
         );
+        let input = matches!(payload.first(), Some(8..=11 | 13));
         let mut out = Vec::new();
         for chunk in payload.chunks(1170) {
             let mut b = vec![1, 0];
@@ -245,10 +259,14 @@ impl Reliable {
                     bytes: b.clone(),
                     last_sent: None,
                     retries: 0,
+                    input,
                 },
             );
             self.tx_next += 1;
             out.push(b)
+        }
+        if input {
+            self.input_packets += count as u64;
         }
         Ok(out)
     }
@@ -280,10 +298,27 @@ impl Reliable {
             let retry = packet.retries + 1;
             packet.bytes[1] = retry;
             send(&packet.bytes)?;
+            self.input_retries += u64::from(packet.input);
             packet.retries = retry;
             packet.last_sent = Some(now);
         }
         Ok(())
+    }
+    pub fn input_delivery(&self, now: Instant) -> InputDelivery {
+        let mut outstanding = 0;
+        let mut oldest = None;
+        for packet in self.outgoing.values().filter(|packet| packet.input) {
+            outstanding += 1;
+            if let Some(sent) = packet.last_sent {
+                oldest = Some(oldest.map_or(sent, |old: Instant| old.min(sent)));
+            }
+        }
+        InputDelivery {
+            sent: self.input_packets,
+            acknowledged: self.input_packets - outstanding,
+            retransmitted: self.input_retries,
+            oldest_unacknowledged_attempt: oldest.map(|sent| now.saturating_duration_since(sent)),
+        }
     }
     pub fn rtt(&self, now: Instant) -> Option<Duration> {
         self.rtt
@@ -746,6 +781,37 @@ fn outgoing_acknowledgments_and_bounded_retry_state() -> Result<()> {
     let mut bad = vec![3; 34];
     bad[10..18].copy_from_slice(&u64::MAX.to_le_bytes());
     assert!(sender.receive(&bad).is_err());
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn input_delivery_distinguishes_acknowledged_and_retransmitted_packets() -> Result<()> {
+    let mut sender = Reliable::default();
+    let mut receiver = Reliable::default();
+    let start = Instant::now();
+    let control = sender.frame(&[18])?;
+    sender.frame(&[8])?;
+    sender.transmitted(start);
+    let (_, ack) = receiver.receive(&control[0])?;
+    sender.receive_at(&ack.unwrap(), start)?;
+    assert_eq!(sender.input_delivery(start).sent, 1);
+    assert_eq!(sender.input_delivery(start).acknowledged, 0);
+
+    let retry = start + RETRY_INTERVAL;
+    sender.retry_due(retry, |packet| {
+        let (_, ack) = receiver.receive_at(packet, retry)?;
+        assert!(ack.is_some());
+        Ok(())
+    })?;
+    let delivery = sender.input_delivery(retry);
+    assert_eq!(delivery.retransmitted, 1);
+    assert_eq!(delivery.oldest_unacknowledged_attempt, Some(Duration::ZERO));
+    let (_, ack) = receiver.receive_at(sender.pending().next().unwrap(), retry)?;
+    sender.receive_at(&ack.unwrap(), retry)?;
+    let delivery = sender.input_delivery(retry);
+    assert_eq!(delivery.acknowledged, 1);
+    assert_eq!(delivery.oldest_unacknowledged_attempt, None);
     Ok(())
 }
 

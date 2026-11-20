@@ -752,7 +752,9 @@ pub async fn run(
             sink.video_recovery_sent(output);
         }
         if reported.elapsed() >= Duration::from_millis(500) {
-            sink.rtt(reliable.rtt(Instant::now()));
+            let now = Instant::now();
+            sink.rtt(reliable.rtt(now));
+            sink.input_delivery(reliable.input_delivery(now));
             sink.traffic(received, sent);
             reported = Instant::now();
         }

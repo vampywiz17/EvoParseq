@@ -21,7 +21,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{sync::Arc, time::Duration};
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue, Message};
-pub use wire::{Output, VideoConfig};
+pub use wire::{InputDelivery, Output, VideoConfig};
 use zeroize::{Zeroize, Zeroizing};
 const API: &str = "https://api.phaze.app";
 
@@ -224,6 +224,7 @@ pub trait Sink {
     fn control_sent(&mut self, _control: &ClientControl, _sent: bool) {}
     /// DTLS carrier bytes, excluding TURN encapsulation and handshake traffic.
     fn traffic(&mut self, _received: u64, _sent: u64) {}
+    fn input_delivery(&mut self, _delivery: InputDelivery) {}
     /// Local reliable-command ACK round trip, including peer ACK scheduling.
     /// None means no unambiguous sample in the last ten seconds.
     fn rtt(&mut self, _elapsed: Option<Duration>) {}

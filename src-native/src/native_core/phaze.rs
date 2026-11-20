@@ -39,6 +39,7 @@ struct View {
     interval_motion: u32,
     interval_buttons: [u32; 2],
     interval_keys: [u32; 2],
+    last_input_delivery: evoparseq_phaze::InputDelivery,
     interval_pictures: u32,
     route: &'static str,
     carrier: &'static str,
@@ -209,6 +210,23 @@ impl evoparseq_phaze::Sink for View {
     }
     fn rtt(&mut self, elapsed: Option<Duration>) {
         self.rtt = elapsed;
+    }
+    fn input_delivery(&mut self, delivery: evoparseq_phaze::InputDelivery) {
+        if !crate::event_log::enabled() || delivery == self.last_input_delivery {
+            return;
+        }
+        self.last_input_delivery = delivery;
+        crate::event_log::record(
+            "INFO",
+            "phaze_input_transport",
+            serde_json::json!({
+                "sent_total":delivery.sent,
+                "acknowledged_total":delivery.acknowledged,
+                "retransmitted_total":delivery.retransmitted,
+                "oldest_unacknowledged_attempt_ms":delivery.oldest_unacknowledged_attempt
+                    .map(|age| age.as_secs_f64() * 1000.),
+            }),
+        );
     }
     fn bandwidth_feedback_started(&mut self, lower_rate: f64, upper_rate: f64) {
         crate::phaze_session::log_bandwidth_feedback(lower_rate, upper_rate);
@@ -482,6 +500,18 @@ impl evoparseq_phaze::Sink for View {
                 }
                 Event::Focus(true) => self.needs_initial_position = true,
                 event => {
+                    let reset = match event {
+                        Event::Focus(false) => Some("focus_lost"),
+                        Event::HidInputRelease => Some("input_released"),
+                        _ => None,
+                    };
+                    if let Some(reason) = reset.filter(|_| crate::event_log::enabled()) {
+                        crate::event_log::record(
+                            "INFO",
+                            "phaze_input_reset",
+                            serde_json::json!({"reason":reason}),
+                        );
+                    }
                     let kind = match &event {
                         Event::Motion(..) | Event::RelativeMotion(..) => Some((0, "motion")),
                         Event::Button(true, ..) => Some((1, "button")),
@@ -618,6 +648,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         interval_motion: 0,
         interval_buttons: [0; 2],
         interval_keys: [0; 2],
+        last_input_delivery: Default::default(),
         interval_pictures: 0,
         route: "Direct",
         carrier: "direct UDP",
@@ -804,6 +835,7 @@ mod tests {
                 interval_motion: 0,
                 interval_buttons: [0; 2],
                 interval_keys: [0; 2],
+                last_input_delivery: Default::default(),
                 interval_pictures: 0,
                 route: "Direct",
                 carrier: "direct UDP",
