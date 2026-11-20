@@ -1,7 +1,7 @@
 //! Android TV request presets. Rust owns validation; the TV view only renders
 //! these choices. Decoder support and actual host replies are separate checks.
 use crate::session_preferences::{
-    bandwidth_choices, PanelFields, BANDWIDTH_CHOICES, PARSEC_BANDWIDTH_CHOICES, FPS_CHOICES,
+    bandwidth_choices, PanelFields, BANDWIDTH_CHOICES, FPS_CHOICES, PARSEC_BANDWIDTH_CHOICES,
     RESOLUTION_CHOICES,
 };
 use anyhow::{ensure, Result};
@@ -79,7 +79,10 @@ impl Preferences {
         for (_, _, choices, index) in value.fields() {
             ensure!(index < choices.len(), "Invalid TV setting.");
         }
-        ensure!(value.bandwidth < BANDWIDTH_CHOICES.len(), "Invalid Phaze bandwidth.");
+        ensure!(
+            value.bandwidth < BANDWIDTH_CHOICES.len(),
+            "Invalid Phaze bandwidth."
+        );
         // Reuse the Windows panel's parsing/limits rather than duplicating them.
         value.host_request()?;
         value.audio.validate()?;
@@ -261,7 +264,10 @@ mod tests {
         saved.select_for_service("bandwidth", legacy, false)?;
         for mbps in [100_u32, 150] {
             let choice = mbps.to_string();
-            let index = PARSEC_BANDWIDTH_CHOICES.iter().position(|v| *v == choice).unwrap();
+            let index = PARSEC_BANDWIDTH_CHOICES
+                .iter()
+                .position(|v| *v == choice)
+                .unwrap();
             saved.select("bandwidth", index)?;
             let parsed = Preferences::parse(&serde_json::to_string(&saved)?)?;
             assert_eq!(parsed.host_request()?.requested_bandwidth(true), Some(mbps));
@@ -269,10 +275,20 @@ mod tests {
             assert_eq!(parsed.bandwidth, legacy);
             assert_eq!(parsed.parsec_bandwidth, Some(index));
             let view = parsed.view_for(crate::account::Service::Phaze);
-            let bandwidth = view["rows"].as_array().unwrap().iter()
-                .find(|row| row["key"] == "bandwidth").unwrap();
-            assert_eq!(bandwidth["selected"].as_u64(), Some((BANDWIDTH_CHOICES.len() - 1) as u64));
-            assert_eq!(bandwidth["choices"].as_array().unwrap().len(), BANDWIDTH_CHOICES.len());
+            let bandwidth = view["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["key"] == "bandwidth")
+                .unwrap();
+            assert_eq!(
+                bandwidth["selected"].as_u64(),
+                Some((BANDWIDTH_CHOICES.len() - 1) as u64)
+            );
+            assert_eq!(
+                bandwidth["choices"].as_array().unwrap().len(),
+                BANDWIDTH_CHOICES.len()
+            );
         }
         // A later Phaze selection must not discard the Parsec-specific 150.
         saved.select_for_service("bandwidth", 0, false)?;

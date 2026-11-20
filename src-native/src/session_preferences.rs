@@ -306,7 +306,10 @@ mod parsec_bandwidth_tests {
 
     #[test]
     fn parsec_high_bitrate_request_is_not_forwarded_to_phaze() -> Result<()> {
-        assert_eq!(&PARSEC_BANDWIDTH_CHOICES[BANDWIDTH_CHOICES.len()..], &["100", "150"]);
+        assert_eq!(
+            &PARSEC_BANDWIDTH_CHOICES[BANDWIDTH_CHOICES.len()..],
+            &["100", "150"]
+        );
         for mbps in [100, 150] {
             let selection = mbps.to_string();
             let fields = PanelFields {
@@ -358,7 +361,10 @@ mod parsec_bandwidth_tests {
         let restored: Video = serde_json::from_str(&serde_json::to_string(&parsec)?)?;
         assert_eq!(restored.requested_bandwidth(false), Some(50));
         assert_eq!(restored.requested_bandwidth(true), Some(150));
-        let phaze_fields = PanelFields { bandwidth: "40", ..fields };
+        let phaze_fields = PanelFields {
+            bandwidth: "40",
+            ..fields
+        };
         let changed_phaze = phaze_fields.parse_preserving(false, Some(&restored))?;
         assert_eq!(changed_phaze.requested_bandwidth(false), Some(40));
         assert_eq!(changed_phaze.requested_bandwidth(true), Some(150));
