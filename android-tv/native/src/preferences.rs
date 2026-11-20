@@ -1,8 +1,8 @@
 //! Android TV request presets. Rust owns validation; the TV view only renders
 //! these choices. Decoder support and actual host replies are separate checks.
 use crate::session_preferences::{
-    bandwidth_choices, PanelFields, BANDWIDTH_CHOICES, FPS_CHOICES, PARSEC_BANDWIDTH_CHOICES,
-    RESOLUTION_CHOICES,
+    bandwidth_choices, bandwidth_menu, PanelFields, FPS_CHOICES, LEGACY_BANDWIDTH_CHOICES,
+    PARSEC_BANDWIDTH_CHOICES, PHAZE_BANDWIDTH_CHOICES, RESOLUTION_CHOICES,
 };
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
@@ -45,7 +45,7 @@ impl Default for Preferences {
             video: 0,
             resolution: 0,
             fps: FPS_CHOICES.iter().position(|s| *s == "60").unwrap(),
-            bandwidth: BANDWIDTH_CHOICES.iter().position(|s| *s == "20").unwrap(),
+            bandwidth: LEGACY_BANDWIDTH_CHOICES.iter().position(|s| *s == "20").unwrap(),
             parsec_bandwidth: None,
         }
     }
@@ -80,7 +80,7 @@ impl Preferences {
             ensure!(index < choices.len(), "Invalid TV setting.");
         }
         ensure!(
-            value.bandwidth < BANDWIDTH_CHOICES.len(),
+            value.bandwidth < LEGACY_BANDWIDTH_CHOICES.len(),
             "Invalid Phaze bandwidth."
         );
         // Reuse the Windows panel's parsing/limits rather than duplicating them.
@@ -132,7 +132,7 @@ impl Preferences {
 
     fn select_video(&mut self, field: &str, index: usize, parsec: bool) -> Result<()> {
         let choices = if field == "bandwidth" && !parsec {
-            BANDWIDTH_CHOICES
+            PHAZE_BANDWIDTH_CHOICES
         } else {
             self.fields()
                 .into_iter()
@@ -140,14 +140,27 @@ impl Preferences {
                 .ok_or_else(|| anyhow::anyhow!("Unknown TV setting."))?
                 .2
         };
-        ensure!(index < choices.len(), "Invalid TV setting.");
+        let keeping_legacy_bandwidth = field == "bandwidth"
+            && !parsec
+            && !PHAZE_BANDWIDTH_CHOICES.contains(&LEGACY_BANDWIDTH_CHOICES[self.bandwidth]);
+        ensure!(
+            index < choices.len() + usize::from(keeping_legacy_bandwidth),
+            "Invalid TV setting."
+        );
         match field {
             "transport" => self.transport = index,
             "video" => self.video = index,
             "resolution" => self.resolution = index,
             "fps" => self.fps = index,
             "bandwidth" if parsec => self.parsec_bandwidth = Some(index),
-            "bandwidth" => self.bandwidth = index,
+            "bandwidth" if keeping_legacy_bandwidth && index == choices.len() => {}
+            "bandwidth" => {
+                let rate = PHAZE_BANDWIDTH_CHOICES[index];
+                self.bandwidth = LEGACY_BANDWIDTH_CHOICES
+                    .iter()
+                    .position(|stored| *stored == rate)
+                    .expect("all new Phaze rates exist in the legacy index domain");
+            }
             "pacing" => self.pacing = index,
             _ => unreachable!(),
         }
@@ -163,10 +176,13 @@ impl Preferences {
         let mut rows: Vec<Value> = self.fields().into_iter()
             .filter(|(key, _, _, _)| !phaze || !matches!(*key, "transport" | "resolution" | "pacing"))
             .map(|(key, label, choices, selected)| {
+                if phaze && key == "bandwidth" {
+                    let (choices, selected) =
+                        bandwidth_menu(false, LEGACY_BANDWIDTH_CHOICES[self.bandwidth]);
+                    return json!({"key":key,"label":label,"choices":choices,"selected":selected,"group":"Network"});
+                }
                 let (choices, selected) = if phaze && key == "video" {
                     (&choices[..2], selected.min(1))
-                } else if phaze && key == "bandwidth" {
-                    (bandwidth_choices(false), self.bandwidth)
                 } else {
                     (choices, selected)
                 };
@@ -224,7 +240,11 @@ impl Preferences {
             resolution: RESOLUTION_CHOICES
                 .get(self.resolution)
                 .ok_or_else(|| anyhow::anyhow!("Invalid resolution."))?,
-            bandwidth: bandwidth_choices(parsec)
+            bandwidth: (if parsec {
+                bandwidth_choices(true)
+            } else {
+                LEGACY_BANDWIDTH_CHOICES
+            })
                 .get(if parsec {
                     self.parsec_bandwidth.unwrap_or(self.bandwidth)
                 } else {
@@ -261,8 +281,9 @@ mod tests {
     #[test]
     fn parsec_bandwidth_presets_do_not_raise_phaze_stream_limit() -> Result<()> {
         let mut saved = Preferences::default();
-        let legacy = BANDWIDTH_CHOICES.iter().position(|v| *v == "50").unwrap();
-        saved.select_for_service("bandwidth", legacy, false)?;
+        let selected = PHAZE_BANDWIDTH_CHOICES.iter().position(|v| *v == "50").unwrap();
+        let legacy = LEGACY_BANDWIDTH_CHOICES.iter().position(|v| *v == "50").unwrap();
+        saved.select_for_service("bandwidth", selected, false)?;
         for mbps in [100_u32, 150] {
             let choice = mbps.to_string();
             let index = PARSEC_BANDWIDTH_CHOICES
@@ -284,17 +305,49 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 bandwidth["selected"].as_u64(),
-                Some((BANDWIDTH_CHOICES.len() - 1) as u64)
+                Some((PHAZE_BANDWIDTH_CHOICES.len() - 1) as u64)
             );
             assert_eq!(
                 bandwidth["choices"].as_array().unwrap().len(),
-                BANDWIDTH_CHOICES.len()
+                PHAZE_BANDWIDTH_CHOICES.len()
             );
         }
         // A later Phaze selection must not discard the Parsec-specific 150.
         saved.select_for_service("bandwidth", 0, false)?;
-        assert_eq!(saved.bandwidth, 0);
+        assert_eq!(LEGACY_BANDWIDTH_CHOICES[saved.bandwidth], PHAZE_BANDWIDTH_CHOICES[0]);
         assert_eq!(saved.host_request()?.requested_bandwidth(true), Some(150));
+        Ok(())
+    }
+
+    #[test]
+    fn saved_legacy_phaze_index_survives_new_six_choice_menu() -> Result<()> {
+        let mut prefs = Preferences::parse(
+            r#"{"transport":0,"video":0,"resolution":0,"fps":0,"bandwidth":2}"#,
+        )?;
+        assert_eq!(LEGACY_BANDWIDTH_CHOICES[prefs.bandwidth], "7");
+        assert_eq!(prefs.phaze_video_config()?.mbps, 7);
+        let view = prefs.view_for(crate::account::Service::Phaze);
+        let row = view["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["key"] == "bandwidth")
+            .unwrap();
+        assert_eq!(row["choices"].as_array().unwrap().len(), 7);
+        assert_eq!(row["choices"][6], "Keep current: 7");
+        assert_eq!(row["selected"], 6);
+        prefs.select_for_service("bandwidth", 6, false)?;
+        assert_eq!(prefs.phaze_video_config()?.mbps, 7);
+        prefs.select_for_service("bandwidth", 1, false)?;
+        assert_eq!(prefs.phaze_video_config()?.mbps, 10);
+        assert_eq!(LEGACY_BANDWIDTH_CHOICES[prefs.bandwidth], "10");
+        assert!(prefs.select_for_service("bandwidth", 6, false).is_err());
+
+        prefs.select_for_service("bandwidth", 5, false)?;
+        prefs.select_for_service("bandwidth", 13, true)?;
+        let restored = Preferences::parse(&serde_json::to_string(&prefs)?)?;
+        assert_eq!(restored.phaze_video_config()?.mbps, 50);
+        assert_eq!(restored.host_request()?.requested_bandwidth(true), Some(150));
         Ok(())
     }
 
@@ -303,7 +356,7 @@ mod tests {
         let mut saved = Preferences::default();
         saved.select_for_service(
             "bandwidth",
-            BANDWIDTH_CHOICES.iter().position(|v| *v == "50").unwrap(),
+            PHAZE_BANDWIDTH_CHOICES.iter().position(|v| *v == "50").unwrap(),
             false,
         )?;
         saved.select("fps", FPS_CHOICES.iter().position(|v| *v == "120").unwrap())?;
