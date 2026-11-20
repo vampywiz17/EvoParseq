@@ -167,6 +167,8 @@ pub const RESOLUTION_CHOICES: &[&str] = &[
     "1024 x 768",
 ];
 /// Historic Android TV indices refer to this original twelve-value list.
+/// The Windows crate includes this shared model but does not decode TV profiles.
+#[allow(dead_code)]
 pub const LEGACY_BANDWIDTH_CHOICES: &[&str] = &[
     "3", "5", "7", "10", "15", "20", "25", "30", "35", "40", "45", "50",
 ];
