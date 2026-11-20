@@ -603,7 +603,7 @@ mod tests {
         for device in &mut probe.devices {
             assert!(device.enqueue_read([0; HEADER]));
             let payload = device.complete().unwrap().1;
-            let expected_len = if device.id == MOUSE_ID { 8 } else { 29 };
+            let expected_len: i32 = if device.id == MOUSE_ID { 8 } else { 29 };
             assert_eq!(&payload[..4], &expected_len.to_le_bytes());
             if device.id == MOUSE_ID {
                 assert_eq!(&payload[4..], &[3, 0, 0, 0, 0, 0, 0, 0]);
