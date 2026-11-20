@@ -1072,7 +1072,7 @@ pub unsafe fn toggle(
         21,
         294,
         if window.session.phaze.load(Ordering::Acquire) {
-            BANDWIDTH_CHOICES
+            PHAZE_BANDWIDTH_CHOICES
         } else {
             PARSEC_BANDWIDTH_CHOICES
         },
@@ -1383,6 +1383,33 @@ mod tests {
             let panel = panel(&window);
             assert!(!panel.is_null());
             assert_eq!(text(GetDlgItem(panel, PHAZE_GUESTS as i32)), "Guests");
+            let bandwidth = GetDlgItem(panel, 21);
+            assert_eq!(
+                SendMessageW(bandwidth, CB_GETCOUNT, 0, 0),
+                PHAZE_BANDWIDTH_CHOICES.len() as isize
+            );
+            for choice in PHAZE_BANDWIDTH_CHOICES {
+                assert_ne!(
+                    SendMessageW(
+                        bandwidth,
+                        CB_FINDSTRINGEXACT,
+                        usize::MAX,
+                        wide(choice).as_ptr() as isize
+                    ),
+                    CB_ERR as isize
+                );
+            }
+            for choice in ["3", "7", "100", "150"] {
+                assert_eq!(
+                    SendMessageW(
+                        bandwidth,
+                        CB_FINDSTRINGEXACT,
+                        usize::MAX,
+                        wide(choice).as_ptr() as isize
+                    ),
+                    CB_ERR as isize
+                );
+            }
             assert!(GetDlgItem(panel, ADD_SCREEN as i32).is_null());
             for id in [
                 20,
@@ -1634,7 +1661,10 @@ mod tests {
             );
             // Parsec owns two additional bitrate presets; the Phaze list is
             // intentionally unchanged and is tested in its own panel.
-            assert_eq!(&PARSEC_BANDWIDTH_CHOICES[BANDWIDTH_CHOICES.len()..], &["100", "150"]);
+            assert_eq!(
+                &PARSEC_BANDWIDTH_CHOICES[crate::session_preferences::LEGACY_BANDWIDTH_CHOICES.len()..],
+                &["100", "150"]
+            );
             for (id, choices) in [
                 (20, RESOLUTION_CHOICES),
                 (21, PARSEC_BANDWIDTH_CHOICES),
@@ -1795,7 +1825,7 @@ mod tests {
         let mut events = std::collections::VecDeque::new();
         events.clear();
         window.events.take_batch(&mut events);
-        assert!(events.iter().any(|e|matches!(e,crate::window::Event::NativeSession(Command::Apply(v)) if v.resolution==Resolution::Host && v.immersive==0 && v.fps==Some(90) && v.bandwidth_mbps==Some(35))));
+        assert!(events.iter().any(|e|matches!(e,crate::window::Event::NativeSession(Command::Apply(v)) if v.resolution==Resolution::Host && v.immersive==0 && v.fps==Some(90) && v.requested_bandwidth(true)==Some(35))));
         unsafe {
             select_text(panel, 22, "120");
             SendMessageW(panel, WM_COMMAND, 22 | ((CBN_SELCHANGE as usize) << 16), 0);
@@ -1831,7 +1861,7 @@ mod tests {
             }
             events.clear();
             window.events.take_batch(&mut events);
-            assert!(events.iter().any(|event|matches!(event,crate::window::Event::NativeSession(Command::Apply(v)) if v.resolution==Resolution::Fixed(1280,720) && v.bandwidth_mbps==Some(15) && v.fps==Some(60) && v.constant_fps==Some(true) && v.rotated==Some(true) && v.immersive==mode && v.fullscreen)));
+            assert!(events.iter().any(|event|matches!(event,crate::window::Event::NativeSession(Command::Apply(v)) if v.resolution==Resolution::Fixed(1280,720) && v.requested_bandwidth(true)==Some(15) && v.fps==Some(60) && v.constant_fps==Some(true) && v.rotated==Some(true) && v.immersive==mode && v.fullscreen)));
         }
         unsafe {
             SendMessageW(panel, WM_COMMAND, SECURE_ATTENTION, 0);

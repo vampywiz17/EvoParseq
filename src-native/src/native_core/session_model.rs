@@ -64,8 +64,8 @@ impl Event {
 pub use crate::session_controls::{Command, Status};
 
 pub use crate::session_preferences::{
-    current_choice, resolution_text, PanelFields, BANDWIDTH_CHOICES, FPS_CHOICES, HOST_RESOLUTION,
-    PARSEC_BANDWIDTH_CHOICES, RESOLUTION_CHOICES,
+    current_choice, resolution_text, PanelFields, FPS_CHOICES, HOST_RESOLUTION,
+    PARSEC_BANDWIDTH_CHOICES, PHAZE_BANDWIDTH_CHOICES, RESOLUTION_CHOICES,
 };
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Notification {
@@ -225,9 +225,9 @@ mod tests {
                 immersive: 3,
                 fullscreen: true,
             };
-            let video = fields.parse().unwrap();
+            let video = fields.parse_for_service(true).unwrap();
             assert_eq!(video.resolution, resolution_value);
-            assert_eq!(video.bandwidth_mbps, Some(MAX_BANDWIDTH_MBPS));
+            assert_eq!(video.requested_bandwidth(true), Some(MAX_BANDWIDTH_MBPS));
             assert_eq!(video.fps, Some(MAX_FPS));
             assert_eq!(video.constant_fps, Some(true));
             assert_eq!(video.rotated, Some(false));
