@@ -362,7 +362,8 @@ mod tests {
         );
         assert_eq!(restored.video, 0);
         assert_eq!(restored.host_request().unwrap().fps, Some(60));
-        assert_eq!(restored.host_request().unwrap().bandwidth_mbps, Some(20));
+        assert_eq!(restored.host_request().unwrap().requested_bandwidth(true), Some(20));
+        assert_eq!(restored.phaze_video_config().unwrap().mbps, 20);
         assert!(!text.contains("token"));
     }
 
