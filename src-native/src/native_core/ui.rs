@@ -43,6 +43,7 @@ pub struct Selection {
 struct Form {
     service: account::Service,
     service_choice: HWND,
+    subtitle: HWND,
     settings_page: HWND,
     info_pages: Arc<crate::updater_ui::Pages>,
     manager: Arc<crate::connection_settings::Manager>,
@@ -94,7 +95,12 @@ unsafe fn status(f: &Form, s: &str) {
 }
 unsafe fn view(f: &Form) {
     let launcher = f.settings_page.is_null();
-    let login = f.sign_in.session.is_none();
+    let session = f.sign_in.session.as_ref();
+    let login = session.is_none();
+    let subtitle = session.map_or(crate::app_style::SUBTITLE, |session| {
+        session.service().signed_in_label()
+    });
+    SetWindowTextW(f.subtitle, wide(subtitle).as_ptr());
     for &h in &f.common_controls {
         ShowWindow(h, if launcher { SW_SHOW } else { SW_HIDE });
     }
@@ -539,6 +545,7 @@ pub fn choose(
         let mut f = Box::new(Form {
             service,
             service_choice: null_mut(),
+            subtitle: null_mut(),
             settings_page: null_mut(),
             info_pages: Default::default(),
             manager,
@@ -623,7 +630,7 @@ pub fn choose(
             layout::SETTINGS,
         );
         f.common_controls.push(settings);
-        let subtitle = add(
+        f.subtitle = add(
             hwnd,
             &f,
             "STATIC",
@@ -632,7 +639,7 @@ pub fn choose(
             0,
             layout::SUBTITLE,
         );
-        f.common_controls.push(subtitle);
+        f.common_controls.push(f.subtitle);
         let service_label = add(hwnd, &f, "STATIC", "Service", 0, 0, layout::SERVICE_LABEL);
         f.service_choice = add(
             hwnd,

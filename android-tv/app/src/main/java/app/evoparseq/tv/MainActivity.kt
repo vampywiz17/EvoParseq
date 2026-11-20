@@ -100,7 +100,7 @@ private fun TvApp(model: TvModel) {
                 .background(colorResource(R.color.icon_background), CircleShape))
             Column {
                 Text("EVO PARSEQ", style = MaterialTheme.typography.headlineMedium)
-                Text("Your computers. On your TV.", color = Color(0xFFA8BED7))
+                Text(model.signedInService.ifEmpty { "Your computers. On your TV." }, color = Color(0xFFA8BED7))
             }
         }
         Spacer(Modifier.height(20.dp))

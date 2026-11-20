@@ -50,7 +50,7 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_signIn(
             account::Service::Parsec
         };
         *slot = Some(Arc::new(account::login_service(&login, service)?));
-        Ok(json!({"ok":true}))
+        Ok(json!({"ok":true,"signed_in_service":service.signed_in_label()}))
     })();
     reply(
         &mut env,
@@ -101,8 +101,9 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_restoreSession(
             .lock()
             .map_err(|_| anyhow::anyhow!("Account unavailable"))?;
         anyhow::ensure!(slot.is_none(), "Already signed in");
+        let service = session.service();
         *slot = Some(Arc::new(session));
-        Ok(json!({"ok":true}))
+        Ok(json!({"ok":true,"signed_in_service":service.signed_in_label()}))
     })();
     reply(
         &mut env,

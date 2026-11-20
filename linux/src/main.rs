@@ -143,12 +143,13 @@ enum Command {
 enum Reply {
     Hosts {
         hosts: Vec<account::Host>,
+        service: account::Service,
         notice: Option<String>,
     },
     SignedOut,
     StreamEnded(String),
     Error {
-        signed_in: bool,
+        service: Option<account::Service>,
         message: String,
     },
 }
@@ -221,7 +222,7 @@ fn account_worker(
                 let reply = match result {
                     Ok(message) => Reply::StreamEnded(message),
                     Err(error) => Reply::Error {
-                        signed_in: form.session.is_some(),
+                        service: form.session.as_deref().map(account::Session::service),
                         message: error.to_string(),
                     },
                 };
@@ -239,7 +240,7 @@ fn account_worker(
                         if replies.send(Reply::SignedOut).is_err() { break; }
                     }
                     Err(error) => {
-                        if replies.send(Reply::Error { signed_in: form.session.is_some(), message: error.to_string() }).is_err() { break; }
+                        if replies.send(Reply::Error { service: form.session.as_deref().map(account::Session::service), message: error.to_string() }).is_err() { break; }
                     }
                 }
                 ui.request_repaint();
@@ -247,20 +248,24 @@ fn account_worker(
             }
         };
         let result = result.and_then(|()| {
-            account::hosts(
-                form.session
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("Sign in first."))?,
-            )
+            let session = form
+                .session
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Sign in first."))?;
+            account::hosts(session).map(|hosts| (hosts, session.service()))
         });
         let reply = match result {
-            Ok(hosts) => Reply::Hosts { hosts, notice },
+            Ok((hosts, service)) => Reply::Hosts {
+                hosts,
+                service,
+                notice,
+            },
             Err(error) => {
                 if error.is::<account::ExpiredSession>() {
                     form.expire_saved(settings.as_ref());
                 }
                 Reply::Error {
-                    signed_in: form.session.is_some(),
+                    service: form.session.as_deref().map(account::Session::service),
                     message: error.to_string(),
                 }
             }
@@ -346,7 +351,12 @@ impl eframe::App for Desktop {
             self.telemetry = None;
             self.metrics = Default::default();
             match reply {
-                Reply::Hosts { hosts, notice } => {
+                Reply::Hosts {
+                    hosts,
+                    service,
+                    notice,
+                } => {
+                    self.service = service;
                     self.error = notice;
                     let selected = self
                         .picker
@@ -386,13 +396,16 @@ impl eframe::App for Desktop {
                     eprintln!("{message}");
                     self.badge.open = false;
                 }
-                Reply::Error { signed_in, message } => {
-                    self.signed_in = signed_in;
+                Reply::Error { service, message } => {
+                    self.signed_in = service.is_some();
+                    if let Some(service) = service {
+                        self.service = service;
+                    }
                     let message = video_timing
                         .map_or_else(|| message.clone(), |timing| format!("{message}\n{timing}"));
                     eprintln!("{message}");
                     self.error = Some(message);
-                    if !signed_in {
+                    if !self.signed_in {
                         self.remember_login = false;
                         self.picker = Default::default();
                     }

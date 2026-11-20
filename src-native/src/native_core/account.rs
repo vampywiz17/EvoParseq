@@ -12,6 +12,13 @@ pub enum Service {
     Phaze,
 }
 impl Service {
+    pub fn signed_in_label(self) -> &'static str {
+        match self {
+            Self::Parsec => "Signed in to Parsec",
+            Self::Phaze => "Signed in to Phaze",
+        }
+    }
+
     #[cfg(windows)]
     pub fn notice(self) -> &'static str {
         match self {

@@ -160,7 +160,11 @@ impl Desktop {
                 label(
                     ui,
                     r(d::SUBTITLE),
-                    app_style::SUBTITLE,
+                    if self.signed_in {
+                        self.service.signed_in_label()
+                    } else {
+                        app_style::SUBTITLE
+                    },
                     d::BODY as f32,
                     color(app_style::TEXT),
                 );
@@ -386,15 +390,18 @@ mod tests {
             telemetry: None,
             metrics: Default::default(),
         };
-        for (signed_in, settings) in [
-            (false, false),
-            (true, false),
-            (true, true),
-            (true, true),
-            (true, true),
-            (true, true),
+        use crate::account::Service;
+        for (signed_in, service, settings, subtitle) in [
+            (false, Service::Parsec, false, app_style::SUBTITLE),
+            (true, Service::Parsec, false, "Signed in to Parsec"),
+            (true, Service::Phaze, false, "Signed in to Phaze"),
+            (true, Service::Parsec, true, ""),
+            (true, Service::Parsec, true, ""),
+            (true, Service::Parsec, true, ""),
+            (true, Service::Parsec, true, ""),
         ] {
             app.signed_in = signed_in;
+            app.service = service;
             app.show_video = settings;
             if settings {
                 app.ui_state.tab = (app.ui_state.tab + 1) % 4;
@@ -443,7 +450,7 @@ mod tests {
                         || text.contains("UI adapter:"))
             );
             if !settings {
-                assert!(rendered.iter().any(|(text, _)| text == app_style::SUBTITLE));
+                assert!(rendered.iter().any(|(text, _)| text == subtitle));
             }
         }
         let playback = crate::playback::Playback::new(ctx.clone());
