@@ -424,9 +424,11 @@ mod parsec_bandwidth_tests {
             immersive: 0,
             fullscreen: false,
         };
-        let mut saved = Video::default();
-        saved.bandwidth_mbps = Some(80);
-        saved.parsec_bandwidth_mbps = Some(150);
+        let saved = Video {
+            bandwidth_mbps: Some(80),
+            parsec_bandwidth_mbps: Some(150),
+            ..Video::default()
+        };
         assert!(saved.validate().is_ok());
         let kept = fields.parse_preserving(false, Some(&saved))?;
         assert_eq!(kept.requested_bandwidth(false), Some(80));
