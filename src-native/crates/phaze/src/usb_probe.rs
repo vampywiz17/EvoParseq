@@ -528,14 +528,26 @@ mod tests {
             modifiers: 0,
             down: true,
         };
+        let key_up = Input::Key {
+            usage: 4,
+            scan: 30,
+            modifiers: 0,
+            down: false,
+        };
         let mouse = Input::Button {
             button: 1,
             x: 300,
             y: 600,
             down: true,
         };
+        let mouse_up = Input::Button {
+            button: 1,
+            x: 300,
+            y: 600,
+            down: false,
+        };
 
-        // Without a guest controller or an opened device, normal input wins.
+        // Without guest control or an opened device, normal input wins.
         for event in [key, mouse] {
             assert!(!probe.input(event));
             assert!(!event.encode(7).is_empty());
@@ -551,13 +563,16 @@ mod tests {
             .position(|d| d.id == KEYBOARD_ID)
             .unwrap();
         probe.devices[mouse_id].open();
+        // The button began on standard input; only its next press uses HID.
+        assert!(!probe.input(mouse_up));
         assert!(probe.input(mouse));
         assert!(!probe.input(key));
         probe.devices[keyboard_id].open();
+        assert!(!probe.input(key_up));
         assert!(probe.input(key));
         assert!(probe.input(mouse));
 
-        // Permission revocation closes the link. Nothing is consumed by HID.
+        // Revoked control closes both devices; standard input remains usable.
         probe.control(false);
         assert!(!probe.input(key));
         assert!(!probe.input(mouse));
@@ -566,13 +581,17 @@ mod tests {
         assert!(!probe.input(key));
         assert!(!probe.input(mouse));
 
-        // A host-side close and a malformed USB frame both restore fallback.
+        // Reopened devices do not steal held standard keys/buttons.
         probe.devices[keyboard_id].open();
+        assert!(!probe.input(key_up));
         assert!(probe.input(key));
         probe.devices[keyboard_id].close();
         assert!(!probe.input(key));
         probe.devices[mouse_id].open();
+        assert!(!probe.input(mouse_up));
         assert!(probe.input(mouse));
+
+        // Malformed USB framing disables HID without swallowing normal input.
         probe.disable();
         assert!(!probe.input(key));
         assert!(!probe.input(mouse));
