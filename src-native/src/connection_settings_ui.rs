@@ -844,7 +844,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
         page,
         crate::app_style::forms::HID_REQUIREMENTS.label,
         if page.model.phaze {
-            "Allow USB devices from clients on the Phaze host. The first HID report releases all keys and buttons."
+            "Allow USB devices from clients on the Phaze host. HID mouse uses the primary display."
         } else {
             crate::app_style::forms::HID_REQUIREMENTS.help
         },
@@ -852,6 +852,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
         0,
         64,
     );
+    page.building_feature = Feature::ParsecNetwork;
     row_label(
         hwnd,
         page,
@@ -863,7 +864,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
     );
 
     page.building_feature = Feature::Common;
-    let capture_y = if page.model.phaze { 242 } else { 580 };
+    let capture_y = if page.model.phaze { 466 } else { 580 };
     row_label(
         hwnd,
         page,
@@ -2357,6 +2358,7 @@ mod tests {
                 0
             );
             assert_ne!(IsWindowEnabled(GetDlgItem(page, INPUT_MODE as i32)), 0);
+            select(page, INPUT_MODE, InputMode::HidBoth as usize);
             assert_ne!(
                 GetWindowLongW(GetDlgItem(page, IMMERSIVE as i32), GWL_STYLE) as u32 & WS_VISIBLE,
                 0
@@ -2370,6 +2372,7 @@ mod tests {
             let state = &mut *(GetWindowLongPtrW(page, GWLP_USERDATA) as *mut Page);
             save(page, state);
             assert!(manager.view().0.allow_raw_audio);
+            assert_eq!(manager.view().0.phaze_input_mode, InputMode::HidBoth);
             DestroyWindow(page);
             DestroyWindow(parent);
         }

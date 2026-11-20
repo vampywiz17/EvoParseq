@@ -361,8 +361,9 @@ async fn release_and_close(
     peer: SocketAddr,
     usb: Option<&mut crate::usb_probe::Probe>,
 ) {
-    if let Some(usb) = usb {
-        for frame in usb.disconnect() {
+    let usb_frames = usb.map_or_else(Vec::new, crate::usb_probe::Probe::disconnect);
+    if !usb_frames.is_empty() {
+        for frame in usb_frames {
             if let Ok(packets) = reliable.frame(&frame) {
                 for packet in packets {
                     let _ = send(c, &packet);
@@ -553,7 +554,8 @@ pub async fn run(
     let mut audio = crate::audio::Audio::default();
     let mut cursors = crate::cursor::Cursors::default();
     let (hid_mouse, hid_keyboard) = sink.usb_hid_devices();
-    let mut usb_probe = (hid_mouse || hid_keyboard || sink.usb_probe_enabled())
+    let usb_diagnostics = sink.usb_probe_enabled();
+    let mut usb_probe = (hid_mouse || hid_keyboard || usb_diagnostics)
         .then(|| crate::usb_probe::Probe::new(hid_mouse, hid_keyboard));
     let mut usb_controller = None;
     if usb_probe.is_some() {
@@ -783,7 +785,9 @@ pub async fn run(
                         if let Some(probe) = &mut usb_probe {
                             if probe
                                 .receive(&frame[1..], |kind, len| {
-                                    sink.usb_probe_event("message", Some(kind), len);
+                                    if usb_diagnostics || !matches!(kind, 10 | 18) {
+                                        sink.usb_probe_event("message", Some(kind), len);
+                                    }
                                 })
                                 .is_err()
                             {
@@ -840,10 +844,15 @@ pub async fn run(
                     for packet in reliable.frame(&pong)? {
                         send(&mut c, &packet)?;
                     }
-                    sink.usb_probe_event("pong_queued", Some(11), 0);
+                    if usb_diagnostics {
+                        sink.usb_probe_event("pong_queued", Some(11), 0);
+                    }
                 }
             }
-            while reliable.fits(1, 48) {
+            for _ in 0..4 {
+                if !reliable.fits(1, 48) {
+                    break;
+                }
                 let Some(frame) = probe.next_device_frame() else {
                     break;
                 };

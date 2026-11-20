@@ -73,8 +73,12 @@ among the host's listed outputs. A Phaze session streams one output at a time.
 local RTT estimate when fresh acknowledgment samples are available. The
 desktop video stats distinguish bitrate and FPS requests from measured playback.
 
-Phaze USB passthrough, gamepad forwarding, host resolution changes, and
-simultaneous multi-display are pending. Phaze has no 10-bit host request.
+Windows can request an experimental virtual USB HID mouse, keyboard, or both
+in **Settings → Input**. Allow USB devices from clients on the Phaze host and
+reconnect after changing modes. The HID mouse uses the primary display.
+
+Physical USB device forwarding, gamepad forwarding, host resolution changes,
+and simultaneous multi-display are pending. Phaze has no 10-bit host request.
 Linux and Android TV Phaze playback uses 4:2:0.
 
 Windows has been tested against a stock Phaze host with H.264, audio, mouse

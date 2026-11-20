@@ -1,6 +1,9 @@
 //! USB HID device state shared by Phaze platform adapters.
 use crate::Input;
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 pub(crate) const MOUSE_ID: u32 = 1;
 pub(crate) const KEYBOARD_ID: u32 = 2;
@@ -49,12 +52,15 @@ impl Report {
 pub(crate) struct Device {
     pub(crate) id: u32,
     pub(crate) opened: bool,
+    pub(crate) announced: bool,
     configured: bool,
-    last_report: Report,
+    position: Report,
+    last_sent: Option<Instant>,
     keys: [u8; 29],
     buttons: u8,
     wheel: [i32; 2],
     idle: u8,
+    leds: u8,
     reports: VecDeque<Report>,
     reads: VecDeque<[u8; 33]>,
 }
@@ -64,12 +70,15 @@ impl Device {
         let mut device = Self {
             id,
             opened: false,
+            announced: false,
             configured: false,
-            last_report: Report::new(&[]),
+            position: Report::new(&[1, 0, 0, 0, 0]),
+            last_sent: None,
             keys: [0; 29],
             buttons: 0,
             wheel: [0; 2],
             idle: 0,
+            leds: 0,
             reports: VecDeque::new(),
             reads: VecDeque::new(),
         };
@@ -123,6 +132,8 @@ impl Device {
         self.configured = false;
         self.reads.clear();
         self.idle = 0;
+        self.leds = 0;
+        self.last_sent = None;
         self.release();
     }
 
@@ -131,12 +142,7 @@ impl Device {
         self.buttons = 0;
         self.wheel = [0; 2];
         self.reports.clear();
-        self.last_report = if self.id == MOUSE_ID {
-            Report::new(&[2, 0, 0, 0, 0, 0, 0, 0])
-        } else {
-            Report::new(&self.keys)
-        };
-        self.reports.push_back(self.last_report);
+        self.reports.push_back(self.state_report());
     }
 
     pub(crate) fn input(&mut self, input: Input) {
@@ -172,7 +178,8 @@ impl Device {
                 if self.reports.back().is_some_and(|report| report.len == 5) {
                     self.reports.pop_back();
                 }
-                Report::new(&bytes)
+                self.position = Report::new(&bytes);
+                self.position
             }
             Input::Motion {
                 x,
@@ -235,13 +242,30 @@ impl Device {
         }
     }
 
+    fn state_report(&self) -> Report {
+        if self.id == MOUSE_ID {
+            self.mouse_report(0, 0, 0, 0)
+        } else {
+            Report::new(&self.keys)
+        }
+    }
+
     pub(crate) fn complete(&mut self) -> Option<([u8; 33], Vec<u8>)> {
         if self.reads.is_empty() {
             return None;
         }
-        let report = self.reports.pop_front()?;
+        let report = self.reports.pop_front().or_else(|| {
+            (self.id == KEYBOARD_ID
+                && self.idle != 0
+                && self.last_sent.is_some_and(|time| {
+                    time.elapsed() >= Duration::from_millis(u64::from(self.idle) * 4)
+                }))
+            .then(|| self.state_report())
+        })?;
         let request = self.reads.pop_front()?;
-        self.last_report = report;
+        if self.id == KEYBOARD_ID {
+            self.last_sent = Some(Instant::now());
+        }
         let mut payload = vec![0; 4];
         payload.extend_from_slice(report.data());
         Some((request, payload))
@@ -283,13 +307,13 @@ impl Device {
                 Some(Vec::new())
             }
             (0xa1, 2) if interface == 0 => Some(vec![self.idle]),
-            (0xa1, 1) if interface == 0 && descriptor == 1 => {
-                let mouse_position = self.id == MOUSE_ID && index == 1;
-                Some(if mouse_position {
-                    vec![1, 0, 0, 0, 0]
-                } else {
-                    self.last_report.data().to_vec()
-                })
+            (0xa1, 1) if interface == 0 && descriptor == 1 => match (self.id, index) {
+                (MOUSE_ID, 1) => Some(self.position.data().to_vec()),
+                (MOUSE_ID, 2) | (KEYBOARD_ID, 0) => Some(self.state_report().data().to_vec()),
+                _ => None,
+            },
+            (0xa1, 1) if self.id == KEYBOARD_ID && interface == 0 && value == 0x0200 => {
+                Some(vec![self.leds])
             }
             (0x21, 9)
                 if self.id == KEYBOARD_ID
@@ -298,6 +322,7 @@ impl Device {
                     && data.len() == 1
                     && length == 1 =>
             {
+                self.leds = data[0] & 0x1f;
                 Some(Vec::new())
             }
             _ => None,

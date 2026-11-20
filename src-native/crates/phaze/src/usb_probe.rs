@@ -106,6 +106,7 @@ impl Probe {
         self.outgoing.clear();
         for device in &mut self.devices {
             device.close();
+            device.announced = false;
         }
     }
 
@@ -223,6 +224,16 @@ fn device_request(
     if req[0] == 9 && payload.is_empty() {
         for device in devices {
             enqueue(queue, announcement(req, device))?;
+            if !device.announced {
+                // A selected virtual device is offered once per USB link.
+                let mut bind = [0; 5];
+                bind[..4].copy_from_slice(&device.id.to_le_bytes());
+                bind[4] = 1;
+                let mut header = [0; HEADER];
+                header[25..29].copy_from_slice(&device.id.to_le_bytes());
+                enqueue(queue, record(250, &header, &bind))?;
+                device.announced = true;
+            }
         }
         return Ok(());
     }
@@ -394,6 +405,52 @@ mod tests {
         probe.receive(&ping, |_, _| {})?;
         probe.control(false);
         assert!(probe.take_pong().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn devices_are_announced_opened_polled_and_disconnected() -> Result<()> {
+        let mut usb = Probe::new(true, true);
+        usb.control(true);
+        usb.replied();
+        let mut req = [0; HEADER];
+        req[0] = 9;
+        device_request(&mut usb.devices, &mut usb.outgoing, &req, &[])?;
+        let offers: Vec<_> = usb.outgoing.drain(..).collect();
+        assert_eq!(
+            offers.iter().map(|f| f[9]).collect::<Vec<_>>(),
+            [16, 250, 16, 250]
+        );
+        for (device, neutral) in [(MOUSE_ID, 8usize), (KEYBOARD_ID, 29)] {
+            req[25..29].copy_from_slice(&device.to_le_bytes());
+            req[0] = 25;
+            device_request(&mut usb.devices, &mut usb.outgoing, &req, &[])?;
+            let first = usb.outgoing.front().unwrap();
+            assert_eq!(first[9], 39);
+            assert_eq!(le(&first[38..42]) as usize, OPEN_PAYLOAD);
+            usb.outgoing.clear();
+            req[0] = 18;
+            device_request(
+                &mut usb.devices,
+                &mut usb.outgoing,
+                &req,
+                &0x81u32.to_le_bytes(),
+            )?;
+            let reply = usb.next_device_frame().unwrap();
+            assert_eq!(reply[9], 19);
+            assert_eq!(&reply[42..46], &[0; 4]);
+            assert_eq!(reply.len() - 46, neutral);
+            device_request(
+                &mut usb.devices,
+                &mut usb.outgoing,
+                &req,
+                &0x81u32.to_le_bytes(),
+            )?;
+        }
+        let frames = usb.disconnect();
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames.last().unwrap(), &LINK_DOWN);
+        assert!(usb.next_device_frame().is_none());
         Ok(())
     }
 

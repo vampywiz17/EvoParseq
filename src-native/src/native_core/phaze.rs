@@ -25,6 +25,7 @@ struct View {
     rtt: Option<Duration>,
     audio_bytes: u64,
     raw_audio: bool,
+    hid_devices: (bool, bool),
     audio_codec: Option<evoparseq_phaze::AudioCodec>,
     authenticated: bool,
     last_clipboard: String,
@@ -112,13 +113,7 @@ impl View {
 }
 impl evoparseq_phaze::Sink for View {
     fn usb_hid_devices(&self) -> (bool, bool) {
-        use crate::connection_settings::InputMode;
-        match self.manager.view().0.phaze_input_mode {
-            InputMode::Standard => (false, false),
-            InputMode::HidMouse => (true, false),
-            InputMode::HidKeyboard => (false, true),
-            InputMode::HidBoth => (true, true),
-        }
+        self.hid_devices
     }
 
     fn usb_probe_enabled(&self) -> bool {
@@ -334,6 +329,7 @@ impl evoparseq_phaze::Sink for View {
                 })
                 .collect();
             displays.loading = false;
+            displays.hid_mouse = self.hid_devices.0;
         }
         self.window.notify(Notification::DisplaysChanged);
         crate::event_log::record(
@@ -494,7 +490,7 @@ impl evoparseq_phaze::Sink for View {
                                     .displays
                                     .lock()
                                     .unwrap_or_else(|e| e.into_inner())
-                                    .validate_selection(&id, false)?;
+                                    .validate_selection(&id, self.hid_devices.0)?;
                                 self.keys.reset();
                                 commands.clear();
                                 commands.push(Input::Release);
@@ -656,6 +652,12 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         rtt: None,
         audio_bytes: 0,
         raw_audio: saved.allow_raw_audio,
+        hid_devices: match saved.phaze_input_mode {
+            crate::connection_settings::InputMode::Standard => (false, false),
+            crate::connection_settings::InputMode::HidMouse => (true, false),
+            crate::connection_settings::InputMode::HidKeyboard => (false, true),
+            crate::connection_settings::InputMode::HidBoth => (true, true),
+        },
         audio_codec: None,
         authenticated: false,
         last_clipboard: String::new(),
@@ -845,6 +847,7 @@ mod tests {
                 rtt: None,
                 audio_bytes: 0,
                 raw_audio: false,
+                hid_devices: (false, false),
                 audio_codec: None,
                 authenticated: false,
                 last_clipboard: String::new(),
