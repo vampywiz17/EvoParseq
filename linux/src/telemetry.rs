@@ -12,6 +12,7 @@ pub struct Host {
     pub config: crate::host_video::Config,
     pub outputs: Vec<crate::host_displays::Output>,
     pub pending: bool,
+    pub phaze_output: Option<String>,
     pub status: String,
     pub revision: u64,
     pub outputs_revision: u64,
@@ -597,19 +598,27 @@ impl View {
             .as_ref()
             .map(|settings| settings.native_video())
             .unwrap_or_default();
-        self.draft =
-            crate::session_preferences::HostVideo::from_report(&observed).panel_video(saved);
+        let phaze = session.mode == Mode::Phaze;
+        self.draft = if phaze {
+            crate::phaze_session::supported_video(saved)
+        } else {
+            crate::session_preferences::HostVideo::from_report(&observed).panel_video(saved)
+        };
         self.pending = host.pending;
         self.result = host.status.clone();
         self.displays = host.outputs.clone();
-        self.current_output = host.config.output_id().map(str::to_owned);
+        self.current_output = if phaze {
+            host.phaze_output.clone()
+        } else {
+            host.config.output_id().map(str::to_owned)
+        };
         self.windows = host.windows;
         self.hid_mouse = host.hid_mouse;
         self.host_revision = host.revision;
-        self.config_ready = host.config.ready();
-        self.display = host
-            .config
-            .output_id()
+        self.config_ready = phaze || host.config.ready();
+        self.display = self
+            .current_output
+            .as_deref()
             .and_then(|id| host.outputs.iter().find(|o| o.id == id))
             .map_or_else(
                 || {

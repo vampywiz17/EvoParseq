@@ -135,11 +135,32 @@ impl Preferences {
     }
 
     pub fn view(&self) -> Value {
-        let mut rows: Vec<Value> = self.fields().into_iter().map(|(key,label,choices,selected)|
-            json!({"key":key,"label":label,"choices":choices,"selected":selected,"group":if key=="transport" || key=="bandwidth" {"Network"} else {"Video"}})).collect();
+        self.view_for(crate::account::Service::Parsec)
+    }
+
+    pub fn view_for(&self, service: crate::account::Service) -> Value {
+        let phaze = service == crate::account::Service::Phaze;
+        let mut rows: Vec<Value> = self.fields().into_iter()
+            .filter(|(key, _, _, _)| !phaze || !matches!(*key, "transport" | "resolution" | "pacing"))
+            .map(|(key, label, choices, selected)| {
+                let (choices, selected) = if phaze && key == "video" {
+                    (&choices[..2], selected.min(1))
+                } else {
+                    (choices, selected)
+                };
+                json!({"key":key,"label":label,"choices":choices,"selected":selected,"group":if key=="transport" || key=="bandwidth" {"Network"} else {"Video"}})
+            }).collect();
         for (key, label, selected) in [
             ("audio_custom", "Custom audio buffer", self.audio.custom),
-            ("audio_pcm", "Raw PCM (BUD only)", self.audio.pcm),
+            (
+                "audio_pcm",
+                if phaze {
+                    "Uncompressed PCM (default AAC-LC)"
+                } else {
+                    "Raw PCM (BUD only)"
+                },
+                self.audio.pcm,
+            ),
             (
                 "audio_surround",
                 "Match output speaker layout (BUD only)",
@@ -147,6 +168,9 @@ impl Preferences {
             ),
             ("logging", "Diagnostic logging", self.logging),
         ] {
+            if phaze && key == "audio_surround" {
+                continue;
+            }
             rows.push(json!({"key":key,"label":label,"choices":["Off","On"],"selected":usize::from(selected),"group":if key=="logging" {"Diagnostics"} else {"Audio"}}));
         }
         for (key, label, value) in [
@@ -165,7 +189,7 @@ impl Preferences {
         }
         json!({"ok":true,"settings":self,"rows":rows,
             "request_hint":"Requests apply to your next connection. The host chooses the actual video format.",
-            "audio_hint":"Applies to the next connection. Default buffering preserves existing latency. A larger minimum can smooth jitter but adds delay. PCM needs more bandwidth. Surround requires BUD and a verified 5.1/7.1 output; otherwise stereo is used.",
+            "audio_hint":if phaze {"Applies to your next connection. Phaze delivers 48 kHz stereo AAC-LC or uncompressed PCM."} else {"Applies to the next connection. Default buffering preserves existing latency. A larger minimum can smooth jitter but adds delay. PCM needs more bandwidth. Surround requires BUD and a verified 5.1/7.1 output; otherwise stereo is used."},
             "diagnostic_hint":"Enable logging before reproducing the issue, then save or share the bounded diagnostic archive. It contains operational events and device information, excluding credentials, clipboard and media content."})
     }
 
@@ -187,11 +211,56 @@ impl Preferences {
         }
         .parse()
     }
+
+    #[cfg(any(target_os = "android", test))]
+    pub fn phaze_video_config(&self) -> Result<evoparseq_phaze::VideoConfig> {
+        let video = self.host_request()?;
+        Ok(evoparseq_phaze::VideoConfig {
+            hevc: self.video > 0,
+            chroma_444: false,
+            mbps: video.bandwidth_mbps.unwrap_or(20),
+            fps: video.fps.unwrap_or(60),
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_tv_limits_are_encoded_in_the_phaze_stream_request() -> Result<()> {
+        let mut saved = Preferences::default();
+        saved.select(
+            "bandwidth",
+            BANDWIDTH_CHOICES.iter().position(|v| *v == "50").unwrap(),
+        )?;
+        saved.select("fps", FPS_CHOICES.iter().position(|v| *v == "120").unwrap())?;
+        let restored = Preferences::parse(&serde_json::to_string(&saved)?)?;
+        let request = restored.phaze_video_config()?.request(7)?;
+        assert_eq!(request[0], 3);
+        assert_eq!(&request[9..13], &50u32.to_be_bytes());
+        assert_eq!(&request[13..17], &120u32.to_be_bytes());
+        Ok(())
+    }
+
+    #[test]
+    fn phaze_uses_tv_presets_without_exposing_unavailable_parsec_modes() {
+        let preferences = Preferences {
+            video: 2,
+            ..Default::default()
+        };
+        let view = preferences.view_for(crate::account::Service::Phaze);
+        let rows = view["rows"].as_array().unwrap();
+        assert!(!rows.iter().any(|row| matches!(
+            row["key"].as_str(),
+            Some("transport" | "resolution" | "pacing" | "audio_surround")
+        )));
+        let video = rows.iter().find(|row| row["key"] == "video").unwrap();
+        assert_eq!(video["choices"].as_array().unwrap().len(), 2);
+        assert_eq!(video["selected"], 1);
+        assert_eq!(preferences.video, 2);
+    }
 
     #[test]
     fn audio_settings_are_backward_compatible_and_invalid_edits_are_atomic() {

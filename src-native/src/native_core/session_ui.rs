@@ -24,6 +24,7 @@ use windows_sys::Win32::{
 pub const OPEN: usize = 4600;
 pub const OPEN_SHORTCUT: usize = 4610;
 const ADD_SCREEN: usize = 4618;
+const PHAZE_GUESTS: usize = 4621;
 const SECONDARY_FULLSCREEN: usize = 4619;
 const SECONDARY_INPUT: usize = 4620;
 const APPLY: usize = 4602;
@@ -66,6 +67,8 @@ impl Status {
             Self::Unconfirmed => 4,
             Self::AttentionSent => 5,
             Self::AttentionFailed => 6,
+            Self::RequestSent => 7,
+            Self::ControlSent => 8,
         }
     }
     fn from_message(value: usize) -> Self {
@@ -76,6 +79,8 @@ impl Status {
             4 => Self::Unconfirmed,
             5 => Self::AttentionSent,
             6 => Self::AttentionFailed,
+            7 => Self::RequestSent,
+            8 => Self::ControlSent,
             _ => Self::Failed,
         }
     }
@@ -136,6 +141,7 @@ unsafe fn collect(p: &Panel) -> Result<Video> {
         fullscreen: SendMessageW(p.fullscreen, BM_GETCHECK, 0, 0) == BST_CHECKED as isize,
     }
     .parse()
+    .map(|video| (&*p.window).session.supported_video(video))
 }
 unsafe fn close(hwnd: HWND) {
     let parent = GetParent(hwnd);
@@ -222,7 +228,7 @@ unsafe fn update_displays(hwnd: HWND, panel: &mut Panel) {
     );
     EnableWindow(
         GetDlgItem(hwnd, REFRESH_DISPLAYS as i32),
-        i32::from(!displays.loading && !busy),
+        i32::from(!window.session.phaze.load(Ordering::Acquire) && !displays.loading && !busy),
     );
     let hint = if displays.hid_mouse {
         if window.session.hid_primary_ready.load(Ordering::Acquire) {
@@ -247,7 +253,19 @@ fn post_displays(window: &crate::window::Window, selected: bool) {
 }
 
 unsafe fn update_metrics(hwnd: HWND, panel: &mut Panel) {
-    let sample = (&*panel.window)
+    let window = &*panel.window;
+    if window.session.phaze.load(Ordering::Acquire) {
+        let peers = window
+            .session
+            .phaze_peers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        EnableWindow(
+            GetDlgItem(hwnd, SECURE_ATTENTION as i32),
+            i32::from(peers.admin()),
+        );
+    }
+    let sample = window
         .stats
         .read()
         .filter(|s| s.at.elapsed() < std::time::Duration::from_secs(3));
@@ -261,6 +279,122 @@ unsafe fn update_metrics(hwnd: HWND, panel: &mut Panel) {
         wide(&metrics(sample.as_ref(), &values)).as_ptr(),
     );
     update_timing_hint(hwnd, panel);
+}
+
+fn phaze_guest_items(
+    peers: &super::session_model::PhazePeers,
+    mut item: impl FnMut(&str, Option<evoparseq_phaze::ClientControl>),
+) {
+    use evoparseq_phaze::ClientControl;
+    let display_name = |name: &str| {
+        name.chars()
+            .filter(|ch| !ch.is_control())
+            .take(64)
+            .collect::<String>()
+            .replace('&', "&&")
+    };
+    let admin = peers.admin();
+    for guest in peers.state.guests.as_deref().unwrap_or_default() {
+        let name = display_name(&guest.user_name);
+        let active = peers
+            .controller
+            .map_or(guest.has_control, |id| id == guest.id);
+        item(
+            &if active {
+                format!("{name} (in control)")
+            } else {
+                name.clone()
+            },
+            None,
+        );
+        if admin {
+            item(
+                if active {
+                    "Revoke control"
+                } else {
+                    "Give control"
+                },
+                Some(ClientControl::SetControl(if active { 0 } else { guest.id })),
+            );
+            if Some(guest.id) != peers.local_id {
+                item("Remove guest", Some(ClientControl::RemoveGuest(guest.id)));
+            }
+        }
+    }
+    for offer in peers.state.offers.as_deref().unwrap_or_default() {
+        item(
+            &format!("Join request from {}", display_name(&offer.user_name)),
+            None,
+        );
+        if admin {
+            for (label, accept) in [("Allow", true), ("Decline", false)] {
+                item(
+                    label,
+                    Some(ClientControl::RespondToOffer {
+                        attempt_id: offer.attempt_id.clone(),
+                        accept,
+                    }),
+                );
+            }
+        }
+    }
+    if peers.state.guests.as_ref().is_none_or(Vec::is_empty)
+        && peers.state.offers.as_ref().is_none_or(Vec::is_empty)
+    {
+        item("No guest information", None);
+    }
+}
+
+unsafe fn phaze_guests_menu(hwnd: HWND, window: &crate::window::Window) {
+    use evoparseq_phaze::ClientControl;
+    let menu = CreatePopupMenu();
+    if menu.is_null() {
+        return;
+    }
+    let mut items = Vec::new();
+    {
+        let peers = window
+            .session
+            .phaze_peers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut item = |label: &str, action: Option<ClientControl>| {
+            items.push(action);
+            AppendMenuW(
+                menu,
+                MF_STRING
+                    | if items.last().is_some_and(Option::is_some) {
+                        0
+                    } else {
+                        MF_GRAYED
+                    },
+                items.len(),
+                wide(label).as_ptr(),
+            );
+        };
+        phaze_guest_items(&peers, &mut item);
+    }
+    let mut point = POINT::default();
+    GetCursorPos(&mut point);
+    let selected = TrackPopupMenu(
+        menu,
+        TPM_RETURNCMD | TPM_NONOTIFY,
+        point.x,
+        point.y,
+        0,
+        hwnd,
+        null(),
+    );
+    DestroyMenu(menu);
+    if let Some(Some(action)) = usize::try_from(selected)
+        .ok()
+        .and_then(|id| id.checked_sub(1))
+        .and_then(|index| items.into_iter().nth(index))
+    {
+        window
+            .events
+            .push(crate::window::Event::PhazeControl(action));
+    }
 }
 unsafe fn update_timing_hint(hwnd: HWND, panel: &Panel) {
     let window = &*panel.window;
@@ -464,6 +598,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             WM_COMMAND => {
                 match wp & 0xffff {
                     ADD_SCREEN => super::multi_display::add_menu(&*p.window),
+                    PHAZE_GUESTS => phaze_guests_menu(hwnd, &*p.window),
                     SECONDARY_FULLSCREEN => {
                         let window = &*p.window;
                         window.set_fullscreen(!window.native_fullscreen());
@@ -654,6 +789,9 @@ unsafe fn panel_for_parent(parent: HWND) -> HWND {
     }
 }
 pub unsafe fn install(window: &crate::window::Window) {
+    if !window.remote_controls.load(Ordering::Acquire) {
+        return;
+    }
     super::session_badge::install(window);
     raise(window);
 }
@@ -897,12 +1035,13 @@ pub unsafe fn toggle(
         0,
         [24, 199, 240, 44],
     );
+    let phaze = window.session.phaze.load(Ordering::Acquire);
     control(
         hwnd,
         p,
         "BUTTON",
-        "Add screen",
-        ADD_SCREEN,
+        if phaze { "Guests" } else { "Add screen" },
+        if phaze { PHAZE_GUESTS } else { ADD_SCREEN },
         BS_OWNERDRAW as u32 | WS_TABSTOP,
         [274, 208, 120, 28],
     );
@@ -1042,6 +1181,16 @@ pub unsafe fn toggle(
             rect,
         );
     }
+    if window.session.phaze.load(Ordering::Acquire) {
+        for control in [
+            p.controls[0],
+            p.controls[3],
+            p.controls[4],
+            GetDlgItem(hwnd, SECURE_ATTENTION as i32),
+        ] {
+            EnableWindow(control, 0);
+        }
+    }
     ShowWindow(hwnd, SW_SHOW);
     SetTimer(hwnd, 1, 1000, None);
     update_metrics(hwnd, p);
@@ -1110,6 +1259,57 @@ pub unsafe fn dialog(parent: HWND, msg: &MSG) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn phaze_guest_menu_only_offers_admin_actions_for_current_peers() {
+        use super::super::session_model::PhazePeers;
+        use evoparseq_phaze::ClientControl;
+
+        fn items(peers: &PhazePeers) -> Vec<(String, Option<ClientControl>)> {
+            let mut items = Vec::new();
+            phaze_guest_items(peers, |label, action| items.push((label.into(), action)));
+            items
+        }
+
+        let mut peers = PhazePeers::default();
+        let empty = items(&peers);
+        assert!(matches!(&empty[..], [(label, None)] if label == "No guest information"));
+        peers.state = serde_json::from_value(serde_json::json!({
+            "guests": [
+                {"id": 7, "user_name": "Local", "has_control": true, "admin": true},
+                {"id": 8, "user_name": "Guest&\nname", "has_control": false, "admin": false}
+            ],
+            "offers": [{"attempt_id": "pending", "user_name": "Visitor"}]
+        }))
+        .unwrap();
+        peers.local_id = Some(8);
+        let guest = items(&peers);
+        assert!(
+            matches!(&guest[..], [(owner, None), (guest, None), (offer, None)]
+            if owner == "Local (in control)" && guest == "Guest&&name"
+                && offer == "Join request from Visitor")
+        );
+        peers.local_id = Some(7);
+        peers.controller = Some(8);
+        let admin = items(&peers);
+        assert_eq!(admin.len(), 8);
+        assert!(
+            matches!(&admin[1], (label, Some(ClientControl::SetControl(7))) if label == "Give control")
+        );
+        assert_eq!(admin[2].0, "Guest&&name (in control)");
+        assert!(matches!(&admin[3].1, Some(ClientControl::SetControl(0))));
+        assert!(matches!(&admin[4].1, Some(ClientControl::RemoveGuest(8))));
+        assert!(
+            matches!(&admin[6].1, Some(ClientControl::RespondToOffer { attempt_id, accept: true }) if attempt_id == "pending")
+        );
+        assert!(
+            matches!(&admin[7].1, Some(ClientControl::RespondToOffer { attempt_id, accept: false }) if attempt_id == "pending")
+        );
+        assert!(admin
+            .iter()
+            .filter_map(|(_, action)| action.as_ref())
+            .all(|action| peers.allows(action)));
+    }
+
     unsafe fn select_text(panel: HWND, id: i32, value: &str) {
         let combo = GetDlgItem(panel, id);
         let index = SendMessageW(
@@ -1132,11 +1332,64 @@ mod tests {
             (4, Status::Unconfirmed),
             (5, Status::AttentionSent),
             (6, Status::AttentionFailed),
+            (7, Status::RequestSent),
+            (8, Status::ControlSent),
         ] {
             assert_eq!(status.message(), code);
             assert_eq!(Status::from_message(code), status);
         }
         assert_eq!(Status::from_message(usize::MAX), Status::Failed);
+    }
+
+    #[test]
+    fn phaze_panel_exposes_guest_controls_and_allows_stream_settings_while_loading() {
+        let window = crate::window::Window::create_native().unwrap();
+        struct Close(Arc<crate::window::Window>);
+        impl Drop for Close {
+            fn drop(&mut self) {
+                self.0.request_stop();
+                self.0.close();
+            }
+        }
+        let _close = Close(window.clone());
+        window.session.phaze.store(true, Ordering::Release);
+        window.session.displays.lock().unwrap().loading = true;
+        let path = std::env::temp_dir().join(format!(
+            "evoparseq-phaze-panel-{}.json",
+            crate::bud_attempt::native_attempt_id().unwrap()
+        ));
+        window.install_connection_settings(crate::connection_settings::Manager::open(path));
+        unsafe {
+            SendMessageW(window.handle(), WM_COMMAND, OPEN, 0);
+            let panel = panel(&window);
+            assert!(!panel.is_null());
+            assert_eq!(text(GetDlgItem(panel, PHAZE_GUESTS as i32)), "Guests");
+            assert!(GetDlgItem(panel, ADD_SCREEN as i32).is_null());
+            for id in [
+                20,
+                23,
+                24,
+                DISPLAY as i32,
+                REFRESH_DISPLAYS as i32,
+                SECURE_ATTENTION as i32,
+            ] {
+                let control = GetDlgItem(panel, id);
+                assert!(!control.is_null(), "Missing control {id}");
+                assert_eq!(IsWindowEnabled(control), 0, "Enabled control {id}");
+            }
+            let mut events = std::collections::VecDeque::new();
+            window.events.take_batch(&mut events);
+            events.clear();
+            select_text(panel, 21, "40");
+            select_text(panel, 22, "120");
+            SendMessageW(panel, WM_COMMAND, APPLY, 0);
+            window.events.take_batch(&mut events);
+            assert!(events.iter().any(|event| matches!(event,
+                crate::window::Event::NativeSession(Command::Apply(video))
+                if video.resolution == Resolution::Host
+                    && video.fps == Some(120) && video.bandwidth_mbps == Some(40)
+            )));
+        }
     }
 
     #[test]

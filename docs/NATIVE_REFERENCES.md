@@ -206,3 +206,7 @@ output-list response or local window is not proof that the host accepted an
 additional encoder: validate an actual secondary keyframe/picture. The installed
 VDD, owner/account policy, driver state and extended desktop remain host-side
 requirements. There is no new VDD-creation feature in the client from this review.
+
+## Experimental Phaze adapter (local development branch)
+
+The independent Rust implementation is in [src-native/crates/phaze](../src-native/crates/phaze/README.md). Protocol field layouts were established through authorized interoperability observations; no Phaze native source, binary extracts, SDK or runtime libraries are incorporated. Authentication, DTLS and wire parsing use original EvoParseq code and open-source Rust dependencies. The crate README records the experimental crypto status, non-EMS compatibility requirement, validated scope and unimplemented features. Windows reuses the existing video inspector, decoder and renderer.

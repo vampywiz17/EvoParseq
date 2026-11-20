@@ -83,6 +83,17 @@ impl Tab {
     }
 }
 
+/// Settings rows whose protocol support differs between services.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum Feature {
+    #[default]
+    Common,
+    ParsecNetwork,
+    RawAudio,
+    SurroundAudio,
+    Hid,
+}
+
 pub use crate::connection_settings::BinaryChoice;
 pub use crate::connection_settings::InputMode;
 pub use crate::connection_settings::RouteMode;
@@ -101,6 +112,7 @@ pub struct Availability {
 
 // Deliberately no Debug/Serialize: plaintext replacement secrets are transient.
 pub struct Form {
+    pub phaze: bool,
     pub active_tab: Tab,
     pub values: Settings,
     pub gpu_choices: Vec<Option<GpuPreference>>,
@@ -120,6 +132,7 @@ pub struct Form {
 impl Form {
     pub fn new(values: Settings, default_gpu_vendor: Option<u32>) -> Self {
         Self {
+            phaze: false,
             active_tab: Tab::Network,
             audio_min: values.audio_min_buffer_ms.to_string(),
             audio_max: values.audio_max_buffer_ms.to_string(),
@@ -135,6 +148,91 @@ impl Form {
             forget_password: false,
             forget_token: false,
             feedback: String::new(),
+        }
+    }
+    pub fn supports(&self, feature: Feature) -> bool {
+        !self.phaze || matches!(feature, Feature::Common | Feature::RawAudio)
+    }
+    pub fn notice(&self) -> &'static str {
+        if self.phaze {
+            match self.active_tab {
+                Tab::Network => "Phaze: Force TURN uses the configured relay. Other modes use direct UDP.",
+                Tab::Video => "Video changes apply on your next connection. Check Connection stats for the actual format and decoder.",
+                Tab::Audio => "Phaze supports stereo AAC-LC or PCM. Audio changes apply on your next connection.",
+                Tab::Input => "Phaze supports keyboard, mouse and scrolling. HID and USB forwarding are unavailable.",
+            }
+        } else {
+            self.active_tab.notice()
+        }
+    }
+    pub fn video_formats(&self) -> &'static [VideoFormat] {
+        if self.phaze {
+            &VideoFormat::ALL[..2]
+        } else {
+            &VideoFormat::ALL
+        }
+    }
+    pub fn video_format_help(&self) -> &'static str {
+        if self.phaze {
+            "Request H.264 or HEVC 8-bit.\nThe host may select H.264; reconnect after changing."
+        } else {
+            crate::app_style::forms::VIDEO_FORMAT.help
+        }
+    }
+    pub fn chroma_help(&self) -> &'static str {
+        if self.phaze {
+            "HEVC 8-bit; requires compatible host and GPU.\nNormal GPU rendering; host may send 4:2:0 instead."
+        } else {
+            crate::app_style::forms::CHROMA.help
+        }
+    }
+    pub fn presentation_help(&self) -> &'static str {
+        if self.phaze {
+            "HEVC 4:2:0: original NV12 (8-bit) surfaces.\nDriver support required; reconnect after changing."
+        } else {
+            crate::app_style::forms::VIDEO_PRESENTATION.help
+        }
+    }
+    pub fn audio_buffer_help(&self) -> &'static str {
+        if self.phaze {
+            "Default: 50 / 100 ms.\nCustom limits apply only when enabled."
+        } else {
+            crate::app_style::forms::PLAYBACK_BUFFER.help
+        }
+    }
+    pub fn audio_format_labels(&self) -> [&'static str; 2] {
+        if self.phaze {
+            crate::app_style::settings::PHAZE_AUDIO_FORMATS
+        } else {
+            BinaryChoice::AudioCodec.labels()
+        }
+    }
+    pub fn audio_format_help(&self) -> &'static str {
+        if self.phaze {
+            "48 kHz stereo: AAC-LC or uncompressed PCM.\nPCM uses about 1.54 Mbps before overhead.\nThe actual codec is shown in Connection stats."
+        } else {
+            crate::app_style::forms::AUDIO_FORMAT.help
+        }
+    }
+    pub fn route_labels(&self) -> &'static [&'static str] {
+        if self.phaze {
+            &crate::app_style::settings::PHAZE_ROUTES
+        } else {
+            &RouteMode::LABELS
+        }
+    }
+    pub fn route_help(&self) -> &'static str {
+        if self.phaze {
+            "Choose direct UDP or explicitly force TURN.\nThere is no automatic direct/relay fallback."
+        } else {
+            crate::app_style::forms::CONNECTION_ROUTE.help
+        }
+    }
+    pub fn provider_help(&self) -> &'static str {
+        if self.phaze {
+            "Used only with Force TURN relay.\nThe host-facing relay connection remains UDP."
+        } else {
+            crate::app_style::forms::TURN_PROVIDER.help
         }
     }
     pub fn cloudflare(&self) -> bool {
@@ -160,7 +258,7 @@ impl Form {
         }
         let relay = !self.values.stun_only;
         Availability {
-            bud: {
+            bud: !self.phaze && {
                 #[cfg(feature = "bud")]
                 {
                     self.values.bud
@@ -186,16 +284,18 @@ impl Form {
         settings.nvidia_vsr = settings.nvidia_vsr.min(4);
         // Preserve the existing parse order and validation even for inactive
         // numeric fields. Domain/secret validation remains in Manager::save.
-        crate::network_settings::apply_audio_fields(
-            &mut settings,
-            &self.audio_min,
-            &self.audio_max,
-        )?;
-        settings.video_gpu = self
-            .gpu_selection
-            .and_then(|i| self.gpu_choices.get(i))
-            .context("Choose Automatic or an available video GPU")?
-            .clone();
+        {
+            crate::network_settings::apply_audio_fields(
+                &mut settings,
+                &self.audio_min,
+                &self.audio_max,
+            )?;
+            settings.video_gpu = self
+                .gpu_selection
+                .and_then(|i| self.gpu_choices.get(i))
+                .context("Choose Automatic or an available video GPU")?
+                .clone();
+        }
         crate::network_settings::apply_fields(
             &mut settings,
             &self.stun_urls,
@@ -573,5 +673,63 @@ mod vsr_tests {
                 );
             }
         }
+    }
+    #[test]
+    fn service_policy_keeps_local_media_controls_and_excludes_unwired_protocols() {
+        let mut form = Form::new(Settings::default(), Some(0x10de));
+        for phaze in [false, true] {
+            form.phaze = phaze;
+            assert!(form.supports(Feature::Common));
+            assert!(form.supports(Feature::RawAudio));
+            for feature in [Feature::ParsecNetwork, Feature::SurroundAudio, Feature::Hid] {
+                assert_eq!(form.supports(feature), !phaze);
+            }
+            assert_eq!(form.video_formats().len(), if phaze { 2 } else { 3 });
+            if phaze {
+                assert_eq!(form.audio_format_labels(), ["AAC-LC", "Uncompressed PCM"]);
+                assert!(form.audio_format_help().contains("AAC-LC"));
+                assert!(!form.availability().bud);
+                assert!(!form.video_formats().contains(&VideoFormat::Hevc10));
+            } else {
+                assert_eq!(
+                    form.audio_format_labels(),
+                    BinaryChoice::AudioCodec.labels()
+                );
+            }
+        }
+    }
+    #[test]
+    fn phaze_settings_validate_shared_gpu_and_audio_options() {
+        let saved = Settings {
+            video_gpu: Some(GpuPreference {
+                name: "Offline fixture GPU".into(),
+                vendor_id: 0x1002,
+                device_id: 7,
+                subsystem_id: 0,
+                revision: 0,
+                luid: 9,
+            }),
+            prefer_hevc: true,
+            experimental_chroma_444: true,
+            ..Default::default()
+        };
+        let mut form = Form::new(saved.clone(), Some(0x1002));
+        form.phaze = true;
+        form.gpu_choices.push(saved.video_gpu.clone());
+        form.gpu_selection = Some(1);
+        form.audio_min = "30".into();
+        form.audio_max = "90".into();
+        form.availability();
+        form.turn_urls = "turn:127.0.0.1:3478?transport=udp".into();
+        form.values.force_relay = true;
+        let actual = form.candidate().unwrap();
+        assert_eq!(
+            serde_json::to_value(&actual.video_gpu).unwrap(),
+            serde_json::to_value(&saved.video_gpu).unwrap()
+        );
+        assert_eq!(actual.audio_min_buffer_ms, 30);
+        assert!(!actual.experimental_chroma_444);
+        assert!(actual.force_relay);
+        assert_eq!(actual.turn_urls.len(), 1);
     }
 }

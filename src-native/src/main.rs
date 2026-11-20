@@ -70,6 +70,8 @@ mod network_settings;
 mod nvidia_vsr;
 #[cfg(windows)]
 mod performance;
+#[cfg(windows)]
+mod phaze_session;
 mod platform;
 #[cfg(windows)]
 mod platform_windows;

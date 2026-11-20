@@ -125,6 +125,7 @@ impl Desktop {
         let origin = ctx.content_rect().min + egui::vec2(0., 24.);
         let size = ctx.content_rect().size() - egui::vec2(0., 24.);
         if self.badge.open {
+            let phaze = self.service == crate::account::Service::Phaze;
             let initial = self.metrics.draft.clone();
             self.badge
                 .synchronize_draft(initial, self.metrics.host_revision);
@@ -177,7 +178,7 @@ impl Desktop {
                                         });
                                     });
                                     if available&&self.metrics.current_output.as_deref()!=Some(selected.as_str())&&!selected.is_empty(){playback.push_session(crate::session_controls::Command::SelectDisplay(selected));self.badge.draft_dirty=false;self.badge.draft=None;}
-                                    if ui.put(r([314,164,80,28]),egui::Button::new("Refresh")).clicked(){playback.push_session(crate::session_controls::Command::RefreshDisplays);}
+                                    if !phaze && ui.put(r([314,164,80,28]),egui::Button::new("Refresh")).clicked(){playback.push_session(crate::session_controls::Command::RefreshDisplays);}
                                     label(
                                         ui,
                                         r([24, 199, 240, 44]),
@@ -186,7 +187,7 @@ impl Desktop {
                                         fg,
                                     );
                                     ui.scope_builder(egui::UiBuilder::new().max_rect(r([274,208,120,28])),|ui| {
-                                        ui.add_enabled_ui(!self.metrics.hid_mouse && self.metrics.displays.len()>1,|ui| {
+                                        ui.add_enabled_ui(!phaze && !self.metrics.hid_mouse && self.metrics.displays.len()>1,|ui| {
                                             ui.menu_button("Add screen",|ui| {
                                                 if let Some(telemetry)=&self.telemetry {
                                                     let hid_keyboard=self.transport==crate::connection::Mode::Bud&&self.settings.view().0.hid_keyboard_enabled();
@@ -211,7 +212,7 @@ impl Desktop {
                                         let mut value=match i {0=>crate::session_preferences::resolution_text(draft.resolution),1=>draft.bandwidth_mbps.unwrap_or(10).to_string(),2=>draft.fps.unwrap_or(60).to_string(),3=>if draft.constant_fps.unwrap_or(false){"Fixed"}else{"Dynamic"}.into(),4=>if draft.rotated.unwrap_or(false){"Rotated"}else{"Default"}.into(),_=>crate::input_state::IMMERSIVE_LABELS[crate::input_state::immersive_index(draft.immersive)].into()};
                                         let options:&[&str]=match i {0=>crate::session_preferences::RESOLUTION_CHOICES,1=>crate::session_preferences::BANDWIDTH_CHOICES,2=>crate::session_preferences::FPS_CHOICES,3=>&["Dynamic","Fixed"],4=>&["Default","Rotated"],_=>&crate::input_state::IMMERSIVE_LABELS};
                                         let before=value.clone();
-                                        ui.add_enabled_ui(self.metrics.config_ready&&!self.metrics.pending,|ui|{
+                                        ui.add_enabled_ui(self.metrics.config_ready&&!self.metrics.pending&&(!phaze||!matches!(i,0|3|4)),|ui|{
                                             ui.scope_builder(egui::UiBuilder::new().max_rect(r([174,250+i as i32*44,218,28])),|ui|{
                                                 egui::ComboBox::from_id_salt(("session-field",i)).width(208.).selected_text(if self.metrics.config_ready{value.as_str()}else{"Waiting for host"}).show_ui(ui,|ui|{for &option in options{let supported=i!=5||!option.contains("Keyboard")&&!option.contains("keyboard")||self.shortcuts.as_ref().is_some_and(|s|s.available());ui.add_enabled_ui(supported,|ui|{ui.selectable_value(&mut value,option.to_owned(),option);});}});
                                             });
@@ -268,6 +269,7 @@ impl Desktop {
                                                     if let Some(mut video)=self.badge.draft.clone(){
                                                         video.fullscreen=ctx.input(|i|i.viewport().fullscreen.unwrap_or(false));
                                                         if let Some(telemetry)=&self.telemetry {let size=ctx.input(|i|i.viewport().inner_rect.map(|r|r.size())).unwrap_or_default();let scale=ctx.pixels_per_point();*telemetry.client_size.lock().unwrap_or_else(|e|e.into_inner())=((size.x*scale).round().max(1.)as u32,((size.y-24.).max(1.)*scale).round()as u32);}
+                                                        if phaze { video = crate::phaze_session::supported_video(video); }
                                                         playback.push_session(crate::session_controls::Command::Apply(video));self.metrics.pending=true;
                                                     }
                                                 }

@@ -158,7 +158,14 @@ impl DesktopInput {
         // Keep None while locked, but let ordinary UI hover choose its cursor.
         // Repeated native visibility commands would overwrite Wayland CSD resize
         // cursors even though the capture state has not changed.
-        if grab || native_drag {
+        let hidden_over_video = self.enabled
+            && playback.input_active()
+            && playback
+                .phaze_cursor_hidden
+                .load(std::sync::atomic::Ordering::Acquire)
+            && ctx
+                .input(|i| i.focused && i.pointer.hover_pos().is_some_and(|pos| self.inside(pos)));
+        if grab || native_drag || hidden_over_video {
             ctx.set_cursor_icon(egui::CursorIcon::None);
         }
     }

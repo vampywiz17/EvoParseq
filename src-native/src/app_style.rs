@@ -30,14 +30,16 @@ pub mod desktop {
     pub const WORDMARK: [[i32; 4]; 2] = [[84, 24, 68, 46], [152, 24, 180, 46]];
     pub const SETTINGS: [i32; 4] = [580, 28, 116, 36];
     pub const SUBTITLE: [i32; 4] = [32, 80, 650, 26];
+    pub const SERVICE_LABEL: [i32; 4] = [32, 122, 215, 26];
+    pub const SERVICE_CHOICE: [i32; 4] = [250, 120, 446, 160];
     pub const HOSTS: [i32; 4] = [32, 130, 664, 220];
     pub const PEER_LABEL: [i32; 4] = [32, 370, 155, 26];
     pub const PEER: [i32; 4] = [200, 366, 496, 32];
-    pub const REMEMBER: [i32; 4] = [250, 322, 450, 30];
+    pub const REMEMBER: [i32; 4] = [250, 322 + 28, 450, 30];
     pub const REMEMBER_WINDOWS: &str = "Remember sign-in for this Windows user";
     #[cfg(target_os = "linux")]
     pub const REMEMBER_LINUX: &str = "Remember sign-in for this Linux user";
-    pub const LOGIN: [i32; 4] = [490, 370, 206, 40];
+    pub const LOGIN: [i32; 4] = [490, 370 + 28, 206, 40];
     pub const ACTIONS: [[i32; 4]; 3] =
         [[32, 420, 140, 40], [184, 420, 140, 40], [490, 420, 206, 40]];
     pub const ACTION_LABELS: [&str; 3] = ["Refresh", "Sign out", "Connect"];
@@ -53,10 +55,10 @@ pub mod desktop {
     pub const CHOOSE: &str =
         "Choose a computer, or enter its peer ID. Owner connections are supported.";
     pub const fn login_label(i: usize) -> [i32; 4] {
-        [32, 136 + i as i32 * 60, 215, 26]
+        [32, 136 + 44 + i as i32 * 60, 215, 26]
     }
     pub const fn login_edit(i: usize) -> [i32; 4] {
-        [250, 134 + i as i32 * 60, 446, 32]
+        [250, 134 + 44 + i as i32 * 60, 446, 32]
     }
     pub fn host_text(name: &str, peer: &str) -> String {
         format!("{name}   /   {peer}")
@@ -64,6 +66,22 @@ pub mod desktop {
 }
 
 pub mod settings {
+    pub const PHAZE_AUDIO_FORMATS: [&str; 2] = ["AAC-LC", "Uncompressed PCM"];
+    pub const PHAZE_ROUTES: [&str; 3] = [
+        "Direct UDP (default)",
+        "Direct UDP (LAN / VPN)",
+        "Force TURN relay",
+    ];
+    /// Compact the service's Network page when Parsec-only rows are absent.
+    pub fn phaze_network_y(y: i32, transport_extra: i32) -> i32 {
+        if y >= 938 + transport_extra {
+            y - 196 - transport_extra
+        } else if y >= 344 && y < 844 + transport_extra {
+            y - 102
+        } else {
+            y
+        }
+    }
     #[cfg(target_os = "linux")]
     pub const WIDTH: i32 = 820;
     pub const BODY: i32 = 16;

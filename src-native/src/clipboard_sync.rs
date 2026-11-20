@@ -93,6 +93,18 @@ pub struct State {
 }
 #[cfg(any(target_os = "linux", test))]
 impl State {
+    #[cfg(target_os = "linux")]
+    pub fn local_changed(&mut self, text: &str) -> bool {
+        self.pending = None;
+        text != self.last
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn local_sent(&mut self, text: &str) {
+        self.last.clear();
+        self.last.push_str(text);
+    }
+
     pub fn receive(&mut self, text: &str, allowed: bool, write: impl FnMut(&str) -> bool) {
         receive(
             &mut self.last,

@@ -198,6 +198,41 @@ mod pointing {
         RemoteMode(bool, u32),
         RemoteKey { key: u8, down: bool, cancel: bool },
     }
+    pub enum Action {
+        Key(i32, i32, bool),
+        Motion(i32, i32, bool),
+        /// Physical order is left, right, middle, back, forward.
+        Button(i32, bool, i32, i32),
+        Scroll(i32, i32),
+        Release,
+    }
+    impl Action {
+        fn send_parsec(
+            self,
+            keys: &mut Keyboard,
+            mut send: impl FnMut(&[u8]) -> Result<()>,
+        ) -> Result<()> {
+            match self {
+                Self::Key(usage, mods, down) => {
+                    if let Some(frame) = keys.frame(usage, mods, down) {
+                        send(&frame)?;
+                    }
+                    Ok(())
+                }
+                Self::Motion(x, y, relative) => send(&header(3, i32::from(relative), x, y)),
+                Self::Button(button, down, x, y) => {
+                    let _ = (x, y); // Parsec sends pointer position separately.
+                    let wire = [1, 3, 2, 4, 5][(button - 1) as usize];
+                    send(&header(1, wire, i32::from(down), 0))
+                }
+                Self::Scroll(x, y) => send(&header(2, x, y, 0)),
+                Self::Release => {
+                    keys.reset();
+                    send(&header(24, 0, 0, 0))
+                }
+            }
+        }
+    }
     pub struct Engine {
         keys: Keyboard,
         active: bool,
@@ -273,6 +308,9 @@ mod pointing {
                 self.restore_position();
             }
             self.cursor_initialized = true;
+            self.pointer_mode(relative, hidden);
+        }
+        pub fn pointer_mode(&mut self, relative: bool, hidden: bool) {
             if self.relative != relative {
                 self.remainder = (0., 0.);
             }
@@ -289,35 +327,40 @@ mod pointing {
                 }
             }
         }
-        fn abs(&self) -> bytes::Bytes {
-            header(3, 0, self.x.round() as i32, self.y.round() as i32)
+        fn abs(&self) -> Action {
+            Action::Motion(self.x.round() as i32, self.y.round() as i32, false)
         }
         fn mouse_buttons(
             &mut self,
             extra: u32,
-            mut send: impl FnMut(&[u8]) -> Result<()>,
+            mut send: impl FnMut(Action) -> Result<()>,
         ) -> Result<()> {
             let mask = self.buttons | if self.drag { 1 } else { 0 } | extra;
-            for (bit, wire) in [(1, 1), (2, 3), (4, 2), (8, 4), (16, 5)] {
+            for button in 1..=5 {
+                let bit = 1 << (button - 1);
                 if (self.sent_buttons ^ mask) & bit != 0 {
-                    send(&header(1, wire, i32::from(mask & bit != 0), 0))?;
+                    send(Action::Button(
+                        button,
+                        mask & bit != 0,
+                        self.x.round() as i32,
+                        self.y.round() as i32,
+                    ))?;
                 }
             }
             self.sent_buttons = mask;
             Ok(())
         }
-        fn click(&mut self, bit: u32, mut send: impl FnMut(&[u8]) -> Result<()>) -> Result<()> {
+        fn click(&mut self, bit: u32, mut send: impl FnMut(Action) -> Result<()>) -> Result<()> {
             if self.source.0 == 0 || self.source.1 == 0 {
                 return Ok(());
             }
             if !self.relative {
-                send(&self.abs())?;
+                send(self.abs())?;
             }
             self.mouse_buttons(bit, &mut send)?;
             self.mouse_buttons(0, send)
         }
-        fn release(&mut self, mut send: impl FnMut(&[u8]) -> Result<()>) -> Result<()> {
-            self.keys.reset();
+        fn release(&mut self, mut send: impl FnMut(Action) -> Result<()>) -> Result<()> {
             self.buttons = 0;
             self.sent_buttons = 0;
             self.directions = 0;
@@ -325,13 +368,26 @@ mod pointing {
             self.drag = false;
             self.right = false;
             self.remainder = (0., 0.);
-            send(&header(24, 0, 0, 0))
+            send(Action::Release)
         }
         pub fn event(
             &mut self,
             event: Event,
             now: Instant,
             mut send: impl FnMut(&[u8]) -> Result<()>,
+        ) -> Result<()> {
+            let mut keys = std::mem::take(&mut self.keys);
+            let result = self.event_action(event, now, |action| {
+                action.send_parsec(&mut keys, &mut send)
+            });
+            self.keys = keys;
+            result
+        }
+        pub fn event_action(
+            &mut self,
+            event: Event,
+            now: Instant,
+            mut send: impl FnMut(Action) -> Result<()>,
         ) -> Result<()> {
             match event {
                 Event::Viewport(w, h) => {
@@ -370,12 +426,10 @@ mod pointing {
                 _ if !self.active => return Ok(()),
                 _ => {}
             }
-            self.tick(now, &mut send)?;
+            self.tick_action(now, &mut send)?;
             match event {
                 Event::Key { usage, mods, down } => {
-                    if let Some(frame) = self.keys.frame(usage, mods, down) {
-                        send(&frame)?;
-                    }
+                    send(Action::Key(usage, mods, down))?;
                 }
                 Event::Pointer(p) => {
                     self.physical = true;
@@ -391,7 +445,7 @@ mod pointing {
                             let dy = y.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32;
                             self.remainder = (x - f64::from(dx), y - f64::from(dy));
                             if dx != 0 || dy != 0 {
-                                send(&header(3, 1, dx, dy))?;
+                                send(Action::Motion(dx, dy, true))?;
                             }
                         } else {
                             let view = crate::viewport::Viewport {
@@ -410,13 +464,13 @@ mod pointing {
                                 self.y = y as f64;
                             }
                             self.clamp();
-                            send(&self.abs())?;
+                            send(self.abs())?;
                         }
                     }
                     self.buttons = p.buttons & 31;
                     self.mouse_buttons(0, &mut send)?;
                     if p.wheel != (0, 0) {
-                        send(&header(2, p.wheel.0, p.wheel.1, 0))?;
+                        send(Action::Scroll(p.wheel.0, p.wheel.1))?;
                     }
                 }
                 Event::RemoteKey { key, down, .. } if self.mode => {
@@ -429,7 +483,9 @@ mod pointing {
                             self.directions |= 1 << key;
                             if self.center.is_some() && !self.right && !self.drag {
                                 self.drag = true;
-                                send(&self.abs())?;
+                                if !self.relative {
+                                    send(self.abs())?;
+                                }
                                 self.mouse_buttons(0, &mut send)?;
                             }
                         } else {
@@ -441,7 +497,9 @@ mod pointing {
                             self.right = false;
                             if self.directions != 0 {
                                 self.drag = true;
-                                send(&self.abs())?;
+                                if !self.relative {
+                                    send(self.abs())?;
+                                }
                                 self.mouse_buttons(0, &mut send)?;
                             }
                         } else if !down && self.center.take().is_some() {
@@ -467,6 +525,16 @@ mod pointing {
             &mut self,
             now: Instant,
             mut send: impl FnMut(&[u8]) -> Result<()>,
+        ) -> Result<()> {
+            let mut keys = std::mem::take(&mut self.keys);
+            let result = self.tick_action(now, |action| action.send_parsec(&mut keys, &mut send));
+            self.keys = keys;
+            result
+        }
+        pub fn tick_action(
+            &mut self,
+            now: Instant,
+            mut send: impl FnMut(Action) -> Result<()>,
         ) -> Result<()> {
             let dt = now
                 .saturating_duration_since(self.last)
@@ -507,12 +575,12 @@ mod pointing {
                         y as f64 * speed * dt * diagonal,
                     );
                     if self.relative {
-                        send(&header(3, 1, dx.round() as i32, dy.round() as i32))?;
+                        send(Action::Motion(dx.round() as i32, dy.round() as i32, true))?;
                     } else {
                         self.x += dx;
                         self.y += dy;
                         self.clamp();
-                        send(&self.abs())?;
+                        send(self.abs())?;
                     }
                 }
             }
@@ -551,6 +619,8 @@ mod pointing {
         }
     }
 }
+#[cfg(any(target_os = "android", target_os = "linux"))]
+pub use pointing::Action;
 #[cfg(any(target_os = "android", target_os = "linux", test))]
 pub use pointing::{Engine, Event, Pointer, RemoteSource};
 

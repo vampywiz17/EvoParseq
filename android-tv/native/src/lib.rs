@@ -50,6 +50,14 @@ pub mod video_stream;
 #[cfg(target_os = "android")]
 mod audio_android;
 #[cfg(target_os = "android")]
+mod phaze_android;
+#[cfg(target_os = "android")]
+#[path = "../../../src-native/src/phaze_client.rs"]
+mod phaze_client;
+#[cfg(target_os = "android")]
+#[path = "../../../src-native/src/phaze_session.rs"]
+pub mod phaze_session;
+#[cfg(target_os = "android")]
 mod stream;
 #[cfg(target_os = "android")]
 mod transport_android;
