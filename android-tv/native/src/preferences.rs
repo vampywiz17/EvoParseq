@@ -1,6 +1,9 @@
 //! Android TV request presets. Rust owns validation; the TV view only renders
 //! these choices. Decoder support and actual host replies are separate checks.
-use crate::session_preferences::{PanelFields, BANDWIDTH_CHOICES, FPS_CHOICES, RESOLUTION_CHOICES};
+use crate::session_preferences::{
+    bandwidth_choices, PanelFields, BANDWIDTH_CHOICES, PARSEC_BANDWIDTH_CHOICES, FPS_CHOICES,
+    RESOLUTION_CHOICES,
+};
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -60,7 +63,7 @@ impl Preferences {
             (
                 "bandwidth",
                 "Bandwidth limit request (Mbps)",
-                BANDWIDTH_CHOICES,
+                PARSEC_BANDWIDTH_CHOICES,
                 self.bandwidth,
             ),
         ]
@@ -145,6 +148,8 @@ impl Preferences {
             .map(|(key, label, choices, selected)| {
                 let (choices, selected) = if phaze && key == "video" {
                     (&choices[..2], selected.min(1))
+                } else if phaze && key == "bandwidth" {
+                    (bandwidth_choices(false), selected.min(BANDWIDTH_CHOICES.len() - 1))
                 } else {
                     (choices, selected)
                 };
@@ -194,12 +199,16 @@ impl Preferences {
     }
 
     pub fn host_request(&self) -> Result<crate::session_preferences::Video> {
+        self.host_request_for_service(true)
+    }
+
+    fn host_request_for_service(&self, parsec: bool) -> Result<crate::session_preferences::Video> {
         PanelFields {
             resolution: RESOLUTION_CHOICES
                 .get(self.resolution)
                 .ok_or_else(|| anyhow::anyhow!("Invalid resolution."))?,
-            bandwidth: BANDWIDTH_CHOICES
-                .get(self.bandwidth)
+            bandwidth: bandwidth_choices(parsec)
+                .get(self.bandwidth.min(bandwidth_choices(parsec).len() - 1))
                 .ok_or_else(|| anyhow::anyhow!("Invalid bandwidth."))?,
             fps: FPS_CHOICES
                 .get(self.fps)
@@ -209,12 +218,12 @@ impl Preferences {
             immersive: 0,
             fullscreen: true,
         }
-        .parse()
+        .parse_for_service(parsec)
     }
 
     #[cfg(any(target_os = "android", test))]
     pub fn phaze_video_config(&self) -> Result<evoparseq_phaze::VideoConfig> {
-        let video = self.host_request()?;
+        let video = self.host_request_for_service(false)?;
         Ok(evoparseq_phaze::VideoConfig {
             hevc: self.video > 0,
             chroma_444: false,
@@ -227,6 +236,25 @@ impl Preferences {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parsec_bandwidth_presets_do_not_raise_phaze_stream_limit() -> Result<()> {
+        let mut saved = Preferences::default();
+        for mbps in [100_u32, 150] {
+            let choice = mbps.to_string();
+            let index = PARSEC_BANDWIDTH_CHOICES.iter().position(|v| *v == choice).unwrap();
+            saved.select("bandwidth", index)?;
+            let parsed = Preferences::parse(&serde_json::to_string(&saved)?)?;
+            assert_eq!(parsed.host_request()?.requested_bandwidth(true), Some(mbps));
+            assert_eq!(parsed.phaze_video_config()?.mbps, 50);
+            let view = parsed.view_for(crate::account::Service::Phaze);
+            let bandwidth = view["rows"].as_array().unwrap().iter()
+                .find(|row| row["key"] == "bandwidth").unwrap();
+            assert_eq!(bandwidth["selected"].as_u64(), Some((BANDWIDTH_CHOICES.len() - 1) as u64));
+            assert_eq!(bandwidth["choices"].as_array().unwrap().len(), BANDWIDTH_CHOICES.len());
+        }
+        Ok(())
+    }
 
     #[test]
     fn saved_tv_limits_are_encoded_in_the_phaze_stream_request() -> Result<()> {

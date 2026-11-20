@@ -5,7 +5,8 @@ use super::{
     profile::Video,
     session_model::{
         current_choice, resolution_text, Command, Notification, PanelFields, State, Status, View,
-        BANDWIDTH_CHOICES, FPS_CHOICES, HOST_RESOLUTION, RESOLUTION_CHOICES,
+        BANDWIDTH_CHOICES, FPS_CHOICES, HOST_RESOLUTION, PARSEC_BANDWIDTH_CHOICES,
+        RESOLUTION_CHOICES,
     },
     ui::{draw_button, wide},
 };
@@ -140,7 +141,7 @@ unsafe fn collect(p: &Panel) -> Result<Video> {
         immersive: crate::input_state::immersive_value(select(5) as usize),
         fullscreen: SendMessageW(p.fullscreen, BM_GETCHECK, 0, 0) == BST_CHECKED as isize,
     }
-    .parse()
+    .parse_for_service(!(&*p.window).session.phaze.load(Ordering::Acquire))
     .map(|video| (&*p.window).session.supported_video(video))
 }
 unsafe fn close(hwnd: HWND) {
@@ -893,7 +894,10 @@ pub unsafe fn toggle(
         controls: [null_mut(); 6],
         initial_fields: [
             resolution_text(video.resolution),
-            video.bandwidth_mbps.unwrap().to_string(),
+            video
+                .requested_bandwidth(!window.session.phaze.load(Ordering::Acquire))
+                .unwrap_or(10)
+                .to_string(),
             video.fps.unwrap().to_string(),
         ],
         display_ids: Vec::new(),
@@ -1058,7 +1062,18 @@ pub unsafe fn toggle(
         );
     }
     p.controls[0] = combo(hwnd, p, 20, 250, RESOLUTION_CHOICES, &p.initial_fields[0]);
-    p.controls[1] = combo(hwnd, p, 21, 294, BANDWIDTH_CHOICES, &p.initial_fields[1]);
+    p.controls[1] = combo(
+        hwnd,
+        p,
+        21,
+        294,
+        if window.session.phaze.load(Ordering::Acquire) {
+            BANDWIDTH_CHOICES
+        } else {
+            PARSEC_BANDWIDTH_CHOICES
+        },
+        &p.initial_fields[1],
+    );
     p.controls[2] = combo(hwnd, p, 22, 338, FPS_CHOICES, &p.initial_fields[2]);
     p.controls[3] = combo(
         hwnd,

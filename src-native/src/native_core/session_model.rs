@@ -192,6 +192,7 @@ mod tests {
             rotated: Some(true),
             fps: Some(144),
             bandwidth_mbps: Some(40),
+            parsec_bandwidth_mbps: None,
             immersive: 2,
             fullscreen: true,
         };
