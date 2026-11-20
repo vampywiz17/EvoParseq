@@ -34,8 +34,10 @@ struct View {
     audio: Option<Arc<crate::audio_windows::Playback>>,
     keys: evoparseq_phaze::Keyboard,
     events: VecDeque<Event>,
-    input_logged: [Option<bool>; 4],
+    input_logged: [Option<&'static str>; 4],
     interval_motion: u32,
+    interval_buttons: [u32; 2],
+    interval_keys: [u32; 2],
     interval_pictures: u32,
     route: &'static str,
     carrier: &'static str,
@@ -50,6 +52,10 @@ impl View {
                 "phaze_video_flow",
                 serde_json::json!({
                     "motion_commands":self.interval_motion,
+                    "button_presses_received":self.interval_buttons[0],
+                    "button_presses_queued":self.interval_buttons[1],
+                    "key_presses_received":self.interval_keys[0],
+                    "key_presses_queued":self.interval_keys[1],
                     "received_pictures":self.interval_pictures,
                     "decoded_total":video.frames_decoded,
                     "presented_total":video.frames_presented,
@@ -196,6 +202,8 @@ impl evoparseq_phaze::Sink for View {
         self.sent = sent;
         self.publish("connected");
         self.interval_motion = 0;
+        self.interval_buttons = [0; 2];
+        self.interval_keys = [0; 2];
         self.interval_pictures = 0;
     }
     fn rtt(&mut self, elapsed: Option<Duration>) {
@@ -480,17 +488,35 @@ impl evoparseq_phaze::Sink for View {
                         _ => None,
                     };
                     let viewport = self.window.presented_viewport();
-                    let allowed = output.is_some() && self.window.native_input_allowed();
+                    let blocked_by = if output.is_some() {
+                        self.window.native_input_blocker()
+                    } else {
+                        Some("no_selected_output")
+                    };
+                    let allowed = blocked_by.is_none();
                     let before = commands.len();
                     translate(event, &mut self.keys, viewport, allowed, commands)?;
                     if let Some((index, kind)) = kind {
                         let queued = commands.len() != before;
-                        if index == 0 && queued {
-                            self.interval_motion += 1;
+                        match index {
+                            0 => self.interval_motion += u32::from(queued),
+                            1 => {
+                                self.interval_buttons[0] += 1;
+                                self.interval_buttons[1] += u32::from(queued);
+                            }
+                            3 => {
+                                self.interval_keys[0] += 1;
+                                self.interval_keys[1] += u32::from(queued);
+                            }
+                            _ => {}
                         }
-                        if self.input_logged[index] != Some(allowed) && crate::event_log::enabled()
-                        {
-                            self.input_logged[index] = Some(allowed);
+                        let dispatch = Some(blocked_by.unwrap_or(if queued {
+                            "queued"
+                        } else {
+                            "not_translated"
+                        }));
+                        if self.input_logged[index] != dispatch && crate::event_log::enabled() {
+                            self.input_logged[index] = dispatch;
                             crate::event_log::record(
                                 "INFO",
                                 "phaze_input_dispatch",
@@ -499,6 +525,7 @@ impl evoparseq_phaze::Sink for View {
                                     "queued":queued,
                                     "output_selected":output.is_some(),
                                     "input_allowed":allowed,
+                                    "blocked_by":blocked_by,
                                     "viewport_available":viewport.is_some(),
                                     "input_detached":self.window.input_detached(),
                                 }),
@@ -577,6 +604,8 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         events: VecDeque::new(),
         input_logged: [None; 4],
         interval_motion: 0,
+        interval_buttons: [0; 2],
+        interval_keys: [0; 2],
         interval_pictures: 0,
         route: "Direct",
         carrier: "direct UDP",
@@ -729,6 +758,8 @@ mod tests {
                 events: VecDeque::new(),
                 input_logged: [None; 4],
                 interval_motion: 0,
+                interval_buttons: [0; 2],
+                interval_keys: [0; 2],
                 interval_pictures: 0,
                 route: "Direct",
                 carrier: "direct UDP",

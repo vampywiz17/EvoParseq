@@ -295,18 +295,28 @@ impl Window {
     }
 
     pub fn native_input_allowed(&self) -> bool {
-        self.native_menu_allows_input()
-            && self.has_focus.load(Ordering::Acquire)
-            && self.video_ready.load(Ordering::Acquire)
-            && self.video_visible.load(Ordering::Acquire)
-            && !self.settings_open()
-            && !self.input_suspended.load(Ordering::Acquire)
-            && !self.closing.load(Ordering::Acquire)
-            && !self
-                .input_state
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .detached
+        self.native_input_blocker().is_none()
+    }
+    pub(crate) fn native_input_blocker(&self) -> Option<&'static str> {
+        if !self.native_menu_allows_input() {
+            Some("session_panel_open")
+        } else if !self.has_focus.load(Ordering::Acquire) {
+            Some("stream_lacks_keyboard_focus")
+        } else if !self.video_ready.load(Ordering::Acquire) {
+            Some("video_not_ready")
+        } else if !self.video_visible.load(Ordering::Acquire) {
+            Some("video_not_visible")
+        } else if self.settings_open() {
+            Some("settings_open")
+        } else if self.input_suspended.load(Ordering::Acquire) {
+            Some("input_suspended")
+        } else if self.closing.load(Ordering::Acquire) {
+            Some("window_closing")
+        } else if self.input_detached() {
+            Some("input_detached")
+        } else {
+            None
+        }
     }
     #[cfg(feature = "vendor-video")]
     pub fn direct_presentation_allowed(&self) -> bool {
