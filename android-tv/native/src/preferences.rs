@@ -45,7 +45,10 @@ impl Default for Preferences {
             video: 0,
             resolution: 0,
             fps: FPS_CHOICES.iter().position(|s| *s == "60").unwrap(),
-            bandwidth: LEGACY_BANDWIDTH_CHOICES.iter().position(|s| *s == "20").unwrap(),
+            bandwidth: LEGACY_BANDWIDTH_CHOICES
+                .iter()
+                .position(|s| *s == "20")
+                .unwrap(),
             parsec_bandwidth: None,
         }
     }
@@ -245,12 +248,12 @@ impl Preferences {
             } else {
                 LEGACY_BANDWIDTH_CHOICES
             })
-                .get(if parsec {
-                    self.parsec_bandwidth.unwrap_or(self.bandwidth)
-                } else {
-                    self.bandwidth
-                })
-                .ok_or_else(|| anyhow::anyhow!("Invalid bandwidth."))?,
+            .get(if parsec {
+                self.parsec_bandwidth.unwrap_or(self.bandwidth)
+            } else {
+                self.bandwidth
+            })
+            .ok_or_else(|| anyhow::anyhow!("Invalid bandwidth."))?,
             fps: FPS_CHOICES
                 .get(self.fps)
                 .ok_or_else(|| anyhow::anyhow!("Invalid frame rate."))?,
@@ -281,8 +284,14 @@ mod tests {
     #[test]
     fn parsec_bandwidth_presets_do_not_raise_phaze_stream_limit() -> Result<()> {
         let mut saved = Preferences::default();
-        let selected = PHAZE_BANDWIDTH_CHOICES.iter().position(|v| *v == "50").unwrap();
-        let legacy = LEGACY_BANDWIDTH_CHOICES.iter().position(|v| *v == "50").unwrap();
+        let selected = PHAZE_BANDWIDTH_CHOICES
+            .iter()
+            .position(|v| *v == "50")
+            .unwrap();
+        let legacy = LEGACY_BANDWIDTH_CHOICES
+            .iter()
+            .position(|v| *v == "50")
+            .unwrap();
         saved.select_for_service("bandwidth", selected, false)?;
         for mbps in [100_u32, 150] {
             let choice = mbps.to_string();
@@ -314,7 +323,10 @@ mod tests {
         }
         // A later Phaze selection must not discard the Parsec-specific 150.
         saved.select_for_service("bandwidth", 0, false)?;
-        assert_eq!(LEGACY_BANDWIDTH_CHOICES[saved.bandwidth], PHAZE_BANDWIDTH_CHOICES[0]);
+        assert_eq!(
+            LEGACY_BANDWIDTH_CHOICES[saved.bandwidth],
+            PHAZE_BANDWIDTH_CHOICES[0]
+        );
         assert_eq!(saved.host_request()?.requested_bandwidth(true), Some(150));
         Ok(())
     }
@@ -347,7 +359,10 @@ mod tests {
         prefs.select_for_service("bandwidth", 13, true)?;
         let restored = Preferences::parse(&serde_json::to_string(&prefs)?)?;
         assert_eq!(restored.phaze_video_config()?.mbps, 50);
-        assert_eq!(restored.host_request()?.requested_bandwidth(true), Some(150));
+        assert_eq!(
+            restored.host_request()?.requested_bandwidth(true),
+            Some(150)
+        );
         Ok(())
     }
 
@@ -356,7 +371,10 @@ mod tests {
         let mut saved = Preferences::default();
         saved.select_for_service(
             "bandwidth",
-            PHAZE_BANDWIDTH_CHOICES.iter().position(|v| *v == "50").unwrap(),
+            PHAZE_BANDWIDTH_CHOICES
+                .iter()
+                .position(|v| *v == "50")
+                .unwrap(),
             false,
         )?;
         saved.select("fps", FPS_CHOICES.iter().position(|v| *v == "120").unwrap())?;

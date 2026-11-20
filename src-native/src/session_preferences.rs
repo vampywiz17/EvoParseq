@@ -187,10 +187,13 @@ pub fn bandwidth_choices(parsec: bool) -> &'static [&'static str] {
 pub fn bandwidth_menu(parsec: bool, current: &str) -> (Vec<String>, usize) {
     let presets = bandwidth_choices(parsec);
     let mut choices: Vec<String> = presets.iter().map(|value| (*value).to_owned()).collect();
-    let selected = presets.iter().position(|value| *value == current).unwrap_or_else(|| {
-        choices.push(current_choice(current));
-        choices.len() - 1
-    });
+    let selected = presets
+        .iter()
+        .position(|value| *value == current)
+        .unwrap_or_else(|| {
+            choices.push(current_choice(current));
+            choices.len() - 1
+        });
     (choices, selected)
 }
 pub const FPS_CHOICES: &[&str] = &["30", "60", "100", "120", "144", "240"];
@@ -404,10 +407,7 @@ mod parsec_bandwidth_tests {
         );
         assert_eq!(
             PARSEC_BANDWIDTH_CHOICES,
-            &[
-                "3", "5", "7", "10", "15", "20", "25", "30", "35", "40", "45", "50",
-                "100", "150",
-            ]
+            &["3", "5", "7", "10", "15", "20", "25", "30", "35", "40", "45", "50", "100", "150",]
         );
         assert_eq!(bandwidth_choices(false), PHAZE_BANDWIDTH_CHOICES);
         assert_eq!(bandwidth_choices(true), PARSEC_BANDWIDTH_CHOICES);
