@@ -59,13 +59,14 @@ impl Probe {
             MOUSE_ID
         };
         if let Some(device) = self.devices.iter_mut().find(|dev| dev.id == id) {
-            if self.controls_host && !self.failed {
+            // A selected but unavailable HID device must not swallow the
+            // command: the caller can still send it over ordinary Phaze input.
+            if self.controls_host && !self.failed && device.opened {
                 device.input(input);
+                return true;
             }
-            true
-        } else {
-            false
         }
+        false
     }
 
     pub(crate) fn control(&mut self, granted: bool) {
@@ -466,6 +467,100 @@ mod tests {
         assert_eq!(frames.last().unwrap(), &LINK_DOWN);
         assert!(usb.next_device_frame().is_none());
         Ok(())
+    }
+
+    #[test]
+    fn selected_hid_only_consumes_input_after_host_control_and_device_open() {
+        let mut probe = Probe::new(true, true);
+        let key = Input::Key {
+            usage: 4,
+            scan: 30,
+            modifiers: 0,
+            down: true,
+        };
+        let mouse = Input::Button {
+            button: 1,
+            x: 300,
+            y: 600,
+            down: true,
+        };
+
+        // Without a guest controller or an opened device, normal input wins.
+        for event in [key, mouse] {
+            assert!(!probe.input(event));
+            assert!(!event.encode(7).is_empty());
+        }
+        probe.control(true);
+        assert!(!probe.input(key));
+        assert!(!probe.input(mouse));
+
+        let mouse_id = probe.devices.iter().position(|d| d.id == MOUSE_ID).unwrap();
+        let keyboard_id = probe
+            .devices
+            .iter()
+            .position(|d| d.id == KEYBOARD_ID)
+            .unwrap();
+        probe.devices[mouse_id].open();
+        assert!(probe.input(mouse));
+        assert!(!probe.input(key));
+        probe.devices[keyboard_id].open();
+        assert!(probe.input(key));
+        assert!(probe.input(mouse));
+
+        // Permission revocation closes the link. Nothing is consumed by HID.
+        probe.control(false);
+        assert!(!probe.input(key));
+        assert!(!probe.input(mouse));
+        assert!(probe.devices.iter().all(|device| !device.opened));
+        probe.control(true);
+        assert!(!probe.input(key));
+        assert!(!probe.input(mouse));
+
+        // A host-side close and a malformed USB frame both restore fallback.
+        probe.devices[keyboard_id].open();
+        assert!(probe.input(key));
+        probe.devices[keyboard_id].close();
+        assert!(!probe.input(key));
+        probe.devices[mouse_id].open();
+        assert!(probe.input(mouse));
+        probe.disable();
+        assert!(!probe.input(key));
+        assert!(!probe.input(mouse));
+    }
+
+    #[test]
+    fn focus_release_reaches_standard_input_and_neutralizes_open_hid_devices() {
+        let mut probe = Probe::new(true, true);
+        probe.control(true);
+        for device in &mut probe.devices {
+            device.open();
+        }
+        assert!(probe.input(Input::Key {
+            usage: 4,
+            scan: 30,
+            modifiers: 0,
+            down: true,
+        }));
+        assert!(probe.input(Input::Button {
+            button: 1,
+            x: 0,
+            y: 0,
+            down: true,
+        }));
+        // Release must also pass through the standard session-level path.
+        assert!(!probe.input(Input::Release));
+        assert_eq!(Input::Release.encode(7), vec![13]);
+        for device in &mut probe.devices {
+            assert!(device.enqueue_read([0; HEADER]));
+            let payload = device.complete().unwrap().1;
+            let expected_len = if device.id == MOUSE_ID { 8 } else { 29 };
+            assert_eq!(&payload[..4], &(expected_len as i32).to_le_bytes());
+            if device.id == MOUSE_ID {
+                assert_eq!(&payload[4..], &[3, 0, 0, 0, 0, 0, 0, 0]);
+            } else {
+                assert_eq!(&payload[4..], &[0; 29]);
+            }
+        }
     }
 
     #[test]

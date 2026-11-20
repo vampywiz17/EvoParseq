@@ -1425,10 +1425,14 @@ unsafe fn save(hwnd: HWND, page: &mut Page) {
         {
             s.zero_copy = checked(hwnd, ZERO_COPY);
         }
-        #[cfg(feature = "bud")]
-        {
-            if let Some(mode) = InputMode::ALL.get(selection(hwnd, INPUT_MODE)).copied() {
-                mode.apply_for_service(s, model.phaze);
+        // Phaze USB HID is independent of the optional Parsec BUD backend.
+        if let Some(mode) = InputMode::ALL.get(selection(hwnd, INPUT_MODE)).copied() {
+            if model.phaze {
+                mode.apply_for_service(s, true);
+            }
+            #[cfg(feature = "bud")]
+            if !model.phaze {
+                mode.apply_for_service(s, false);
             }
         }
     }
