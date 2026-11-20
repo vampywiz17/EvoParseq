@@ -9,6 +9,7 @@ mod datagram;
 mod input;
 mod transport;
 pub mod turn;
+mod usb_hid;
 mod usb_probe;
 mod wire;
 use anyhow::{bail, ensure, Context, Result};
@@ -220,6 +221,10 @@ pub trait Sink {
     fn bandwidth_feedback_started(&mut self, _lower_rate: f64, _upper_rate: f64) {}
     fn peer_state(&mut self, _local_id: u32, _state: PeerState) {}
     fn host_flags(&mut self, _flags: u32) {}
+    /// Mouse and keyboard respectively. Ordinary input stays the default.
+    fn usb_hid_devices(&self) -> (bool, bool) {
+        (false, false)
+    }
     fn usb_probe_enabled(&self) -> bool {
         false
     }

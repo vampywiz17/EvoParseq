@@ -132,6 +132,7 @@ pub struct Settings {
     #[cfg_attr(target_os = "linux", serde(rename = "experimentalHidKeyboard"))]
     #[cfg_attr(not(target_os = "linux"), serde(alias = "experimentalHidKeyboard"))]
     pub hid_keyboard: bool,
+    pub phaze_input_mode: InputMode,
     pub prefer_hevc: bool,
     pub presentation_mode: PresentationMode,
     /// Optional RTX Video quality: 0 off, 1..=4 low through ultra.
@@ -204,6 +205,7 @@ impl Default for Settings {
             hid_mouse: false,
             #[cfg(any(feature = "bud", target_os = "linux"))]
             hid_keyboard: false,
+            phaze_input_mode: InputMode::Standard,
             prefer_hevc: false,
             presentation_mode: PresentationMode::Automatic,
             nvidia_vsr: 0,
@@ -1198,8 +1200,10 @@ impl BinaryChoice {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum InputMode {
+    #[default]
     Standard,
     HidMouse,
     HidKeyboard,

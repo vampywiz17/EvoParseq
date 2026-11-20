@@ -111,6 +111,16 @@ impl View {
     }
 }
 impl evoparseq_phaze::Sink for View {
+    fn usb_hid_devices(&self) -> (bool, bool) {
+        use crate::connection_settings::InputMode;
+        match self.manager.view().0.phaze_input_mode {
+            InputMode::Standard => (false, false),
+            InputMode::HidMouse => (true, false),
+            InputMode::HidKeyboard => (false, true),
+            InputMode::HidBoth => (true, true),
+        }
+    }
+
     fn usb_probe_enabled(&self) -> bool {
         std::env::var_os("EVOPARSEQ_PHAZE_USB_PROBE").is_some_and(|value| value == "1")
     }

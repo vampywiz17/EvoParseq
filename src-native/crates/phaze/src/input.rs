@@ -3,6 +3,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Input {
     Key {
+        usage: u16,
         scan: u16,
         modifiers: u16,
         down: bool,
@@ -39,6 +40,7 @@ impl Input {
         let (opcode, values) = match self {
             Self::Release => return vec![13],
             Self::Key {
+                usage: _,
                 scan,
                 modifiers,
                 down,
@@ -93,6 +95,7 @@ impl Keyboard {
             modifiers |= 256;
         }
         Some(Input::Key {
+            usage,
             scan,
             modifiers,
             down,
@@ -192,6 +195,7 @@ mod tests {
         assert_eq!(
             keys.key(228, 0, true),
             Some(Input::Key {
+                usage: 0xe4,
                 scan: 0x11d,
                 modifiers: 8,
                 down: true
@@ -200,6 +204,7 @@ mod tests {
         assert_eq!(
             keys.key(4, 0, true),
             Some(Input::Key {
+                usage: 0x04,
                 scan: 0x1e,
                 modifiers: 8,
                 down: true
@@ -209,6 +214,7 @@ mod tests {
         assert_eq!(
             keys.key(4, 0, false),
             Some(Input::Key {
+                usage: 0x04,
                 scan: 0x1e,
                 modifiers: 0,
                 down: false

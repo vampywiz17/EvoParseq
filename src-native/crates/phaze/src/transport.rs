@@ -359,7 +359,42 @@ async fn release_and_close(
     reliable: &mut wire::Reliable,
     socket: &impl crate::Datagram,
     peer: SocketAddr,
+    usb: Option<&mut crate::usb_probe::Probe>,
 ) {
+    if let Some(usb) = usb {
+        for frame in usb.disconnect() {
+            if let Ok(packets) = reliable.frame(&frame) {
+                for packet in packets {
+                    let _ = send(c, &packet);
+                }
+            }
+        }
+        // Flush the reliable USB release and link-down before the media close.
+        // Allow one bounded ACK window so the close cannot overtake them.
+        let _ = tokio::time::timeout(Duration::from_millis(350), async {
+            if flush(c, socket, peer).await.is_err() {
+                return;
+            }
+            let mut datagram = [0; 4096];
+            while reliable.pending().count() != 0 {
+                let Ok((len, source)) = socket.recv_from(&mut datagram).await else {
+                    break;
+                };
+                if socket.endpoint(source) != Some(peer) || c.feed(&datagram[..len]).is_err() {
+                    continue;
+                }
+                while let Ok(bytes) = c.recv() {
+                    if bytes.is_empty() {
+                        break;
+                    }
+                    if let Some(wire::Envelope::Reliable(payload)) = wire::envelope(&bytes) {
+                        let _ = reliable.receive_at(payload, Instant::now());
+                    }
+                }
+            }
+        })
+        .await;
+    }
     if let Ok(packets) = reliable.frame(&crate::Input::Release.encode(0)) {
         for packet in packets {
             let _ = send(c, &packet);
@@ -517,9 +552,9 @@ pub async fn run(
     let mut reliable = wire::Reliable::default();
     let mut audio = crate::audio::Audio::default();
     let mut cursors = crate::cursor::Cursors::default();
-    let mut usb_probe = sink
-        .usb_probe_enabled()
-        .then(crate::usb_probe::Probe::default);
+    let (hid_mouse, hid_keyboard) = sink.usb_hid_devices();
+    let mut usb_probe = (hid_mouse || hid_keyboard || sink.usb_probe_enabled())
+        .then(|| crate::usb_probe::Probe::new(hid_mouse, hid_keyboard));
     let mut usb_controller = None;
     if usb_probe.is_some() {
         sink.usb_probe_event("started", None, 0);
@@ -549,13 +584,13 @@ pub async fn run(
     let mut bandwidth_reported = false;
     loop {
         if last_heartbeat.elapsed() >= Duration::from_secs(20) {
-            release_and_close(&mut c, &mut reliable, &socket, peer).await;
+            release_and_close(&mut c, &mut reliable, &socket, peer, usb_probe.as_mut()).await;
             bail!("Phaze peer heartbeat timed out");
         }
         if !video_received && app_started.elapsed() >= Duration::from_secs(20) {
             // The host owns session-created displays. Close the authenticated
             // session even if the first display or video was never ready.
-            release_and_close(&mut c, &mut reliable, &socket, peer).await;
+            release_and_close(&mut c, &mut reliable, &socket, peer, usb_probe.as_mut()).await;
             if !requested {
                 bail!("Phaze host did not report an active display");
             }
@@ -574,7 +609,7 @@ pub async fn run(
                 input.clear();
                 let running=sink.poll(selected_output,&mut input,&mut controls);
                 if !matches!(running,Ok(true)) {
-                    release_and_close(&mut c,&mut reliable,&socket,peer).await;
+                    release_and_close(&mut c,&mut reliable,&socket,peer,usb_probe.as_mut()).await;
                     return running.map(|_|());
                 }
                 let recovering = selected_output.is_some()
@@ -609,6 +644,7 @@ pub async fn run(
                     });
                     let mut commands = deferred.into_iter().chain(input.drain(..)).peekable();
                     while let Some(command) = commands.next() {
+                        if usb_probe.as_mut().is_some_and(|usb| usb.input(command)) { continue; }
                         let outstanding = reliable.pending().count();
                         // Preserve room for button and key transitions when the
                         // peer is slow to acknowledge a burst of positions.
@@ -617,7 +653,7 @@ pub async fn run(
                             break;
                         }
                         if outstanding >= 63 {
-                            release_and_close(&mut c,&mut reliable,&socket,peer).await;
+                            release_and_close(&mut c,&mut reliable,&socket,peer,usb_probe.as_mut()).await;
                             bail!("Phaze input acknowledgment window exhausted; reconnect to continue");
                         }
                         for p in reliable.frame(&command.encode(output))? { send(&mut c,&p)?; }
@@ -805,6 +841,14 @@ pub async fn run(
                         send(&mut c, &packet)?;
                     }
                     sink.usb_probe_event("pong_queued", Some(11), 0);
+                }
+            }
+            while reliable.fits(1, 48) {
+                let Some(frame) = probe.next_device_frame() else {
+                    break;
+                };
+                for packet in reliable.frame(&frame)? {
+                    send(&mut c, &packet)?;
                 }
             }
         }

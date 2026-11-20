@@ -1,6 +1,10 @@
-//! Opt-in observation of the authenticated Phaze USB channel.
-//! No devices are announced and no input reports are sent.
+//! USB channel framing and virtual HID devices for authenticated Phaze sessions.
+use crate::{
+    usb_hid::{Device, KEYBOARD_ID, MOUSE_ID, VID},
+    Input,
+};
 use anyhow::{ensure, Result};
+use std::collections::VecDeque;
 
 const PREFIX: usize = 8;
 const HEADER: usize = 33;
@@ -9,7 +13,12 @@ pub(crate) const LINK_REPLY: &[u8] = &[16, 1];
 const REPLY_HEADER: usize = 1 + PREFIX + HEADER;
 const HELLO_BYTES: usize = REPLY_HEADER + 130;
 const USB_VERSION: [u8; 2] = 9u16.to_le_bytes();
-const PROBE_NAME: &[u8] = b"EvoParseq HID probe";
+const PROBE_NAME: &[u8] = b"EvoParseq";
+const MAX_OUTGOING: usize = 192;
+const CHUNK: usize = 1100;
+const LINK_DOWN: [u8; 2] = [16, 0];
+const OPEN_PAYLOAD: usize = 0x10090;
+const STALL: [u8; 4] = (-32i32).to_le_bytes();
 
 #[derive(Default)]
 pub(crate) struct Probe {
@@ -20,9 +29,45 @@ pub(crate) struct Probe {
     pending: Vec<u8>,
     hello: Option<[u8; HELLO_BYTES]>,
     pong: Option<[u8; REPLY_HEADER]>,
+    devices: Vec<Device>,
+    outgoing: VecDeque<Vec<u8>>,
 }
 
 impl Probe {
+    pub(crate) fn new(mouse: bool, keyboard: bool) -> Self {
+        let devices = [(mouse, MOUSE_ID), (keyboard, KEYBOARD_ID)]
+            .into_iter()
+            .filter_map(|(on, id)| on.then_some(id))
+            .map(Device::new)
+            .collect();
+        Self {
+            devices,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn input(&mut self, input: Input) -> bool {
+        if input == Input::Release {
+            for device in &mut self.devices {
+                device.release();
+            }
+            return false;
+        }
+        let id = if matches!(input, Input::Key { .. }) {
+            KEYBOARD_ID
+        } else {
+            MOUSE_ID
+        };
+        if let Some(device) = self.devices.iter_mut().find(|dev| dev.id == id) {
+            if self.controls_host && !self.failed {
+                device.input(input);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
     pub(crate) fn control(&mut self, granted: bool) {
         if self.controls_host && !granted {
             self.link_seen = false;
@@ -30,6 +75,7 @@ impl Probe {
             self.pending.clear();
             self.hello = None;
             self.pong = None;
+            self.clear_devices();
         }
         self.controls_host = granted;
     }
@@ -53,14 +99,58 @@ impl Probe {
         self.pending.clear();
         self.hello = None;
         self.pong = None;
+        self.clear_devices();
+    }
+
+    fn clear_devices(&mut self) {
+        self.outgoing.clear();
+        for device in &mut self.devices {
+            device.close();
+        }
+    }
+
+    pub(crate) fn disconnect(&mut self) -> Vec<Vec<u8>> {
+        if !self.acknowledged {
+            return Vec::new();
+        }
+        let mut frames = Vec::new();
+        // Complete pending interrupt reads with all buttons/keys released. A
+        // partially queued USB record is instead cancelled by link teardown.
+        if self.outgoing.is_empty() {
+            for device in &mut self.devices {
+                device.release();
+                if let Some((request, payload)) = device.complete() {
+                    frames.push(record(19, &request, &payload));
+                }
+            }
+        }
+        self.disable();
+        frames.push(LINK_DOWN.to_vec());
+        frames
+    }
+
+    pub(crate) fn next_device_frame(&mut self) -> Option<Vec<u8>> {
+        if let Some(frame) = self.outgoing.pop_front() {
+            return Some(frame);
+        }
+        let (request, payload) = self.devices.iter_mut().find_map(Device::complete)?;
+        Some(record(19, &request, &payload))
     }
 
     pub(crate) fn take_hello(&mut self) -> Option<[u8; HELLO_BYTES]> {
-        self.hello.take()
+        if self.outgoing.is_empty() {
+            self.hello.take()
+        } else {
+            None
+        }
     }
 
     pub(crate) fn take_pong(&mut self) -> Option<[u8; REPLY_HEADER]> {
-        self.pong.take()
+        if self.outgoing.is_empty() {
+            self.pong.take()
+        } else {
+            None
+        }
     }
 
     pub(crate) fn receive(
@@ -105,6 +195,15 @@ impl Probe {
                         self.hello = Some(reply);
                     }
                     (10, []) => self.pong = Some(response(11, body)),
+                    _ if !self.devices.is_empty() => {
+                        let request: [u8; HEADER] = body[..HEADER].try_into()?;
+                        device_request(
+                            &mut self.devices,
+                            &mut self.outgoing,
+                            &request,
+                            &body[HEADER..],
+                        )?;
+                    }
                     _ => {}
                 }
             }
@@ -113,6 +212,101 @@ impl Probe {
         self.pending.drain(..consumed);
         Ok(())
     }
+}
+
+fn device_request(
+    devices: &mut [Device],
+    queue: &mut VecDeque<Vec<u8>>,
+    req: &[u8; HEADER],
+    payload: &[u8],
+) -> Result<()> {
+    if req[0] == 9 && payload.is_empty() {
+        for device in devices {
+            enqueue(queue, announcement(req, device))?;
+        }
+        return Ok(());
+    }
+    let id = le(&req[25..29]);
+    let Some(device) = devices.iter_mut().find(|device| device.id == id) else {
+        return Ok(());
+    };
+    match req[0] {
+        25 => {
+            device.open();
+            let mut details = vec![0; OPEN_PAYLOAD];
+            details[..5].copy_from_slice(&[1, 0, 0, 0, 1]);
+            let descriptor = device.device_descriptor();
+            let config = device.configuration();
+            details[5..5 + descriptor.len()].copy_from_slice(&descriptor);
+            let offset = 5 + descriptor.len();
+            details[offset..offset + config.len()].copy_from_slice(&config);
+            // Version 9's fixed descriptor block is followed by the device name.
+            let name_offset = 0x10037 - HEADER;
+            let name = device.name().as_bytes();
+            details[name_offset..name_offset + name.len()].copy_from_slice(name);
+            enqueue(queue, record(39, req, &details))?;
+            enqueue(queue, announcement(req, device))?;
+        }
+        13 if payload.len() >= 16 => {
+            let setup = payload[8..16].try_into()?;
+            let data = if device.opened {
+                device.control(setup, &payload[16..])
+            } else {
+                let mut data = payload[8..16].to_vec();
+                data.extend(STALL);
+                data.extend([0; 4]);
+                data
+            };
+            enqueue(queue, record(14, req, &data))?;
+        }
+        18 => {
+            // The little-endian endpoint address is the first word.
+            let endpoint = payload.get(..4).map(le);
+            if endpoint != Some(0x81) || !device.enqueue_read(*req) {
+                enqueue(queue, record(19, req, &STALL))?;
+            }
+        }
+        35 => {
+            device.close();
+            enqueue(queue, record(7, req, &[0; 4]))?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn announcement(req: &[u8; HEADER], device: &Device) -> Vec<u8> {
+    let mut payload = [0; 75];
+    payload[..4].copy_from_slice(&device.id.to_le_bytes());
+    payload[4] = if device.opened { 3 } else { 1 };
+    payload[5..7].copy_from_slice(&VID.to_le_bytes());
+    payload[7..9].copy_from_slice(&device.product().to_le_bytes());
+    payload[9] = 1;
+    let name = device.name().as_bytes();
+    payload[11..11 + name.len()].copy_from_slice(name);
+    record(16, req, &payload)
+}
+
+fn record(kind: u8, request: &[u8; HEADER], data: &[u8]) -> Vec<u8> {
+    let mut frame = response::<REPLY_HEADER>(kind, request).to_vec();
+    frame[5..9].copy_from_slice(&((HEADER + data.len()) as u32).to_le_bytes());
+    frame[38..42].copy_from_slice(&(data.len() as u32).to_le_bytes());
+    frame.extend_from_slice(data);
+    frame
+}
+
+fn enqueue(queue: &mut VecDeque<Vec<u8>>, frame: Vec<u8>) -> Result<()> {
+    ensure!(
+        queue.len() + (frame.len() - 1).div_ceil(CHUNK) <= MAX_OUTGOING,
+        "Phaze USB response queue full"
+    );
+    for chunk in frame[1..].chunks(CHUNK) {
+        let mut out = Vec::with_capacity(1 + chunk.len());
+        out.push(15);
+        out.extend_from_slice(chunk);
+        queue.push_back(out);
+    }
+    Ok(())
 }
 
 fn response<const N: usize>(kind: u8, request: &[u8]) -> [u8; N] {

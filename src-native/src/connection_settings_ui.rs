@@ -833,13 +833,21 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
         INPUT_MODE,
         242,
         &InputMode::LABELS,
-        InputMode::current(&s) as usize,
+        if page.model.phaze {
+            s.phaze_input_mode
+        } else {
+            InputMode::current(&s)
+        } as usize,
     );
     row_label(
         hwnd,
         page,
         crate::app_style::forms::HID_REQUIREMENTS.label,
-        crate::app_style::forms::HID_REQUIREMENTS.help,
+        if page.model.phaze {
+            "Allow USB devices from clients on the Phaze host. The first HID report releases all keys and buttons."
+        } else {
+            crate::app_style::forms::HID_REQUIREMENTS.help
+        },
         354,
         0,
         64,
@@ -1358,7 +1366,7 @@ unsafe fn update_enabled(hwnd: HWND) {
     }
     check(hwnd, CHROMA_444, page.model.values.experimental_chroma_444);
     for (id, on) in [
-        (INPUT_MODE, enabled.bud),
+        (INPUT_MODE, enabled.bud || page.model.phaze),
         (AUDIO_MIN, enabled.audio_limits),
         (AUDIO_MAX, enabled.audio_limits),
         (AUDIO_RAW, enabled.bud || page.model.phaze),
@@ -1422,11 +1430,12 @@ unsafe fn save(hwnd: HWND, page: &mut Page) {
         }
         #[cfg(feature = "bud")]
         {
-            if let Some(mode) = InputMode::ALL
-                .get(selection(hwnd, INPUT_MODE))
-                .filter(|_| !model.phaze)
-            {
-                mode.apply(s);
+            if let Some(mode) = InputMode::ALL.get(selection(hwnd, INPUT_MODE)).copied() {
+                if model.phaze {
+                    s.phaze_input_mode = mode;
+                } else {
+                    mode.apply(s);
+                }
             }
         }
     }
@@ -2343,10 +2352,11 @@ mod tests {
             assert_no_overlaps(page);
             capture(page, "phaze-audio");
             SendMessageW(page, WM_COMMAND, INPUT_TAB, 0);
-            assert_eq!(
+            assert_ne!(
                 GetWindowLongW(GetDlgItem(page, INPUT_MODE as i32), GWL_STYLE) as u32 & WS_VISIBLE,
                 0
             );
+            assert_ne!(IsWindowEnabled(GetDlgItem(page, INPUT_MODE as i32)), 0);
             assert_ne!(
                 GetWindowLongW(GetDlgItem(page, IMMERSIVE as i32), GWL_STYLE) as u32 & WS_VISIBLE,
                 0
