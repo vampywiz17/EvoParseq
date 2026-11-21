@@ -1662,7 +1662,8 @@ mod tests {
             // Parsec owns two additional bitrate presets; the Phaze list is
             // intentionally unchanged and is tested in its own panel.
             assert_eq!(
-                &PARSEC_BANDWIDTH_CHOICES[crate::session_preferences::LEGACY_BANDWIDTH_CHOICES.len()..],
+                &PARSEC_BANDWIDTH_CHOICES
+                    [crate::session_preferences::LEGACY_BANDWIDTH_CHOICES.len()..],
                 &["100", "150"]
             );
             for (id, choices) in [
