@@ -111,6 +111,11 @@ class VirusTotal:
         url = VT_API + "files"
         if path.stat().st_size > 32 * 1024 * 1024:
             url = self.request(VT_API + "files/upload_url")["data"]
+            # The documented one-time upload URL can use a legacy HTTP scheme.
+            # Upgrade only that endpoint before sending the file or API key.
+            if isinstance(url, str) and re.fullmatch(
+                    r"http://www\.virustotal\.com/_ah/upload/[A-Za-z0-9_/%=-]+(?:\?[A-Za-z0-9_/%=&.-]+)?", url):
+                url = "https" + url[4:]
         analysis_id = self.request(url, file=path)["data"]["id"]
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
@@ -279,6 +284,8 @@ def scan_release(repo, release_id, scanner, directory, publish=False):
         raise ScanError("Release assets changed during analysis; results were not published")
     if latest["draft"] != release["draft"]:
         raise ScanError("Release publication state changed during analysis")
+    if latest["tag_name"] != tag:
+        raise ScanError("Release tag changed during analysis")
     for row in report["files"]:
         if accepted_trapmine_finding(row):
             row["accepted_exception"] = {"engine": "Trapmine", "result": "suspicious.low.ml.score",
@@ -291,7 +298,7 @@ def scan_release(repo, release_id, scanner, directory, publish=False):
     (output / REPORTS[1]).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     command(["gh", "release", "upload", tag, "--repo", repo, "--clobber",
              *(str(output / name) for name in REPORTS)])
-    update = {"body": notes}
+    update = {"body": notes, "tag_name": tag}
     if publish and not blocked:
         update.update(draft=False, make_latest="false" if latest.get("prerelease") else "true")
     github(endpoint, "PATCH", update)
