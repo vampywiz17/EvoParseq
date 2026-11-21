@@ -180,28 +180,33 @@ def safe_error(error):
 
 
 def accepted_trapmine_finding(row):
-    """Explicit owner policy, not a vendor-confirmed false positive."""
+    """Return the only finding when release policy excludes it from the gate."""
     stats = row.get("stats", {})
     findings = [(engine, result) for engine, result in row.get("results", {}).items()
                 if result.get("category") in ("malicious", "suspicious")]
-    if (row.get("status") != "completed" or not row.get("name", "").lower().endswith(".exe")
+    if (row.get("status") != "completed"
             or len(findings) != 1
             or stats.get("malicious", 0) + stats.get("suspicious", 0) != 1
             or stats.get("undetected", 0) + stats.get("harmless", 0) == 0):
-        return False
+        return None
     engine, result = findings[0]
-    category = result["category"]
-    return (engine.casefold() == "trapmine"
+    if (engine.casefold() == "trapmine"
             and result.get("engine_name", "").casefold() == "trapmine"
-            and result.get("result", "").casefold() == "suspicious.low.ml.score"
-            and stats.get(category, 0) == 1)
+            and result.get("result")
+            and stats.get(result["category"], 0) == 1):
+        return result
+    return None
 
 
 def needs_attention(row):
     stats = row.get("stats", {})
     flagged = stats.get("malicious", 0) > 0 or stats.get("suspicious", 0) > 0
+    trapmine_supported = sum(
+        engine.casefold() == "trapmine" and result.get("category") in ("undetected", "harmless")
+        for engine, result in row.get("results", {}).items())
+    other_supported = stats.get("undetected", 0) + stats.get("harmless", 0) - trapmine_supported
     return (row["status"] != "completed" or (flagged and not accepted_trapmine_finding(row))
-            or stats.get("undetected", 0) + stats.get("harmless", 0) == 0)
+            or other_supported <= 0)
 
 
 def markdown(report):
@@ -218,7 +223,7 @@ def markdown(report):
         if status == "completed":
             status = "ATTENTION" if needs_attention(row) else "Completed"
             if accepted_trapmine_finding(row):
-                status = "Accepted exception (Trapmine)"
+                status = "Trapmine finding excluded from gate"
         link = f"[{row['sha256']}]({row['report_url']})" if row.get("sha256") else "Not submitted"
         lines.append(f"| {row['name']} | {link} | {status} | {stats.get('malicious', '-')} | "
                      f"{stats.get('suspicious', '-')} | {stats.get('undetected', '-')} / {stats.get('harmless', '-')} | "
@@ -227,9 +232,9 @@ def markdown(report):
         if row.get("error"):
             lines += ["", f"{row['name']}: {row['error']}", ""]
     if any(accepted_trapmine_finding(row) for row in report["files"]):
-        lines += ["", "Owner-approved exception: only Trapmine's suspicious.low.ml.score on a Windows EXE,",
-                  "with no other malicious/suspicious findings. The detection counts are unchanged.",
-                  "This is an accepted release-policy exception, not a confirmed false positive or a clean scan."]
+        lines += ["", "Release policy excludes Trapmine from the publication decision.",
+                  "Original detection counts and engine verdicts remain in the reports.",
+                  "An excluded finding has no vendor-confirmed false-positive determination."]
     return "\n".join(lines) + "\n"
 
 
@@ -295,9 +300,10 @@ def scan_release(repo, release_id, scanner, directory, publish=False):
     if latest["tag_name"] != tag:
         raise ScanError("Release tag changed during analysis")
     for row in report["files"]:
-        if accepted_trapmine_finding(row):
-            row["accepted_exception"] = {"engine": "Trapmine", "result": "suspicious.low.ml.score",
-                                         "reason": "Owner-approved sole-finding Windows EXE exception; not confirmed false positive"}
+        finding = accepted_trapmine_finding(row)
+        if finding:
+            row["accepted_exception"] = {"engine": "Trapmine", "result": finding["result"],
+                                         "reason": "Trapmine excluded from release policy by repository owner"}
     text = markdown(report)
     notes = replace_section(latest.get("body") or "", text)
     output = Path("security-scan-results")

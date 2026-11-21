@@ -9,7 +9,7 @@ in source, logs, reports or command arguments. Only the scanner step receives it
 Prepare releases as drafts, upload **all final assets** (including the signed APK),
 then start this workflow on main with the draft's numeric `release_id` input.
 It scans and attaches evidence while the release remains a draft. Any malicious
-or suspicious verdict, except the narrow owner-approved exception below,
+or suspicious verdict from an engine in the release gate
 immediately stops further submissions, fails the job and
 leaves the release unpublished. Incomplete/error/no-supported-verdict results
 also block publication. Only successful complete scans allow the workflow to
@@ -26,21 +26,20 @@ The scanner runs trusted code from the default branch. Keep the workflow, script
 tests and measurement wiring in main and dev when preparing releases. It scans
 the already-published assets; it never rebuilds or modifies the executables.
 
-## Sole Trapmine finding exception
+## Trapmine and the release gate
 
-The owner explicitly permits publication of a Windows `.exe` whose only finding
-is Trapmine's exact `suspicious.low.ml.score` label (case-insensitive). Both the
-engine key and engine name must identify Trapmine. Aggregate malicious/suspicious
-counts and the per-engine findings must agree on exactly one finding, the analysis
-must be completed, and at least one supported engine must report undetected or
-harmless. A different Trapmine label, any second finding, missing finding detail,
-APK/Flatpak files or an incomplete analysis still blocks publication.
+The repository owner excludes Trapmine from the publication decision for release
+assets. To allow a flagged scan through the gate, the engine key and engine name
+must both identify Trapmine, the only malicious or suspicious verdict must match
+the aggregate counts. The gate always requires at least one engine other than
+Trapmine to report undetected or harmless. Missing finding details,
+inconsistent finding counts, incomplete analyses and any other engine's
+malicious or suspicious finding block release.
 
-The original counts and engine result remain in both reports. Markdown shows
-**Accepted exception (Trapmine)** and JSON includes `accepted_exception` with the
-reason. This is the owner's release-policy decision, not a vendor-confirmed false
-positive or a claim that the scan found nothing. No application code or binary is
-modified to avoid detection.
+VirusTotal continues to run Trapmine. Original verdicts and counts stay in the
+reports. Markdown identifies an excluded finding, and JSON records the actual
+label under "accepted_exception". The exclusion is a release-policy decision.
+Only the vendor can confirm a false positive.
 
 ## Scope and published evidence
 

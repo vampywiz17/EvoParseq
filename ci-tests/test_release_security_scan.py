@@ -274,7 +274,7 @@ class Fixtures(unittest.TestCase):
         report = json.loads((self.root / "security-scan-results/SECURITY-SCAN.json").read_text())
         self.assertEqual(report["files"][1]["status"], "not_scanned")
 
-    def test_only_exact_sole_trapmine_label_is_accepted_for_windows_exe(self):
+    def test_only_trapmine_findings_are_excluded_from_the_gate(self):
         finding = {"engine_name": "Trapmine", "category": "malicious",
                    "result": "Suspicious.Low.ML.Score"}
         row = DONE | {"name": "EvoParseq.exe", "stats": STATS | {"malicious": 1},
@@ -283,7 +283,9 @@ class Fixtures(unittest.TestCase):
         suspicious = row | {"stats": STATS | {"suspicious": 1},
                             "results": {"Trapmine": finding | {"category": "suspicious"}}}
         self.assertFalse(scan.needs_attention(suspicious))
-        invalid = [row | {"name": "app.apk"}, row | {"name": "app.flatpak"},
+        for name in ("app.apk", "app.flatpak"):
+            self.assertFalse(scan.needs_attention(row | {"name": name}))
+        invalid = [
                    row | {"status": "error"}, row | {"results": {}},
                    row | {"stats": STATS | {"malicious": 2}},
                    row | {"stats": STATS | {"malicious": 1, "suspicious": 1}},
@@ -291,17 +293,25 @@ class Fixtures(unittest.TestCase):
                    row | {"stats": STATS | {"suspicious": 1}},
                    row | {"results": {"Other": finding}},
                    row | {"results": {"Trapmine": finding | {"engine_name": "Other"}}},
-                   row | {"results": {"Trapmine": finding | {"result": "Malicious.High.ML.Score"}}},
+                   row | {"results": {"Trapmine": finding | {"result": ""}}},
                    row | {"results": {"Trapmine": finding, "Other": finding}},
+                   row | {"stats": STATS | {"malicious": 2},
+                          "results": {"Trapmine": finding, "Other": finding | {"engine_name": "Other"}}},
                    row | {"results": {"Trapmine": finding | {"category": "undetected"}}}]
         for candidate in invalid:
             with self.subTest(candidate=candidate):
                 self.assertTrue(scan.needs_attention(candidate))
 
+    def test_trapmine_cannot_supply_the_only_supported_verdict(self):
+        results = {"Trapmine": {"engine_name": "Trapmine", "category": "undetected"}}
+        row = DONE | {"stats": STATS | {"undetected": 1}, "results": results}
+        self.assertTrue(scan.needs_attention(row))
+        self.assertFalse(scan.needs_attention(row | {"stats": STATS | {"undetected": 2}}))
+
     def test_accepted_exception_is_disclosed_before_publication(self):
         draft = release() | {"draft": True, "published_at": None}
         finding = {"engine_name": "Trapmine", "category": "malicious",
-                   "result": "suspicious.low.ml.score"}
+                   "result": "malicious.moderate.ml.score"}
         client = Mock(scan=Mock(side_effect=[DONE | {"stats": STATS | {"malicious": 1},
                                                     "results": {"Trapmine": finding}}, DONE]))
         result, _ = self.run_release(draft, client=client, publish=True)
@@ -309,21 +319,27 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(client.scan.call_count, 1)
         self.assertFalse(self.updates[-1]["draft"])
         self.assertEqual(self.updates[-1]["tag_name"], draft["tag_name"])
-        self.assertIn("Accepted exception (Trapmine)", self.updates[-1]["body"])
-        self.assertIn("not a confirmed false positive", self.updates[-1]["body"])
+        self.assertIn("Trapmine finding excluded from gate", self.updates[-1]["body"])
+        self.assertIn("no vendor-confirmed false-positive determination", self.updates[-1]["body"])
         report = json.loads((self.root / "security-scan-results/SECURITY-SCAN.json").read_text())
         self.assertEqual(report["files"][0]["stats"]["malicious"], 1)
         self.assertEqual(report["files"][0]["accepted_exception"]["engine"], "Trapmine")
+        self.assertEqual(report["files"][0]["accepted_exception"]["result"], finding["result"])
+        self.assertEqual(report["files"][0]["results"]["Trapmine"], finding)
 
-    def test_cached_exe_exception_does_not_exempt_an_apk(self):
+    def test_exclusion_is_reported_for_every_file_with_a_cached_analysis(self):
         draft = release([asset(), asset("a.apk")]) | {"draft": True, "published_at": None}
         finding = {"engine_name": "Trapmine", "category": "malicious",
-                   "result": "suspicious.low.ml.score"}
+                   "result": "malicious.moderate.ml.score"}
         client = Mock(scan=Mock(return_value=DONE | {"stats": STATS | {"malicious": 1},
                                                    "results": {"Trapmine": finding}}))
         result, _ = self.run_release(draft, client=client, publish=True)
-        self.assertEqual(result, 1)
-        self.assertNotIn("draft", self.updates[-1])
+        self.assertEqual(result, 0)
+        self.assertEqual(client.scan.call_count, 1)
+        self.assertFalse(self.updates[-1]["draft"])
+        report = json.loads((self.root / "security-scan-results/SECURITY-SCAN.json").read_text())
+        self.assertEqual([row["accepted_exception"]["result"] for row in report["files"]],
+                         [finding["result"], finding["result"]])
 
     def test_publication_gate_rejects_already_public_releases(self):
         with patch.object(scan, "github", side_effect=[release(), {"private": False}]):
