@@ -1016,7 +1016,12 @@ mod tests {
             Some(43)
         );
         assert_eq!(
-            retry_startup_output(&[output(41, true, true)], &[41], 41, Duration::from_secs(20)),
+            retry_startup_output(
+                &[output(41, true, true)],
+                &[41],
+                41,
+                Duration::from_secs(20)
+            ),
             None
         );
         assert_eq!(next_startup_output(&[output(44, false, true)], &[]), None);
