@@ -113,9 +113,12 @@ class VirusTotal:
             url = self.request(VT_API + "files/upload_url")["data"]
             # The documented one-time upload URL can use a legacy HTTP scheme.
             # Upgrade only that endpoint before sending the file or API key.
-            if isinstance(url, str) and re.fullmatch(
-                    r"http://www\.virustotal\.com/_ah/upload/[A-Za-z0-9_/%=-]+(?:\?[A-Za-z0-9_/%=&.-]+)?", url):
-                url = "https" + url[4:]
+            parsed = urlsplit(url)
+            if (parsed.scheme == "http" and parsed.netloc == "www.virustotal.com"
+                    and re.fullmatch(r"/_ah/upload/[A-Za-z0-9_/%=-]+", parsed.path)
+                    and re.fullmatch(r"[A-Za-z0-9_/%=&.-]*", parsed.query)
+                    and "#" not in url):
+                url = parsed._replace(scheme="https").geturl()
         analysis_id = self.request(url, file=path)["data"]["id"]
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
