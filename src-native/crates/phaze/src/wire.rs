@@ -570,22 +570,22 @@ impl Reliable {
 #[test]
 fn vendor_client_display_handshake_matches_reconstructed_wire_layout() -> Result<()> {
     let display = parse_virtual_client_display("1920x1080")?;
-    let hello = hello_with_virtual_display(false, Some(display))?;
-    assert_eq!(&hello[0..1], &[18]);
-    assert_eq!(be(&hello, 1), 0x1c0);
-    assert_eq!(be(&hello, 5), 1);
-    assert_eq!(be(&hello, 9), 0x4556_5031);
-    let name_len = be(&hello, 13) as usize;
-    assert_eq!(&hello[17..17 + name_len], b"EvoParseq Virtual");
+    let virtual_hello = hello_with_virtual_display(false, Some(display))?;
+    assert_eq!(&virtual_hello[0..1], &[18]);
+    assert_eq!(be(&virtual_hello, 1), 0x1c0);
+    assert_eq!(be(&virtual_hello, 5), 1);
+    assert_eq!(be(&virtual_hello, 9), 0x4556_5031);
+    let name_len = be(&virtual_hello, 13) as usize;
+    assert_eq!(&virtual_hello[17..17 + name_len], b"EvoParseq Virtual");
     let tail = 17 + name_len;
-    assert_eq!(hello.len(), tail + 54);
-    assert_eq!(be(&hello, tail), 0); // x
-    assert_eq!(be(&hello, tail + 4), 0); // y
-    assert_eq!(be(&hello, tail + 8), 1920);
-    assert_eq!(be(&hello, tail + 12), 1080);
-    assert_eq!(be(&hello, tail + 44), 10_000);
-    assert_eq!(be(&hello, tail + 48), 10_000);
-    assert_eq!(&hello[tail + 52..], &[1, 1]);
+    assert_eq!(virtual_hello.len(), tail + 54);
+    assert_eq!(be(&virtual_hello, tail), 0); // x
+    assert_eq!(be(&virtual_hello, tail + 4), 0); // y
+    assert_eq!(be(&virtual_hello, tail + 8), 1920);
+    assert_eq!(be(&virtual_hello, tail + 12), 1080);
+    assert_eq!(be(&virtual_hello, tail + 44), 10_000);
+    assert_eq!(be(&virtual_hello, tail + 48), 10_000);
+    assert_eq!(&virtual_hello[tail + 52..], &[1, 1]);
     assert_eq!(
         hello_with_virtual_display(true, None)?,
         hello(true),
