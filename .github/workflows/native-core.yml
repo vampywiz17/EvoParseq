@@ -3,7 +3,7 @@ name: EvoParseq native client
 on:
   workflow_dispatch:
   push:
-    branches: [main, dev]
+    branches: [main, dev, codex/phaze-protocol]
 
 permissions:
   contents: read
@@ -43,6 +43,7 @@ jobs:
           cargo clean --manifest-path src-native/Cargo.toml --release -p libopus_sys
           if ($LASTEXITCODE -ne 0) { throw 'Release Opus cache reset failed' }
           $env:EVOPARSEQ_UI_CAPTURE = Join-Path (Get-Location) "dist/native-core/session-panel.png"
+          $env:PARSEC_SETTINGS_SCREENSHOTS = Join-Path (Get-Location) "dist/native-core/settings"
           $env:EVOPARSEQ_STATS_CAPTURE = Join-Path (Get-Location) "dist/native-core/stats"
           cargo test --locked --manifest-path src-native/Cargo.toml -p dtls --lib -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'DTLS crypto and protocol regression tests failed' }

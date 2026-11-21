@@ -2,7 +2,13 @@
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 
+/// Historical persisted rates and host reports can exceed the new Phaze
+/// preset limit; accepting them prevents silent changes to old profiles.
 pub const MAX_BANDWIDTH_MBPS: u32 = 100;
+/// Maximum for new Phaze selections.
+pub const MAX_PHAZE_BANDWIDTH_MBPS: u32 = 50;
+/// Maximum for Parsec host video requests.
+pub const MAX_PARSEC_BANDWIDTH_MBPS: u32 = 150;
 pub const MAX_FPS: u32 = 240;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,6 +25,9 @@ pub struct Video {
     pub resolution: Resolution,
     /// None preserves the current host setting; Some is a request, not telemetry.
     pub bandwidth_mbps: Option<u32>,
+    /// Parsec-only high bitrate request; never forwarded to Phaze.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parsec_bandwidth_mbps: Option<u32>,
     pub fps: Option<u32>,
     pub constant_fps: Option<bool>,
     pub rotated: Option<bool>,
@@ -30,6 +39,7 @@ impl Default for Video {
         Self {
             resolution: Resolution::Host,
             bandwidth_mbps: None,
+            parsec_bandwidth_mbps: None,
             fps: None,
             constant_fps: None,
             rotated: None,
@@ -39,9 +49,36 @@ impl Default for Video {
     }
 }
 impl Video {
+    /// Parsec requests may use a higher limit without changing Phaze behavior.
+    pub fn requested_bandwidth(&self, parsec: bool) -> Option<u32> {
+        if parsec {
+            self.parsec_bandwidth_mbps.or(self.bandwidth_mbps)
+        } else {
+            self.bandwidth_mbps
+        }
+    }
+
+    pub fn set_bandwidth(&mut self, parsec: bool, value: u32) -> Result<()> {
+        let max = if parsec {
+            MAX_PARSEC_BANDWIDTH_MBPS
+        } else {
+            MAX_PHAZE_BANDWIDTH_MBPS
+        };
+        ensure!((1..=max).contains(&value), "Value must be 1–{max}.");
+        if parsec {
+            // Do not overwrite a previously saved Phaze/legacy bandwidth.
+            self.parsec_bandwidth_mbps = Some(value);
+        } else {
+            // Likewise, adjusting Phaze does not erase a Parsec preference.
+            self.bandwidth_mbps = Some(value);
+        }
+        Ok(())
+    }
+
     pub fn has_host_settings(&self) -> bool {
         self.resolution != Resolution::Host
             || self.bandwidth_mbps.is_some()
+            || self.parsec_bandwidth_mbps.is_some()
             || self.fps.is_some()
             || self.constant_fps.is_some()
             || self.rotated.is_some()
@@ -58,6 +95,11 @@ impl Video {
             self.bandwidth_mbps
                 .is_none_or(|n| (1..=MAX_BANDWIDTH_MBPS).contains(&n)),
             "Bandwidth must be 1–{MAX_BANDWIDTH_MBPS} Mbps"
+        );
+        ensure!(
+            self.parsec_bandwidth_mbps
+                .is_none_or(|n| (1..=MAX_PARSEC_BANDWIDTH_MBPS).contains(&n)),
+            "Parsec bandwidth must be 1–{MAX_PARSEC_BANDWIDTH_MBPS} Mbps"
         );
         ensure!(
             self.fps.is_none_or(|n| (1..=MAX_FPS).contains(&n)),
@@ -83,7 +125,7 @@ impl Video {
         );
         values.insert("resolutionX".into(), w.into());
         values.insert("resolutionY".into(), h.into());
-        if let Some(n) = self.bandwidth_mbps {
+        if let Some(n) = self.requested_bandwidth(true) {
             values.insert("encoderMaxBitrate".into(), n.into());
         }
         if let Some(n) = self.fps {
@@ -124,9 +166,38 @@ pub const RESOLUTION_CHOICES: &[&str] = &[
     "1280 x 720",
     "1024 x 768",
 ];
-pub const BANDWIDTH_CHOICES: &[&str] = &[
+/// Historic Android TV indices refer to this original twelve-value list.
+/// The Windows crate includes this shared model but does not decode TV profiles.
+#[allow(dead_code)]
+pub const LEGACY_BANDWIDTH_CHOICES: &[&str] = &[
     "3", "5", "7", "10", "15", "20", "25", "30", "35", "40", "45", "50",
 ];
+pub const PHAZE_BANDWIDTH_CHOICES: &[&str] = &["5", "10", "20", "30", "40", "50"];
+pub const PARSEC_BANDWIDTH_CHOICES: &[&str] = &[
+    "3", "5", "7", "10", "15", "20", "25", "30", "35", "40", "45", "50", "100", "150",
+];
+#[cfg(any(target_os = "linux", target_os = "android", test))]
+pub fn bandwidth_choices(parsec: bool) -> &'static [&'static str] {
+    if parsec {
+        PARSEC_BANDWIDTH_CHOICES
+    } else {
+        PHAZE_BANDWIDTH_CHOICES
+    }
+}
+/// Show a saved, non-preset value without making it a new selectable preset.
+#[cfg(any(target_os = "android", target_os = "linux", test))]
+pub fn bandwidth_menu(parsec: bool, current: &str) -> (Vec<String>, usize) {
+    let presets = bandwidth_choices(parsec);
+    let mut choices: Vec<String> = presets.iter().map(|value| (*value).to_owned()).collect();
+    let selected = presets
+        .iter()
+        .position(|value| *value == current)
+        .unwrap_or_else(|| {
+            choices.push(current_choice(current));
+            choices.len() - 1
+        });
+    (choices, selected)
+}
 pub const FPS_CHOICES: &[&str] = &["30", "60", "100", "120", "144", "240"];
 pub fn current_choice(value: &str) -> String {
     format!("Keep current: {value}")
@@ -150,16 +221,42 @@ pub struct PanelFields<'a> {
     pub fullscreen: bool,
 }
 impl PanelFields<'_> {
+    #[cfg(test)]
     pub fn parse(&self) -> Result<Video> {
-        let video = Video {
+        self.parse_for_service(false)
+    }
+
+    #[cfg(test)]
+    pub fn parse_for_service(&self, parsec: bool) -> Result<Video> {
+        self.parse_preserving(parsec, None)
+    }
+
+    /// GUI adapters supply the saved profile so changing one service's
+    /// bandwidth never clears the other service's preference.
+    pub fn parse_preserving(&self, parsec: bool, saved: Option<&Video>) -> Result<Video> {
+        let mut video = Video {
             resolution: resolution(self.resolution)?,
-            bandwidth_mbps: number(self.bandwidth, MAX_BANDWIDTH_MBPS)?,
+            bandwidth_mbps: saved.and_then(|v| v.bandwidth_mbps),
+            parsec_bandwidth_mbps: saved.and_then(|v| v.parsec_bandwidth_mbps),
             fps: number(self.fps, MAX_FPS)?,
             constant_fps: Some(self.constant_fps),
             rotated: Some(self.rotated),
             immersive: self.immersive,
             fullscreen: self.fullscreen,
         };
+        let max = if parsec {
+            MAX_PARSEC_BANDWIDTH_MBPS
+        } else {
+            MAX_BANDWIDTH_MBPS
+        };
+        let bandwidth = number(self.bandwidth, max)?.expect("panel bandwidth required");
+        // Allow keeping an old 51-100 Mbps Phaze rate, never selecting a new one.
+        let retaining_legacy = !parsec
+            && bandwidth > MAX_PHAZE_BANDWIDTH_MBPS
+            && saved.is_some_and(|old| old.bandwidth_mbps == Some(bandwidth));
+        if !retaining_legacy {
+            video.set_bandwidth(parsec, bandwidth)?;
+        }
         video.validate()?;
         Ok(video)
     }
@@ -230,6 +327,125 @@ pub fn frame_rate_hint(host: &serde_json::Value) -> f64 {
         .filter(|n| (1..=1000).contains(n))
         .map(|n| n as f64)
         .unwrap_or(0.)
+}
+
+#[cfg(test)]
+mod parsec_bandwidth_tests {
+    use super::*;
+
+    #[test]
+    fn parsec_high_bitrate_request_is_not_forwarded_to_phaze() -> Result<()> {
+        assert_eq!(
+            &PARSEC_BANDWIDTH_CHOICES[LEGACY_BANDWIDTH_CHOICES.len()..],
+            &["100", "150"]
+        );
+        for mbps in [100, 150] {
+            let selection = mbps.to_string();
+            let fields = PanelFields {
+                resolution: HOST_RESOLUTION,
+                bandwidth: &selection,
+                fps: "60",
+                constant_fps: false,
+                rotated: false,
+                immersive: 0,
+                fullscreen: false,
+            };
+            let video = fields.parse_for_service(true)?;
+            assert_eq!(video.requested_bandwidth(true), Some(mbps));
+            if mbps == 150 {
+                assert!(fields.parse().is_err());
+                assert_eq!(video.requested_bandwidth(false), None);
+                assert!(video.has_host_settings());
+            }
+            let encoded = video.request((1920, 1080))?;
+            let payload: serde_json::Value =
+                serde_json::from_slice(&encoded[13..encoded.len() - 1])?;
+            assert_eq!(payload["video"][0]["encoderMaxBitrate"], mbps);
+            let restored: Video = serde_json::from_str(&serde_json::to_string(&video)?)?;
+            assert_eq!(restored.requested_bandwidth(true), Some(mbps));
+        }
+        assert!(!bandwidth_choices(false).contains(&"150"));
+        assert!(bandwidth_choices(true).contains(&"150"));
+        let mut video = Video::default();
+        video.set_bandwidth(false, 50)?;
+        assert_eq!(video.requested_bandwidth(true), Some(50));
+        assert_eq!(video.requested_bandwidth(false), Some(50));
+        assert!(video.set_bandwidth(false, 51).is_err());
+        assert!(video.set_bandwidth(false, 150).is_err());
+
+        // This is the persisted state transition that must remain harmless
+        // when a user connects to Parsec after a Phaze session.
+        let saved = video.clone();
+        let fields = PanelFields {
+            resolution: HOST_RESOLUTION,
+            bandwidth: "150",
+            fps: "60",
+            constant_fps: false,
+            rotated: false,
+            immersive: 0,
+            fullscreen: false,
+        };
+        let parsec = fields.parse_preserving(true, Some(&saved))?;
+        assert_eq!(parsec.requested_bandwidth(false), Some(50));
+        assert_eq!(parsec.requested_bandwidth(true), Some(150));
+        let restored: Video = serde_json::from_str(&serde_json::to_string(&parsec)?)?;
+        assert_eq!(restored.requested_bandwidth(false), Some(50));
+        assert_eq!(restored.requested_bandwidth(true), Some(150));
+        let phaze_fields = PanelFields {
+            bandwidth: "40",
+            ..fields
+        };
+        let changed_phaze = phaze_fields.parse_preserving(false, Some(&restored))?;
+        assert_eq!(changed_phaze.requested_bandwidth(false), Some(40));
+        assert_eq!(changed_phaze.requested_bandwidth(true), Some(150));
+        Ok(())
+    }
+
+    #[test]
+    fn service_presets_and_legacy_keep_current_are_independent() -> Result<()> {
+        assert_eq!(
+            PHAZE_BANDWIDTH_CHOICES,
+            &["5", "10", "20", "30", "40", "50"]
+        );
+        assert_eq!(
+            PARSEC_BANDWIDTH_CHOICES,
+            &["3", "5", "7", "10", "15", "20", "25", "30", "35", "40", "45", "50", "100", "150",]
+        );
+        assert_eq!(bandwidth_choices(false), PHAZE_BANDWIDTH_CHOICES);
+        assert_eq!(bandwidth_choices(true), PARSEC_BANDWIDTH_CHOICES);
+        assert_eq!(bandwidth_menu(false, "7").1, 6);
+        assert_eq!(bandwidth_menu(false, "7").0[6], "Keep current: 7");
+        assert_eq!(bandwidth_menu(false, "50").1, 5);
+        assert_eq!(bandwidth_menu(true, "150").1, 13);
+        let fields = PanelFields {
+            resolution: HOST_RESOLUTION,
+            bandwidth: "80",
+            fps: "60",
+            constant_fps: false,
+            rotated: false,
+            immersive: 0,
+            fullscreen: false,
+        };
+        let saved = Video {
+            bandwidth_mbps: Some(80),
+            parsec_bandwidth_mbps: Some(150),
+            ..Video::default()
+        };
+        assert!(saved.validate().is_ok());
+        let kept = fields.parse_preserving(false, Some(&saved))?;
+        assert_eq!(kept.requested_bandwidth(false), Some(80));
+        assert_eq!(kept.requested_bandwidth(true), Some(150));
+        assert!(fields.parse().is_err());
+        let changed = PanelFields {
+            bandwidth: "50",
+            ..fields
+        }
+        .parse_preserving(false, Some(&saved))?;
+        assert_eq!(changed.requested_bandwidth(false), Some(50));
+        assert_eq!(changed.requested_bandwidth(true), Some(150));
+        assert!(Video::default().set_bandwidth(false, 80).is_err());
+        Ok(())
+    }
 }
 
 #[cfg(test)]

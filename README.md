@@ -1,4 +1,4 @@
-> [!WARNING]
+> [!NOTE]
 > **EvoParseq is developed with substantial AI assistance.** AI generates most of the
 > implementation code, while the project’s concept, architecture, scope, platform choices,
 > and development priorities are defined by its human maintainer.
@@ -16,15 +16,12 @@
   <img src="assets/evoparseq-wordmark.svg" width="360" alt="EvoParseq">
 </p>
 
-<p align="center"><strong>An independent Parsec client with a shared native Rust core.</strong></p>
+# EvoParseq
 
-EvoParseq connects to existing, **unmodified Parsec hosts**. Native Rust handles
-sign-in, computer discovery, signaling, transport, GPU video, audio and input.
-It does not bundle or run the proprietary Parsec WebAssembly client core and
-requires no browser, WebView or helper executable.
-
-**This is an independent community project, not affiliated with or endorsed by
-Parsec, Unity or lowlat.** A Parsec account and a compatible host are required.
+EvoParseq is an independent remote desktop client for **Parsec and Phaze** on
+Windows, Linux Flatpak, and Android TV. A shared Rust core handles accounts,
+networking, and session logic. Each platform uses its native video, audio,
+and input APIs. Both services work with their stock hosts.
 
 The stable [**EvoParseq v0.9.8**](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8)
 release includes Windows x64, the signed Android TV APK and an experimental
@@ -56,7 +53,68 @@ own implementation alone and can give a misleading impression without that
 context. Dependency findings still require review; upstream origin does not
 automatically make a finding harmless or a false positive.
 
-## Linux Flatpak preview
+## Phaze preview
+
+Development builds include experimental Phaze support. Select **Phaze**
+on the sign-in screen, sign in with your Phaze account, and choose a host with
+an active physical or virtual display.
+
+| Platform | Phaze playback | Client controls |
+| --- | --- | --- |
+| Windows | H.264 and HEVC through the existing GPU pipeline. HEVC 4:4:4 can be requested on compatible hardware. | Session overlay, output switching, bitrate and FPS requests, mouse and keyboard, and text clipboard. |
+| Linux Flatpak | H.264 and HEVC 8-bit 4:2:0 through Vulkan Video, with PipeWire audio. | Settings follow the Windows layout. The overlay provides output switching, bitrate and FPS requests, and local playback controls. Native Wayland handles mouse, keyboard, and text clipboard. |
+| Android TV | H.264 and HEVC 8-bit 4:2:0 through MediaCodec, with AAudio playback. | The existing TV interface supports D-pad navigation, a remote-controlled pointer, and physical mouse and keyboard. |
+
+Phaze uses **AAC-LC stereo** by default. Select **uncompressed PCM** in the
+audio settings if you prefer it, then reconnect. Windows and Linux can switch
+among the host's listed outputs. A Phaze session streams one output at a time.
+
+**Connection stats** shows the received codec and measured traffic, with a
+local RTT estimate when fresh acknowledgment samples are available. The
+desktop video stats distinguish bitrate and FPS requests from measured playback.
+
+Windows can request an experimental virtual USB HID mouse, keyboard, or both
+in **Settings → Input**. Allow USB devices from clients on the Phaze host and
+reconnect after changing modes. The HID mouse uses the primary display.
+
+Physical USB device forwarding, gamepad forwarding, host resolution changes,
+and simultaneous multi-display are pending. Phaze has no 10-bit host request.
+Linux and Android TV Phaze playback uses 4:2:0.
+
+Windows has been tested against a stock Phaze host with H.264, audio, mouse
+input, and Cloudflare TURN over UDP. The Linux Flatpak and signed Android TV
+APK passed GitHub CI. Live Phaze streaming on those two platforms still needs
+device testing. [Phaze protocol and validation notes](docs/phaze-transport.md)
+
+## Parsec
+
+Parsec supports **WebRTC** and explicitly selected **BUD**. Use the host
+owner's account to sign in and choose an online computer. The platform,
+host encoder, and selected transport determine the available features.
+
+| Area | Windows | Linux Flatpak | Android TV |
+| --- | --- | --- | --- |
+| Video | GPU selection, H.264 and HEVC, compatible 10-bit SDR and 4:4:4, Zero copy and optional AI upscaling | Vulkan Video with GPU selection, H.264 and HEVC 8/10-bit 4:2:0; GPU changes take effect after restart | MediaCodec Surface playback with H.264 and HEVC 8/10-bit 4:2:0 on compatible devices |
+| Audio | Stereo Opus, configurable buffering, BUD PCM and experimental surround | PipeWire, stereo Opus, BUD PCM, and capability-gated surround | AAudio, stereo Opus, BUD PCM, and capability-gated surround |
+| Input | Mouse, keyboard, text clipboard, gamepads, and optional BUD USB HID | Native Wayland mouse and keyboard, text clipboard, gamepads, and optional BUD USB HID | D-pad navigation and remote pointer, physical mouse and keyboard, and gamepads |
+| Displays | Up to three simultaneous outputs on WebRTC or BUD | Up to three simultaneous outputs on WebRTC or BUD | One active stream output |
+
+Windows and Linux use one decoder per active display and share one audio
+output. The primary overlay opens additional host-listed outputs. Each
+window has its own resolution controls, and Connection stats stays on the
+primary window. For Windows hosts, the recommended virtual display manager is
+[ParsecDisplay](https://github.com/nomi-san/parsec-vdd). Create the outputs on
+the host using the Parsec Virtual Display Driver already installed there.
+Other compatible virtual displays also work.
+
+The Linux Parsec preview has been tested on Intel HD 520 (H.264 and HEVC),
+AMD Radeon 780M (H.264), and NVIDIA RTX 3060 on Nobara (H.264). The tested
+hybrid Pop!_OS system reproduced its NVIDIA presentation failure in native
+`vkcube`. Android TV Parsec playback, Main10, and gamepad input were tested
+on a Xiaomi TV Box S (3rd Gen) running Android 14.
+[Linux setup and diagnostics](linux/README.md) · [Android TV setup and capabilities](android-tv/README.md)
+
+### Linux Flatpak for Parsec
 
 - **Wayland + Vulkan:** egui desktop UI follows the Windows client's shared
   wording, logical dimensions and layout, with native desktop window decorations.
@@ -91,46 +149,11 @@ automatically make a finding harmless or a false positive.
   remembered sessions through the Linux Secret portal. Passwords and 2FA codes
   are never saved; protected credentials are not portable between platforms.
 
-Linux currently requires a working Wayland desktop, PipeWire and a driver
-exposing the necessary Vulkan Video H.264 decode and sampleable NV12 surfaces.
-A Flatpak runtime cannot add missing GPU/kernel capabilities. Intel HD 520
-H.264 and HEVC 8-bit playback have been reported working on the maintainer's HP EliteBook 840 G3, with Intel HEVC reconfirmed under Nobara Live.
-AMD Radeon 780M H.264 playback has also been tested. These observations do not
-establish support for every GPU, driver or codec. The package defaults to
-`ANV_DEBUG=video-decode` for Mesa Intel's experimental video path.
-
-**NVIDIA H.264 playback is also live-confirmed** on RTX 3060 with Nobara Linux,
-on the same hybrid AMD/NVIDIA configuration (1920 × 1200, 8-bit 4:2:0).
-NVIDIA HEVC and longer stability testing remain pending. On the tested hybrid Pop!_OS
-system, RTX 3060 / driver 595.84 fails Vulkan presentation before decoding.
-The failure also reproduces in native `vkcube` outside EvoParseq/Flatpak, including
-with only the NVIDIA ICD selected. This establishes an independent system-level
-reproducer. It resembles a known class of
-[NVIDIA/Wayland presentation issues](https://github.com/gfx-rs/wgpu/issues/5382);
-the exact cause and contribution of hybrid presentation remain unconfirmed.
-The successful Nobara test shows that hybrid hardware alone is not a blocker;
-no alternative decoder or cross-GPU copy fallback has been introduced.
-
 HEVC Main10/P010 decoding is now available after selected-device capability checks,
 with SDR presentation. Main10 has been tested on the maintainer's Intel ARL system. Display timing VRR requests
 adaptive presentation; physical VRR remains unverified.
 
-**Not yet integrated on Linux:** 4:4:4 playback, the application's
-Zero copy mode, AI upscaling, runtime GPU switching and verified VRR control.
-The full Settings layout is present; unimplemented controls remain disabled.
-
-Linux now implements up to three simultaneous host-listed display windows on
-one BUD or WebRTC connection, with one decoder per active display and one audio
-output. Additional windows have independent resolution controls and input;
-Connection stats remains on the primary window. Multi-display playback is now
-live-confirmed by the maintainer. GPU selection is saved with the shared Windows settings
-schema and matching policy; changing the Vulkan GPU requires an app restart.
-
-See [Linux installation, current scope and diagnostics](linux/README.md) and
-the [video-path audit](linux/VIDEO_PATH.md). The Windows feature list below
-should not be read as Linux feature parity.
-
-## Android TV
+### Android TV for Parsec
 
 - Google TV / Android TV interface with D-pad navigation, 2FA, grouped settings
   and encrypted remembered sign-in using Android Keystore.
@@ -159,287 +182,118 @@ Install the signed **EvoParseq-TV.apk** from the
 or use **Settings > Updates** on an existing distribution-signed installation.
 See the [Android TV setup, build and compatibility guide](android-tv/README.md).
 
-## Features
-
-- **Native account and sessions:** optional 2FA, encrypted remembered sign-in,
-  background-refreshing computer picker and manual peer ID. Owner connections
-  are supported; friend/invitation authorization is not implemented.
-- **WebRTC or BUD:** direct or custom TURN connections over UDP/TLS/TCP,
-  Force TURN, STUN-only and Cloudflare TURN credentials. No silent transport
-  switch. Optional experimental Windows TCP/TLS QoS marks outgoing TURN traffic.
-- **GPU video:** H.264 and H.265/HEVC, GPU selection, Media Foundation and
-  experimental vendor HEVC decoders, 10-bit SDR output, original-surface
-  zero-copy, and compatible NVIDIA/Intel HEVC 4:4:4 at 8 or 10 bits.
-- **Session overlay:** draggable icon; resolution, bandwidth, FPS, constant FPS,
-  orientation, fullscreen and immersive input controls. Switch the current stream
-  between host-listed physical or virtual displays.
-- **Windows multi-display:** open up to three host-listed extended outputs
-  on one BUD/WebRTC connection, with independent resolution controls and one audio
-  pipeline. Normal input, activating clicks and cross-display window dragging are
-  live-tested with two screens. Additional windows have their own draggable controls;
-  Connection stats stays on the primary window. Configure Parsec VDD outputs on the
-  host first; this feature does not create virtual displays or override host policy.
-- **Audio:** stereo Opus, configurable buffering, BUD raw PCM and experimental
-  multichannel output. Automatically reopen the Windows audio output after
-  transient device errors or default-device changes, retiring stale audio.
-  On Windows, the Session overlay offers immediate local mute and 0–100% volume
-  control for either transport, without changing the host's volume. Mute preserves
-  the chosen level; these controls reset when the client is restarted.
-- **Controllers:** shared Rust gamepad state/protocol for up to
-  four controllers, Windows XInput and Android gamepad events. Wired Windows
-  and GameSir Android forwarding are live-tested; device-specific rumble and
-  disconnect behavior need broader validation.
-- **Input:** two-way Unicode text clipboard; normal mouse/keyboard forwarding;
-  BUD USB HID mouse and keyboard, including relative camera input.
-- **Diagnostics:** route, RTT, traffic, FPS, actual decoder/format, audio queues,
-  host/local timings and system resource use. Optional bounded event logs record
-  failures without continuous mouse/key activity.
-- **Presentation:** Automatic, Low latency, VSync and DXGI VRR,
-  with reference-safe catch-up after bursts. VRR requires an enabled compatible
-  display/driver; DXGI support alone does not verify panel activation. Zero copy
-  retains Windows-managed timing. WebRTC uses bounded recent queue history.
-
-**Recommended VDD for Windows multi-display:**
-[ParsecDisplay / parsec-vdd](https://github.com/nomi-san/parsec-vdd) is the
-project's recommended virtual display manager because it uses Parsec's official
-Virtual Display Driver. Use the driver already installed by Parsec on the host;
-there is no need to reinstall the driver when setting up ParsecDisplay. Create
-the required virtual displays on the host before opening them in EvoParseq.
-Multi-display also works with other VDD solutions that expose compatible host
-displays; using Parsec VDD is a recommendation, not a requirement.
-
-Host permissions, encoders and graphics drivers determine the actual stream.
-**Connection stats shows the received depth/chroma and application RGB output**;
-a selected preference alone does not prove that the host accepted it.
-
-The Session panel compares the client's configured display refresh with the host
-FPS setting and shows measured decoded FPS separately. It can suggest a
-Windows-listed refresh rate at the current client resolution for more even
-fixed-refresh cadence; it never changes the display automatically. VRR activation
-is not verified. A confirmed 120 FPS request does not prove 120 distinct frames:
-the captured host display/mode must support it, and static content can lower FPS.
-
 ## Video rendering modes
 
 ![Animated comparison of normal GPU rendering, Zero copy and optional AI upscaling.](assets/evoparseq-rendering-modes.gif)
 
-Start with **Normal GPU rendering** for compatibility. **Zero copy** skips a
-separate picture-conversion pass on supported systems; **AI upscaling** can
-improve enlarged video but uses more GPU resources and may add latency.
-The animation illustrates processing order, not measured speed. Check
-**Connection stats** for the mode actually in use.
+| Windows mode | How it presents video |
+| --- | --- |
+| Normal GPU rendering | Keeps decoded frames on the GPU and runs a color conversion pass. Start here for compatibility. |
+| Zero copy | Presents supported original decoder surfaces directly, without a separate conversion or post-processing pass. |
+| AI upscaling | Uses NVIDIA RTX VSR or Intel VPL on compatible hardware. It adds GPU work and an output copy and may increase latency. |
 
-## Windows download and run
+The animation shows the order of processing. Check **Connection stats** for
+the active decoder, received chroma and bit depth, application RGB output, and
+rendering mode. Windows VRR is a presentation option that requires a
+compatible display and driver. Panel activation and physical scanout remain
+unverified. Linux uses GPU-resident Vulkan conversion, and Android hands
+MediaCodec output to a Surface.
+[Linux video path](linux/VIDEO_PATH.md)
 
-1. Download `EvoParseq-v0.9.8-win64.zip` from the
-   [stable release](https://github.com/vampywiz17/EvoParseq/releases/tag/v0.9.8).
-2. Extract to a writable folder and run **EvoParseq.exe**. Settings and optional
-   encrypted sessions are stored beside it in `settings.json`.
-3. Sign in with the host owner's account, choose a computer and connect.
-   Configure Network, Video, Audio and Input in Settings. Save and reconnect
-   after changing transport or connection capabilities; session video requests
-   can be applied while connected.
+## Download and run
 
-**Windows 11 x64 and a GPU with Direct3D feature level 11.0 or newer are required**,
-with compatible D3D11 video-support drivers. The DirectX version shown on
-dxdiag's System tab is the installed runtime version; check **Feature Levels**
-on its Display tab for the GPU's capabilities. DirectX 10.x hardware, such as
-the GeForce 210, is unsupported. Support below feature level 11.0 is not planned,
-as it would require developing and maintaining a separate video path in parallel.
+| Platform | Requirements and installation | Development builds |
+| --- | --- | --- |
+| Windows | Windows 11 x64, Direct3D feature level 11.0 or later, and a compatible video driver. Extract the ZIP to a writable folder and run **EvoParseq.exe**. | [Windows CI](https://github.com/vampywiz17/EvoParseq/actions/workflows/native-core.yml?query=branch%3Adev) |
+| Linux | An x86_64 Wayland session, PipeWire, and a working Vulkan Video driver. Install the **.flatpak** bundle. | [Flatpak CI](https://github.com/vampywiz17/EvoParseq/actions/workflows/linux-flatpak.yml?query=branch%3Adev) |
+| Android TV | ARM64 or ARMv7. Sideload the signed **EvoParseq-TV.apk**. | [Android TV CI](https://github.com/vampywiz17/EvoParseq/actions/workflows/android-tv.yml?query=branch%3Adev) |
 
-Zero-copy
-requires Windows 11 and suitable drivers. Ordinary client use needs no admin
-rights. The stock host must already be configured for hosting.
+Download the artifact from a successful branch run. Published packages are
+listed on the [releases page](https://github.com/vampywiz17/EvoParseq/releases).
+Choose the service at sign-in and reconnect after changing connection
+capabilities. Remembered sessions use the platform's protected storage.
+Users upgrading from ParsecWebTurn can refer to the [migration guide](MIGRATION.md).
 
-**Upgrading from ParsecWebTurn:** keep `settings.json` under the same Windows
-account and sign in again. The old web-core login is not imported. A legacy-named
-transition ZIP supports existing executable shortcuts. After the repository rename,
-older updaters may reject the new download URL; use the release page for this
-one-time manual upgrade. See [migration](MIGRATION.md).
-Help > Check for updates offers newer **stable** EvoParseq packages; prerelease
-installation is manual.
+### Windows shortcuts
 
 | Shortcut | Action |
 | --- | --- |
-| Ctrl+Shift+M / Ctrl+Shift+O | Open session menu and restore hidden icon |
+| Ctrl+Shift+M / Ctrl+Shift+O | Open the session menu and restore the hidden icon |
 | Ctrl+Shift+W | Toggle fullscreen |
-| Ctrl+Shift+R | Release / recapture remote input |
+| Ctrl+Shift+R | Release or recapture remote input |
 | Ctrl+Shift+Q | Disconnect |
 | Ctrl+Shift+S | Open Connection stats |
-| Ctrl+Alt+End | Request host Ctrl+Alt+Del |
+| Ctrl+Alt+End | Request host Ctrl+Alt+Del where supported |
 
-These exact shortcuts stay local; their trigger keys are not also forwarded to
-the host. In Keyboard or Keyboard + Mouse immersive mode, other supported keys
-and combinations (including Alt+Tab, Alt+Enter, Windows-key chords and F8/F11)
-are forwarded while the stream has input focus. Extra Alt/Windows modifiers do
-not activate a Ctrl+Shift client shortcut. Local menus and released input retain
-normal Windows handling; Ctrl+Shift+R releases or recaptures remote input.
+## TURN relay
 
-Ctrl+Alt+Del requires the installed Parsec host service and permissions; a
-portable host may not execute it.
+![Animated TURN relay showing media from the host through Cloudflare to the client and input traveling back.](assets/turn-relay.gif)
 
-## TURN relay: connect through restrictive networks
+TURN carries encrypted session traffic when NAT or a firewall makes a direct
+route difficult. The client-to-relay leg can use UDP, TCP or TLS. The
+relay-to-host leg uses UDP. TURN is built into EvoParseq. Its effect on
+latency depends on ISP peering, relay location, and congestion. A better
+relay route can match or improve on the direct or VPN RTT. Compare the
+active routes in **Connection stats**.
+[Cloudflare on TURN routing](https://developers.cloudflare.com/realtime/turn/faq/#does-cloudflare-realtime-turn-use-the-cloudflare-backbone-or-is-there-any-magic-cloudflare-do-to-speed-connection-up)
 
-![Animated TURN relay: video and audio travel from the host through Cloudflare to the client; input travels back.](assets/turn-relay.gif)
+| Service | Routing behavior |
+| --- | --- |
+| Parsec | WebRTC or BUD can use the configured TURN service. Enable **Force TURN relay** to require a relay. |
+| Phaze | Direct UDP by default. Select **Force TURN relay** to use TURN. A failed forced relay ends the connection attempt. |
 
-TURN forwards encrypted session traffic when NAT or a firewall prevents a direct
-connection. The stock Parsec host stays unmodified. The client-to-relay leg can
-use UDP, TLS or TCP; the relay-to-host leg uses UDP. Direct connections remain
-available unless **Force TURN relay** is enabled.
+### Set up Cloudflare Realtime TURN
 
-**A relay does not necessarily mean higher latency.** When the route through
-the relay is better than the available direct or VPN route, TURN can deliver
-comparable or even lower round-trip time (RTT). This depends on ISP peering,
-relay location and congestion; it is not a guaranteed improvement. Compare the
-actual routes in **Connection stats**. Cloudflare describes its routing in
-[TURN and anycast](https://blog.cloudflare.com/webrtc-turn-using-anycast/).
-**No separate VPN, tunnel client, driver or relay helper needs to be installed
-on the client PC:** TURN support is built into the application.
+1. In the [Cloudflare dashboard](https://dash.cloudflare.com/), open **Realtime → TURN Server** and create a TURN key.
+2. In **Settings → Network → Cloudflare TURN**, enter the TURN key ID and API token from your own account. EvoParseq uses them to generate temporary credentials. Keep the API token private.
+3. Save and reconnect. Select **Force TURN relay** if the session should require TURN, then check the resulting route in **Connection stats**.
 
-**Cloudflare Realtime TURN is our recommended relay.** A free Cloudflare account
-is sufficient, including an account already used for Zero Trust Free. TURN is a
-separate **Realtime** service: no paid Zero Trust plan or Cloudflare Tunnel is
-required.
+The desktop settings also accept a custom TURN URL and credentials. Android TV
+offers local HTTPS provisioning with fingerprint verification and TV approval.
+[Cloudflare credentials guide](https://developers.cloudflare.com/realtime/turn/generate-credentials/) ·
+[Android TV relay setup](android-tv/README.md#local-relay-setup)
 
-1. Sign in to the [Cloudflare dashboard](https://dash.cloudflare.com/), select
-   your account, and open **Realtime → TURN Server → Create** (or search for
-   **TURN Server** in the dashboard).
-2. Give the TURN key a name and create it. Copy its **TURN Key ID / Token ID**
-   and **API Token** from the resulting credentials panel.
-3. In the client's **Settings → Network**, select **Cloudflare TURN**, enter
-   the key ID and API token, then save and reconnect. The client generates
-   temporary TURN credentials automatically. Enable **Force TURN relay** if you
-   want to require the relay; **Connection stats** shows the route actually used.
+### Free allowance and streaming estimates
 
-Keep the API token private; do not attach it or `settings.json` to issues.
-See Cloudflare's [setup guide](https://developers.cloudflare.com/realtime/turn/generate-credentials/)
-and [dashboard example](https://github.com/cloudflare/speedtest/tree/main/example/turn-worker#creating-a-new-realtime-turn-app).
+Cloudflare Realtime includes **1,000 GB (1 TB) per month**, shared by TURN and
+SFU. Additional egress costs **$0.05/GB**. TURN billing counts traffic sent
+from Cloudflare to the TURN client, including TURN overhead.
+[Cloudflare pricing](https://developers.cloudflare.com/realtime/sfu/platform/pricing/) ·
+[TURN billing FAQ](https://developers.cloudflare.com/realtime/turn/faq/#what-is-cloudflare-realtime-turn-pricing-how-exactly-is-it-calculated)
 
-**Free allowance: 1 TB (1,000 GB) per month**, shared with Realtime SFU.
-At a constant average relayed bitrate, this is approximately:
-
-| Average relayed traffic | Hours/month | Hours/day over 30 days |
+| Average relayed traffic | Hours per month | Hours per day over 30 days |
 | --- | ---: | ---: |
 | 10 Mbit/s | 222 | 7.4 |
 | 20 Mbit/s | 111 | 3.7 |
 | 30 Mbit/s | 74 | 2.5 |
 | 50 Mbit/s | 44 | 1.5 |
 
-**Video uses a variable bitrate:** with little or no screen movement, such as
-mostly static desktop work, it can use much less bandwidth than during active
-gameplay. Read the table using the **actual average relayed bitrate**, not the
-configured bandwidth limit. Lower average usage makes the allowance last longer;
-these figures are estimates, not fixed daily streaming limits.
-
-Estimates use decimal GB and exclude audio/control/protocol overhead, which
-reduces the available streaming time. Actual usage varies with the stream;
-direct traffic does not consume TURN allowance. Cloudflare meters traffic sent
-from its edge to the TURN client. Usage above the shared allowance is currently
-**$0.05/GB**; check [current pricing](https://developers.cloudflare.com/realtime/sfu/platform/pricing/)
-and the [TURN billing FAQ](https://developers.cloudflare.com/realtime/turn/faq/).
-
-## Optional AI upscaling
-
-The Video tab offers one **AI upscaling (experimental)** selector: NVIDIA RTX
-VSR has Off/Low/Medium/High/Ultra; Intel VPL AI has Off/On. Other GPUs disable the
-control. Each vendor's saved preference is retained.
-
-Both paths upscale on the GPU in normal DXGI mode. They add GPU processing,
-resources and an output copy, may increase latency, and are **not Zero copy**.
-Unsupported configurations retain ordinary rendering. No CPU pixel readback
-or generated frames are introduced.
-
-- **NVIDIA:** RTX Video SDK 1.1.0; RTX 3060 playback is live-confirmed.
-  The runtime is outside the EXE. On first launch with an NVIDIA GPU, setup asks
-  permission before downloading the pinned official NVIDIA payload. Archive
-  and DLL hashes are checked; verified caches are reused. The DLL lives under
-  `%LOCALAPPDATA%/EvoParseq/vsr/1.1.0`, without admin rights. Declining leaves
-  normal video available; enabling VSR later can authorize setup on next launch.
-  SDK-enabled packages include NVIDIA's license; no CUDA toolkit is required.
-- **Intel:** documented VPL 2.17 API with the installed Intel driver runtime,
-  without a bundled/downloaded DLL or model. **Hardware operation is unverified.**
-  Strict checks require the AI filter and same-device D3D11 surfaces; rejected
-  runtime/configuration details remain in event logs. Currently limited to
-  8-bit SDR upscaling; 10-bit, 4:4:4 and Zero copy keep their existing paths.
-
-On Windows, Display timing (including VRR), Zero copy presentation and BUD USB HID
-input no longer carry an experimental label. Hardware requirements and fallbacks
-still apply. Linux feature labels and defaults are unchanged.
-
-## Experimental features and limits
-
-**Vendor HEVC, 10-bit HEVC, 4:4:4 and multichannel audio remain experimental.** For conservative operation, use H.264,
-stereo Opus and Automatic timing with experimental options disabled.
-
-- **Video:** live decoded frames remain on the GPU. Normal rendering uses the
-  conversion/output pass; zero-copy presents original 8-bit NV12 or capability-checked 10-bit P010 surfaces.
-  HEVC 10-bit 4:2:0 Zero copy is live-confirmed by the maintainer on tested AMD
-  and NVIDIA systems. Intel HEVC, including 8/10-bit 4:4:4 normal rendering,
-  has also been live-tested on the maintainer's UHD 770 setup; this does not
-  establish support on every Intel GPU or driver.
-  Driver/compositor copies and direct scanout are not independently verified.
-- **10-bit:** RGB10 output is SDR, not HDR. NVIDIA host encoding is confirmed;
-  other host encoders may refuse it or send 8-bit. An initial encoder failure
-  asks you to disable 10-bit and reconnect. AMF Main10 output is live-validated on AMD Radeon 780M and is now the AMD default.
-- **4:4:4:** 8/10-bit playback is live-validated on NVIDIA RTX 3060. Intel UHD 770 8/10-bit playback is also live-confirmed. Support remains
-  capability-gated; a measured UHD 770 driver-query exception is logged.
-  AMD selection is disabled.
-  H.264 stays 4:2:0; 4:4:4 does not combine with original-surface zero-copy.
-  Compatible host encoding, account permissions and service terms still apply.
-- **HID:** requires BUD and the stock host's USB/Yubikey passthrough plus its
-  supported USB driver. HID mouse uses the host primary display and disables
-  display switching; forwarding pauses until that selection is reported.
-  Use matching host/client keyboard layouts. No host patch is needed.
-- **Audio:** raw PCM is BUD-only and requires host permission
-  (`network_raw_audio=1`). WebRTC remains stereo Opus. Multichannel audio has
-  synthetic coverage only; live surround playback/channel order is unconfirmed.
-- **Displays and timing:** host virtual-display limitations can delay switching.
-  Reported timings are CPU/host durations, not GPU completion, scanout or total
-  latency. Adaptive catch-up, QoS benefit and physical audio-device recovery
-  still require broader live testing; no measured latency gain is claimed.
-
-Microphone/camera forwarding, HDR and multi-monitor HID mapping are not implemented. See the [changelog](CHANGELOG.md) for shipped changes.
+Estimates use decimal GB and assume the full monthly allowance is available.
+When using video bitrate to estimate usage, allow room for audio and protocol
+overhead. Use the **measured average** rather than the configured bitrate
+limit. A mostly static desktop can use much less bandwidth than gameplay.
+Direct sessions use no TURN allowance.
 
 ## Troubleshooting and development
 
-Enable **Event logging** in Network settings for `client-events.jsonl` beside
-settings.json. Include the build, GPU/driver, transport and reproduction steps
-with a log or screenshot when reporting issues. Logs omit credentials, media,
-clipboard text and continuous input. **Do not publish settings.json or tokens.**
-Saved credentials use Windows CurrentUser DPAPI; copying them to another machine
-or Windows account does not transfer access. `--data-dir "C:\YourFolder"` selects
-another writable data directory.
+For a failed connection, include the platform, build, service, route, and
+steps to reproduce. For video problems, add the GPU, driver, and codec shown
+in **Connection stats**. If Phaze connects but shows no picture, check that
+the host has an active physical or virtual display.
 
-Build with Rust MSVC and Windows C++ Build Tools/SDK:
+Enable **Event logging** where available and include the relevant part of
+`client-events.jsonl`. Keep credentials, tokens and `settings.json` private.
+
+Build the Windows client with Rust MSVC and the Windows C++ Build Tools/SDK.
 
 ```powershell
 cargo build --locked --release --manifest-path src-native/Cargo.toml
 ```
 
-CI packages `src-native/target/x86_64-pc-windows-msvc/release/evoparseq.exe` as
-EvoParseq.exe. Application logic lives in `src-native/src`; platform, transport
-and video adapters reuse the existing bounded workers and GPU path.
+[Architecture](docs/native-core.md) · [Development references](docs/NATIVE_REFERENCES.md) ·
+[Changelog](CHANGELOG.md) · [License](LICENSE)
 
-[Architecture](docs/native-core.md) · [Settings comparison](docs/native-settings-comparison.md) ·
-[Development references](docs/NATIVE_REFERENCES.md)
-
-## Credits and independence
-
+EvoParseq is a community project independent of Parsec, Unity, Phaze, and
+lowlat. The Phaze adapter is an original open-source Rust implementation.
 Thanks to **Duy (Nguyen Duy)** and [lowlat](https://github.com/nomi-san/lowlat)
-for inspiration, feedback and selected MIT-licensed protocol, transport and GPU
-components. Their licenses and local-change notices are retained. EvoParseq is
-independently developed and maintained; it is not an official lowlat client.
-
-Our code uses the [MIT license](LICENSE). Applicable Parsec service terms and
-third-party licenses still apply. Development did not use Parsec's proprietary
-source code, and EvoParseq does not patch the official host or client. Parsec and
-Unity names and marks belong to their owners; no affiliation is implied.
-
-## Star history
-
-<a href="https://www.star-history.com/#vampywiz17/EvoParseq&amp;Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=vampywiz17/EvoParseq&amp;type=Date&amp;theme=dark">
-    <img alt="EvoParseq GitHub star history" src="https://api.star-history.com/svg?repos=vampywiz17/EvoParseq&amp;type=Date" width="800">
-  </picture>
-</a>
+for feedback and MIT-licensed components retained with their license notices.

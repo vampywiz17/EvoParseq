@@ -40,6 +40,7 @@ pub struct Window {
     settings_active: AtomicBool,
     pub hwnd: AtomicUsize,
     pub closing: AtomicBool,
+    pub(crate) remote_controls: AtomicBool,
     pub events: crate::event_queue::Queue<Event>,
     pub dimensions: Mutex<(i32, i32)>,
 
@@ -171,6 +172,7 @@ impl Window {
             settings_active: AtomicBool::new(false),
             hwnd: AtomicUsize::new(0),
             closing: AtomicBool::new(false),
+            remote_controls: AtomicBool::new(true),
             events: crate::event_queue::Queue::input(),
             dimensions: Mutex::new((1024, 720)),
 
@@ -293,18 +295,28 @@ impl Window {
     }
 
     pub fn native_input_allowed(&self) -> bool {
-        self.native_menu_allows_input()
-            && self.has_focus.load(Ordering::Acquire)
-            && self.video_ready.load(Ordering::Acquire)
-            && self.video_visible.load(Ordering::Acquire)
-            && !self.settings_open()
-            && !self.input_suspended.load(Ordering::Acquire)
-            && !self.closing.load(Ordering::Acquire)
-            && !self
-                .input_state
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .detached
+        self.native_input_blocker().is_none()
+    }
+    pub(crate) fn native_input_blocker(&self) -> Option<&'static str> {
+        if !self.native_menu_allows_input() {
+            Some("session_panel_open")
+        } else if !self.has_focus.load(Ordering::Acquire) {
+            Some("stream_lacks_keyboard_focus")
+        } else if !self.video_ready.load(Ordering::Acquire) {
+            Some("video_not_ready")
+        } else if !self.video_visible.load(Ordering::Acquire) {
+            Some("video_not_visible")
+        } else if self.settings_open() {
+            Some("settings_open")
+        } else if self.input_suspended.load(Ordering::Acquire) {
+            Some("input_suspended")
+        } else if self.closing.load(Ordering::Acquire) {
+            Some("window_closing")
+        } else if self.input_detached() {
+            Some("input_detached")
+        } else {
+            None
+        }
     }
     #[cfg(feature = "vendor-video")]
     pub fn direct_presentation_allowed(&self) -> bool {
@@ -394,7 +406,11 @@ impl Window {
             self.apply_input_capture();
             self.apply_relative_mouse(false);
             self.show_video_surface();
-            let page = crate::connection_settings_ui::open(self.handle(), manager);
+            let page = if self.session.phaze.load(Ordering::Acquire) {
+                crate::connection_settings_ui::open_phaze(self.handle(), manager)
+            } else {
+                crate::connection_settings_ui::open(self.handle(), manager)
+            };
             self.settings_page.store(page as usize, Ordering::Release);
             if page.is_null() {
                 self.settings_active.store(false, Ordering::Release);
@@ -550,8 +566,16 @@ impl Window {
             }
         }
     }
-    fn release_buttons(&self) {
+    fn release_buttons(&self, reason: &'static str) {
         let pressed = self.pressed_buttons.swap(0, Ordering::AcqRel);
+        if pressed != 0 && self.session.phaze.load(Ordering::Acquire) && crate::event_log::enabled()
+        {
+            crate::event_log::record(
+                "INFO",
+                "phaze_mouse_capture_released",
+                serde_json::json!({"reason":reason,"held_button_count":pressed.count_ones()}),
+            );
+        }
         for button in 0..5 {
             if pressed & (1 << button) != 0 {
                 self.push(Event::Button(false, button, 0, 0));
@@ -606,6 +630,9 @@ impl Window {
         *self.host_cursor.lock().unwrap_or_else(|e| e.into_inner()) = Some((x, y, relative));
         // When capture is suspended, the input consumer already sees relative=false and
         // may omit its redundant unlock. Do not retain a stale relative request.
+        self.set_host_relative_mouse(relative);
+    }
+    pub(crate) fn set_host_relative_mouse(&self, relative: bool) {
         if relative != self.relative_requested.load(Ordering::Acquire) {
             // A host transition is permanent, including while unfocused.
             self.request_relative_mouse(relative, true);
@@ -792,13 +819,12 @@ impl Window {
                 .detached
     }
     pub fn clipboard_allowed(&self) -> bool {
+        self.clipboard_write_allowed() && unsafe { IsClipboardFormatAvailable(13) != 0 }
+    }
+    pub(crate) fn clipboard_write_allowed(&self) -> bool {
         // GetForegroundWindow is process-independent; GetFocus is UI-thread local.
         self.online
-            && unsafe {
-                GetForegroundWindow() == self.handle()
-                    && IsIconic(self.handle()) == 0
-                    && IsClipboardFormatAvailable(13) != 0
-            }
+            && unsafe { GetForegroundWindow() == self.handle() && IsIconic(self.handle()) == 0 }
             && self.video_ready.load(Ordering::Acquire)
             && self.video_visible.load(Ordering::Acquire)
             && !self.settings_open()
@@ -1243,6 +1269,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                     && lp as usize == s.native_session_button.load(Ordering::Acquire)
                     && wp >> 16 == BN_CLICKED as usize) =>
             {
+                if !s.remote_controls.load(Ordering::Acquire) {
+                    return 0;
+                }
                 let manager = s
                     .connection_settings
                     .lock()
@@ -1599,14 +1628,14 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                     .unwrap_or_else(|e| e.into_inner())
                     .set(hwnd, false);
                 s.apply_relative_mouse(false);
-                s.release_buttons();
+                s.release_buttons("focus_lost");
                 let mut pressed = s.pressed_keys.lock().unwrap_or_else(|e| e.into_inner());
                 for code in std::mem::take(&mut *pressed) {
                     s.push(Event::Key(false, code, 0));
                 }
                 s.push(Event::Focus(false));
             }
-            WM_CAPTURECHANGED => s.release_buttons(),
+            WM_CAPTURECHANGED => s.release_buttons("capture_changed"),
             WM_MOUSEMOVE if !s.relative_mouse.load(Ordering::Acquire) => {
                 let echo = s.warp_echo.swap(0, Ordering::AcqRel);
                 if let Some(event) = crate::input_windows::motion(lp, echo) {

@@ -353,6 +353,7 @@ pub const STAT_TIMING_SCOPE: &str = "Timing scope";
 pub const STAT_AUDIO: &str = "AUDIO";
 pub const STAT_CHANNELS: &str = "Channels";
 pub const STAT_MEASURED_AUDIO_TRAFFIC: &str = "Measured audio traffic";
+pub const STAT_AUDIO_PAYLOAD_BITRATE: &str = "Audio payload bitrate";
 pub const STAT_PLAYBACK_CHANNELS: &str = "Playback channels";
 pub const STAT_PLAYBACK_BUFFER: &str = "Playback buffer";
 pub const STAT_BUFFER_LIMITS: &str = "Buffer limits";

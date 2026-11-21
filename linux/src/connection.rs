@@ -15,6 +15,7 @@ use std::{
 pub enum Mode {
     WebRtc,
     Bud,
+    Phaze,
 }
 
 impl Mode {
@@ -22,6 +23,7 @@ impl Mode {
         match self {
             Self::WebRtc => "WebRTC",
             Self::Bud => "BUD",
+            Self::Phaze => "Phaze",
         }
     }
 }
@@ -45,6 +47,10 @@ pub fn run_stream(
         "connection_started",
         serde_json::json!({"transport":mode.label()}),
     );
+    if session.service() == account::Service::Phaze {
+        return crate::phaze_linux::run(session, peer, playback, telemetry, settings);
+    }
+    ensure!(mode != Mode::Phaze, "Sign in with a Phaze account first.");
     let socket = Socket::open(session)?;
     let mut nonce = [0u8; 16];
     getrandom::fill(&mut nonce).map_err(|_| anyhow::anyhow!("Could not generate connection ID"))?;
@@ -52,6 +58,7 @@ pub fn run_stream(
     let result = match mode {
         Mode::WebRtc => run_webrtc(&socket, peer, &id, playback, telemetry, settings),
         Mode::Bud => run_bud(&socket, peer, &id, playback, telemetry, settings),
+        Mode::Phaze => unreachable!("Phaze handled before Parsec signaling"),
     };
     (socket.writer)(
         native_wire::envelope("offer_cancel", peer, &id, serde_json::json!({})).to_string(),

@@ -1,0 +1,5 @@
+Symphonia 0.6.1 AAC decoder, core, common and metadata
+Copyright (c) The Project Symphonia Developers
+Licensed under MPL-2.0. These dependencies are unmodified.
+Source: https://github.com/pdeljanov/Symphonia/tree/v0.6.1
+See SYMPHONIA-MPL-2.0.txt for the license text.

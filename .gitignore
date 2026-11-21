@@ -36,3 +36,6 @@ settings-cloudflare.png
 settings-custom.png
 tauri-settings.png
 tauri-stats.png
+
+# Materialized from the verified upstream archive for Android and ARMv7 CI.
+/android-tv/native/vendor/purecrypto-0.10.4/

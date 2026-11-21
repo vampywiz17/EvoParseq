@@ -61,7 +61,16 @@ impl SignIn {
         self.message = message.into();
         Some(tx)
     }
+    #[cfg(any(not(windows), test))]
     pub fn login(&mut self, login: Login, remember: bool) -> Result<bool> {
+        self.login_service(login, remember, account::Service::Parsec)
+    }
+    pub fn login_service(
+        &mut self,
+        login: Login,
+        remember: bool,
+        service: account::Service,
+    ) -> Result<bool> {
         if self.busy() {
             return Ok(false);
         }
@@ -75,7 +84,7 @@ impl SignIn {
         // Password and optional 2FA code are owned only by this request and
         // zeroized on completion. No duplicate form copy or retry cache.
         std::thread::spawn(move || {
-            let result = account::login(&login).map(Arc::new);
+            let result = account::login_service(&login, service).map(Arc::new);
             if let Err(mpsc::SendError(Completion::Login(Ok(session)))) =
                 tx.send(Completion::Login(result))
             {
@@ -91,7 +100,7 @@ impl SignIn {
         notice: impl FnOnce(PersistenceNotice),
     ) {
         if self.remember_login {
-            match store.save(&self.email, session.token()) {
+            match store.save(&self.email, &session.saved_token()) {
                 Ok(()) => session.remembered(),
                 Err(_) => {
                     notice(PersistenceNotice::ProtectedSessionNotSaved);

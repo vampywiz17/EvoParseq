@@ -65,6 +65,8 @@ modules:
       - install -Dm644 linux/vendor/wgpu-hal/LICENSE.MIT /app/share/licenses/evoparseq/wgpu-hal-MIT
       - install -Dm644 linux/vendor/wgpu-hal/LICENSE.APACHE /app/share/licenses/evoparseq/wgpu-hal-APACHE
       - install -Dm644 src-native/crates/bud/vendor/lowlat-client/LICENSE /app/share/licenses/evoparseq/LOWLAT-LICENSE
+      - install -Dm644 vendor/symphonia-core-0.6.1/LICENSE /app/share/licenses/evoparseq/SYMPHONIA-MPL-2.0.txt
+      - install -Dm644 src-native/crates/phaze/SYMPHONIA-NOTICE.txt /app/share/licenses/evoparseq/SYMPHONIA-NOTICE.txt
     sources:
       - type: dir
         path: ../..

@@ -175,6 +175,11 @@ impl<'a> Presentation<'a> {
         };
         #[cfg(not(feature = "bud"))]
         let footer = WEBRTC_FOOTER;
+        let footer = if sample.phaze {
+            "Traffic counts received/sent DTLS datagrams, including encrypted control and retransmissions. Initial handshake, TURN encapsulation and IP/TCP/UDP headers are excluded. Audio payload bitrate counts delivered AAC/PCM bytes before decoding, excluding audio headers, transport overhead and duplicate retransmissions. RTT is the latest local command/ACK round trip, including host ACK scheduling; retransmitted commands are excluded and samples expire after 10 seconds. Host encode time remains unknown. Local dropped frames are not network packet loss."
+        } else {
+            footer
+        };
         let footer = if timing.requested {
             format!("{footer} Host timing averages and peaks cover the current diagnostic collection. These are host durations, not capture-to-display latency or GPU execution times.")
         } else {
@@ -453,6 +458,23 @@ fn rows_with_missing(
     #[cfg(not(feature = "bud"))]
     webrtc_network_rows(s, &mut row);
     row(crate::app_style::forms::STAT_VIDEO, String::new());
+    if s.phaze {
+        row(
+            "Requested maximum bitrate",
+            number(
+                s.phaze_video_request.map(|(mbps, _)| f64::from(mbps)),
+                "Mbps",
+            ),
+        );
+        row(
+            "Requested frame rate",
+            number(s.phaze_video_request.map(|(_, fps)| f64::from(fps)), "fps"),
+        );
+        row(
+            "Received video payload bitrate",
+            number(values.video_payload_mbps.filter(|_| recent_fresh), "Mbps"),
+        );
+    }
     let video = s.video.as_ref();
     row(
         crate::app_style::forms::STAT_CODEC,
@@ -715,7 +737,11 @@ fn rows_with_missing(
         },
     );
     row(
-        crate::app_style::forms::STAT_MEASURED_AUDIO_TRAFFIC,
+        if s.phaze {
+            crate::app_style::forms::STAT_AUDIO_PAYLOAD_BITRATE
+        } else {
+            crate::app_style::forms::STAT_MEASURED_AUDIO_TRAFFIC
+        },
         number(v.audio, "kbps"),
     );
     #[cfg(windows)]
@@ -871,6 +897,52 @@ pub fn compact_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phaze_audio_payload_rate_uses_measured_bytes_and_labels_its_scope() {
+        let before = Sample {
+            phaze: true,
+            state: "connected".into(),
+            audio_ready: true,
+            audio_codec: Some("AAC-LC"),
+            ..Default::default()
+        };
+        let mut current = before.clone();
+        current.at += std::time::Duration::from_secs(1);
+        current.audio_bytes = 24_000;
+        let mut rates = crate::stats::Rates::default();
+        rates.update(&before);
+        let values = rates.update(&current);
+        assert_eq!(values.audio, Some(192.0));
+        let view = Presentation::new(
+            &current,
+            &values,
+            (None, None, None),
+            None,
+            &Default::default(),
+        );
+        assert!(view.rows.contains(&(
+            crate::app_style::forms::STAT_AUDIO_PAYLOAD_BITRATE.into(),
+            "192.0 kbps".into()
+        )));
+        assert!(view.footer.contains("before decoding"));
+        assert!(!view
+            .rows
+            .iter()
+            .any(|(name, _)| name == crate::app_style::forms::STAT_MEASURED_AUDIO_TRAFFIC));
+        current.phaze = false;
+        let view = Presentation::new(
+            &current,
+            &values,
+            (None, None, None),
+            None,
+            &Default::default(),
+        );
+        assert!(view
+            .rows
+            .iter()
+            .any(|(name, _)| name == crate::app_style::forms::STAT_MEASURED_AUDIO_TRAFFIC));
+    }
 
     #[test]
     fn tabs_keep_every_detail_and_separate_video_audio_network_and_timings() {

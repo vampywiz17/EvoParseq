@@ -132,6 +132,7 @@ pub struct Settings {
     #[cfg_attr(target_os = "linux", serde(rename = "experimentalHidKeyboard"))]
     #[cfg_attr(not(target_os = "linux"), serde(alias = "experimentalHidKeyboard"))]
     pub hid_keyboard: bool,
+    pub phaze_input_mode: InputMode,
     pub prefer_hevc: bool,
     pub presentation_mode: PresentationMode,
     /// Optional RTX Video quality: 0 off, 1..=4 low through ultra.
@@ -204,6 +205,7 @@ impl Default for Settings {
             hid_mouse: false,
             #[cfg(any(feature = "bud", target_os = "linux"))]
             hid_keyboard: false,
+            phaze_input_mode: InputMode::Standard,
             prefer_hevc: false,
             presentation_mode: PresentationMode::Automatic,
             nvidia_vsr: 0,
@@ -762,6 +764,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn phaze_hid_modes_share_selection_and_preserve_parsec_preferences() {
+        let mut settings = Settings::default();
+        let parsec_mode = InputMode::current(&settings);
+        for (mode, expected) in [
+            (InputMode::Standard, (false, false)),
+            (InputMode::HidMouse, (true, false)),
+            (InputMode::HidKeyboard, (false, true)),
+            (InputMode::HidBoth, (true, true)),
+        ] {
+            assert_eq!(mode.devices(), expected);
+            mode.apply_for_service(&mut settings, true);
+            assert_eq!(InputMode::for_service(&settings, true), mode);
+            assert_eq!(InputMode::for_service(&settings, false), parsec_mode);
+            let restored: Settings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored.phaze_input_mode, mode);
+        }
+    }
     #[cfg(feature = "bud")]
     #[test]
     fn hid_input_preference_roundtrips_without_enabling_webrtc_input() {
@@ -1198,8 +1219,10 @@ impl BinaryChoice {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum InputMode {
+    #[default]
     Standard,
     HidMouse,
     HidKeyboard,
@@ -1212,20 +1235,34 @@ impl InputMode {
         Self::HidKeyboard,
         Self::HidBoth,
     ];
-    #[cfg(target_os = "linux")]
-    pub const LABELS: [&'static str; 4] = [
-        "Standard input",
-        "USB HID mouse (experimental)",
-        "USB HID keyboard (experimental)",
-        "USB HID mouse + keyboard (experimental)",
-    ];
-    #[cfg(not(target_os = "linux"))]
     pub const LABELS: [&'static str; 4] = [
         "Standard input",
         "USB HID mouse",
         "USB HID keyboard",
         "USB HID mouse + keyboard",
     ];
+    /// The Phaze USB transport uses the same device selection on every platform.
+    pub fn devices(self) -> (bool, bool) {
+        (
+            matches!(self, Self::HidMouse | Self::HidBoth),
+            matches!(self, Self::HidKeyboard | Self::HidBoth),
+        )
+    }
+    /// Parsec BUD and Phaze have separate persisted input preferences.
+    pub fn for_service(s: &Settings, phaze: bool) -> Self {
+        if phaze {
+            s.phaze_input_mode
+        } else {
+            Self::current(s)
+        }
+    }
+    pub fn apply_for_service(self, s: &mut Settings, phaze: bool) {
+        if phaze {
+            s.phaze_input_mode = self;
+        } else {
+            self.apply(s);
+        }
+    }
     pub fn current(s: &Settings) -> Self {
         #[cfg(feature = "bud")]
         {

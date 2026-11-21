@@ -32,6 +32,7 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_signIn(
     email: JString,
     password: JString,
     tfa: JString,
+    phaze: jni::sys::jboolean,
 ) -> jstring {
     let result = (|| -> anyhow::Result<Value> {
         let login = account::Login {
@@ -43,8 +44,13 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_signIn(
             .lock()
             .map_err(|_| anyhow::anyhow!("Account unavailable."))?;
         anyhow::ensure!(slot.is_none(), "Sign out before signing in again.");
-        *slot = Some(Arc::new(account::login(&login)?));
-        Ok(json!({"ok":true}))
+        let service = if phaze != 0 {
+            account::Service::Phaze
+        } else {
+            account::Service::Parsec
+        };
+        *slot = Some(Arc::new(account::login_service(&login, service)?));
+        Ok(json!({"ok":true,"signed_in_service":service.signed_in_label()}))
     })();
     reply(
         &mut env,
@@ -65,7 +71,8 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_rememberSession(
         let session = slot
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sign in first"))?;
-        let token = env.byte_array_from_slice(session.token().as_bytes())?;
+        let saved = session.saved_token();
+        let token = env.byte_array_from_slice(saved.as_bytes())?;
         env.call_method(&vault, "save", "([B)V", &[JValue::Object(token.as_ref())])?;
         session.remembered();
         Ok(json!({"ok":true}))
@@ -85,17 +92,18 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_restoreSession(
 ) -> jstring {
     let result = (|| -> anyhow::Result<Value> {
         anyhow::ensure!(
-            env.get_array_length(&token)? <= 4096,
+            env.get_array_length(&token)? <= 4102,
             "Invalid saved sign-in"
         );
         let bytes = Zeroizing::new(env.convert_byte_array(&token)?);
-        let session = Session::from_token(std::str::from_utf8(&bytes)?)?;
+        let session = Session::from_saved(std::str::from_utf8(&bytes)?)?;
         let mut slot = SESSION
             .lock()
             .map_err(|_| anyhow::anyhow!("Account unavailable"))?;
         anyhow::ensure!(slot.is_none(), "Already signed in");
+        let service = session.service();
         *slot = Some(Arc::new(session));
-        Ok(json!({"ok":true}))
+        Ok(json!({"ok":true,"signed_in_service":service.signed_in_label()}))
     })();
     reply(
         &mut env,
@@ -222,10 +230,28 @@ pub extern "system" fn Java_app_evoparseq_tv_NativeCore_settings(
             crate::preferences::Preferences::parse(&current)?
         };
         let field = text(&mut env, &field)?;
+        let service = SESSION
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Account unavailable"))?
+            .as_ref()
+            .map_or(account::Service::Parsec, |session| session.service());
         if !field.is_empty() {
-            value.select(&field, usize::try_from(index)?)?;
+            let index = usize::try_from(index)?;
+            let view = value.view_for(service);
+            anyhow::ensure!(
+                view["rows"]
+                    .as_array()
+                    .is_some_and(|rows| rows.iter().any(|row| {
+                        row["key"] == field
+                            && row["choices"]
+                                .as_array()
+                                .is_some_and(|choices| index < choices.len())
+                    })),
+                "Unavailable TV setting"
+            );
+            value.select_for_service(&field, index, service == account::Service::Parsec)?;
         }
-        Ok(value.view())
+        Ok(value.view_for(service))
     })();
     // Local malformed settings must not leak their raw content to the screen.
     reply(
