@@ -1048,8 +1048,14 @@ mod tests {
         let vdd = output(42, "PhazeVDD 1", true);
         let stale = output(41, "LS32AG55x", true);
         assert_eq!(startup_virtual_output(&[stale, vdd]), Some(42));
-        assert_eq!(startup_virtual_output(&[output(42, "PhazeVDD 1", false)]), None);
-        assert_eq!(startup_virtual_output(&[output(43, "Virtual Display 1", true)]), Some(43));
+        assert_eq!(
+            startup_virtual_output(&[output(42, "PhazeVDD 1", false)]),
+            None
+        );
+        assert_eq!(
+            startup_virtual_output(&[output(43, "Virtual Display 1", true)]),
+            Some(43)
+        );
     }
 
     #[test]

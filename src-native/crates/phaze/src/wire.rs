@@ -173,8 +173,17 @@ pub fn hello_with_virtual_display(
     // x, y, logical width/height, rotation, pixel width/height,
     // refresh numerator/denominator, reserved display capabilities.
     for word in [
-        0, 0, display.width, display.height, 0, display.width,
-        display.height, 60, 1, 0, 0,
+        0,
+        0,
+        display.width,
+        display.height,
+        0,
+        display.width,
+        display.height,
+        60,
+        1,
+        0,
+        0,
     ] {
         b.extend(word.to_be_bytes());
     }
@@ -586,16 +595,24 @@ fn vendor_client_display_handshake_matches_reconstructed_wire_layout() -> Result
         be(&hello_with_virtual_display(true, Some(display))?, 1),
         0x1c1
     );
-    for invalid in ["0x1080", "1920x0", "1920x1080x60", "8192x4320", "1920X1080", "bad"] {
+    for invalid in [
+        "0x1080",
+        "1920x0",
+        "1920x1080x60",
+        "8192x4320",
+        "1920X1080",
+        "bad",
+    ] {
         assert!(parse_virtual_client_display(invalid).is_err(), "{invalid}");
     }
-    assert!(
-        hello_with_virtual_display(false, Some(VirtualClientDisplay {
+    assert!(hello_with_virtual_display(
+        false,
+        Some(VirtualClientDisplay {
             width: 0,
             height: 1080
-        }))
-        .is_err()
-    );
+        })
+    )
+    .is_err());
     Ok(())
 }
 
