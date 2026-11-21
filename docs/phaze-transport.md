@@ -258,9 +258,12 @@ This transport measurement is separate from the requested encoder limit and
 from the received encoded payload rate.
 On a new connection, if the host still advertises an unplugged physical
 output but it produces no first video, the client makes a bounded attempt
-to switch to another active output the host has reported. This recovery
-is limited to startup, before the first frame; it never changes a live
-stream. A refreshed host output list can supply a newly created virtual
+to switch to another active output the host has reported. A still-active
+primary keeps a 12-second first-video grace before retry; a vanished output
+can be replaced immediately. After a delayed host display report or fallback
+request, the first-frame deadline is extended with a 40-second overall cap.
+This recovery is limited to startup, before the first frame; it never changes
+a live stream. A refreshed host output list can supply a newly created virtual
 display. If the host reports only the stale physical output, the client
 cannot force virtual-display creation with the currently implemented
 Phaze protocol: no undocumented display-layout request is sent. Linux

@@ -437,6 +437,19 @@ fn retry_startup_output(
     }
     next_startup_output(outputs, tried)
 }
+
+/// First-video acquisition is bounded even when the host announces displays
+/// late. Give each attempted startup output a useful window for encoder init.
+fn extend_first_video_deadline(
+    current: Instant,
+    app_started: Instant,
+    requested_at: Instant,
+    minimum_window: Duration,
+) -> Instant {
+    current
+        .max(requested_at + minimum_window)
+        .min(app_started + Duration::from_secs(40))
+}
 async fn handle_stun(
     s: &impl crate::Datagram,
     b: &[u8],
@@ -593,6 +606,7 @@ pub async fn run(
     sink.stage("waiting_outputs");
     let mut requested = false;
     let app_started = Instant::now();
+    let mut first_video_deadline = app_started + Duration::from_secs(20);
     let mut video_received = false;
     let mut last_heartbeat = Instant::now();
     let mut heartbeat_received = false;
@@ -614,7 +628,7 @@ pub async fn run(
             release_and_close(&mut c, &mut reliable, &socket, peer, usb_probe.as_mut()).await;
             bail!("Phaze peer heartbeat timed out");
         }
-        if !video_received && app_started.elapsed() >= Duration::from_secs(20) {
+        if !video_received && Instant::now() >= first_video_deadline {
             // The host owns session-created displays. Close the authenticated
             // session even if the first display or video was never ready.
             release_and_close(&mut c, &mut reliable, &socket, peer, usb_probe.as_mut()).await;
@@ -686,6 +700,12 @@ pub async fn run(
                     }
                     if alternate.is_some() && update.is_none() {
                         sink.stage("retrying_startup_display");
+                        first_video_deadline = extend_first_video_deadline(
+                            first_video_deadline,
+                            app_started,
+                            Instant::now(),
+                            Duration::from_secs(8),
+                        );
                     }
                     stream_request=update.or(alternate);
                     recovery_output = recovering.then_some(output);
@@ -786,7 +806,14 @@ pub async fn run(
                                 }
                                 selected_output = Some(output);
                                 startup_attempted.push(output);
-                                startup_requested_at = Some(Instant::now());
+                                let request_at = Instant::now();
+                                startup_requested_at = Some(request_at);
+                                first_video_deadline = extend_first_video_deadline(
+                                    first_video_deadline,
+                                    app_started,
+                                    request_at,
+                                    Duration::from_secs(20),
+                                );
                                 requested = true;
                                 stream_request = Some((output, config));
                                 sink.stage("video_requested");
@@ -1025,6 +1052,35 @@ mod tests {
             None
         );
         assert_eq!(next_startup_output(&[output(44, false, true)], &[]), None);
+    }
+
+    #[test]
+    fn late_host_output_list_preserves_fallback_video_budget() {
+        let start = Instant::now();
+        let initial_deadline = start + Duration::from_secs(20);
+        let first_output_at = start + Duration::from_secs(9);
+        let deadline = extend_first_video_deadline(
+            initial_deadline,
+            start,
+            first_output_at,
+            Duration::from_secs(20),
+        );
+        assert_eq!(deadline, start + Duration::from_secs(29));
+        let fallback_at = first_output_at + Duration::from_secs(12);
+        assert_eq!(
+            extend_first_video_deadline(deadline, start, fallback_at, Duration::from_secs(8)),
+            start + Duration::from_secs(29)
+        );
+        // A much later host response is still capped to avoid hanging.
+        assert_eq!(
+            extend_first_video_deadline(
+                initial_deadline,
+                start,
+                start + Duration::from_secs(35),
+                Duration::from_secs(20)
+            ),
+            start + Duration::from_secs(40)
+        );
     }
 
     #[test]
