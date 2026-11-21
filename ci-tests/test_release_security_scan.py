@@ -130,10 +130,24 @@ class Fixtures(unittest.TestCase):
         path = Mock(suffix=".apk")
         path.stat.return_value.st_size = 33 * 1024 * 1024
         client = scan.VirusTotal(KEY)
-        with patch.object(client, "request", side_effect=[{"data": scan.VT_API + "large"},
-                          {"data": {"id": "analysis"}}, {"data": {"attributes": DONE}}]) as request:
-            client.scan(path, HASH)
-            self.assertEqual(request.call_args_list[1].args[0], scan.VT_API + "large")
+        upload_url = "https://www.virustotal.com/_ah/upload/test_token-1/"
+        for original in (upload_url, "http" + upload_url[5:]):
+            with self.subTest(original=original), patch.object(scan, "command", side_effect=[
+                    json.dumps({"data": original}) + "\n200",
+                    '{"data":{"id":"analysis"}}\n200',
+                    json.dumps({"data": {"attributes": DONE}}) + "\n200"]) as run:
+                client.scan(path, HASH)
+                upload = run.call_args_list[1].args[0]
+                self.assertEqual(upload[upload.index("--url") + 1], upload_url)
+                self.assertEqual(upload[upload.index("--proto") + 1], "=https")
+        for original in ("http://evil.invalid/_ah/upload/token/",
+                         "http://www.virustotal.com/api/v3/files",
+                         "http://www.virustotal.com/_ah/upload/token/#fragment"):
+            with self.subTest(original=original), patch.object(scan, "command", return_value=
+                    json.dumps({"data": original}) + "\n200") as run:
+                with self.assertRaisesRegex(scan.ScanError, "untrusted endpoint"):
+                    client.scan(path, HASH)
+                self.assertEqual(run.call_count, 1)
 
     def test_same_hash_scanned_once_and_failures_do_not_turn_green(self):
         path = self.root / "a.exe"
@@ -286,6 +300,7 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(client.scan.call_count, 1)
         self.assertFalse(self.updates[-1]["draft"])
+        self.assertEqual(self.updates[-1]["tag_name"], draft["tag_name"])
         self.assertIn("Accepted exception (Trapmine)", self.updates[-1]["body"])
         self.assertIn("not a confirmed false positive", self.updates[-1]["body"])
         report = json.loads((self.root / "security-scan-results/SECURITY-SCAN.json").read_text())
@@ -328,6 +343,11 @@ class Fixtures(unittest.TestCase):
             with patch.object(scan, "github", side_effect=[initial, {"private": private}]):
                 with self.assertRaises(scan.ScanError):
                     scan.scan_release("a/b", 1, Mock(), self.root)
+
+    def test_concurrent_tag_changes_are_rejected(self):
+        draft = release() | {"draft": True, "published_at": None}
+        with self.assertRaisesRegex(scan.ScanError, "tag changed"):
+            self.run_release(draft, latest=draft | {"tag_name": "v2"}, publish=True)
 
     def test_changed_assets_do_not_publish_stale_results(self):
         with self.assertRaisesRegex(scan.ScanError, "changed"):
