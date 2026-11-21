@@ -201,8 +201,12 @@ def accepted_trapmine_finding(row):
 def needs_attention(row):
     stats = row.get("stats", {})
     flagged = stats.get("malicious", 0) > 0 or stats.get("suspicious", 0) > 0
+    trapmine_supported = sum(
+        engine.casefold() == "trapmine" and result.get("category") in ("undetected", "harmless")
+        for engine, result in row.get("results", {}).items())
+    other_supported = stats.get("undetected", 0) + stats.get("harmless", 0) - trapmine_supported
     return (row["status"] != "completed" or (flagged and not accepted_trapmine_finding(row))
-            or stats.get("undetected", 0) + stats.get("harmless", 0) == 0)
+            or other_supported <= 0)
 
 
 def markdown(report):

@@ -31,9 +31,10 @@ the already-published assets; it never rebuilds or modifies the executables.
 The repository owner excludes Trapmine from the publication decision for release
 assets. To allow a flagged scan through the gate, the engine key and engine name
 must both identify Trapmine, the only malicious or suspicious verdict must match
-the aggregate counts, and at least one other supported engine must report
-undetected or harmless. Missing details, inconsistent counts, incomplete
-analyses and any other engine's malicious or suspicious finding block release.
+the aggregate counts. The gate always requires at least one engine other than
+Trapmine to report undetected or harmless. Missing finding details,
+inconsistent finding counts, incomplete analyses and any other engine's
+malicious or suspicious finding block release.
 
 VirusTotal continues to run Trapmine. Original verdicts and counts stay in the
 reports. Markdown identifies an excluded finding, and JSON records the actual

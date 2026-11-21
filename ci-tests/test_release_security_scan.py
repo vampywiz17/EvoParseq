@@ -302,6 +302,12 @@ class Fixtures(unittest.TestCase):
             with self.subTest(candidate=candidate):
                 self.assertTrue(scan.needs_attention(candidate))
 
+    def test_trapmine_cannot_supply_the_only_supported_verdict(self):
+        results = {"Trapmine": {"engine_name": "Trapmine", "category": "undetected"}}
+        row = DONE | {"stats": STATS | {"undetected": 1}, "results": results}
+        self.assertTrue(scan.needs_attention(row))
+        self.assertFalse(scan.needs_attention(row | {"stats": STATS | {"undetected": 2}}))
+
     def test_accepted_exception_is_disclosed_before_publication(self):
         draft = release() | {"draft": True, "published_at": None}
         finding = {"engine_name": "Trapmine", "category": "malicious",
