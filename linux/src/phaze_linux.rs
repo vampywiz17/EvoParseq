@@ -105,6 +105,15 @@ impl phaze_client::Platform for Adapter<'_> {
     }
 
     fn outputs(&mut self, outputs: &[evoparseq_phaze::Output]) {
+        crate::event_log::record(
+            "INFO",
+            "phaze_displays_received",
+            serde_json::json!({
+                "count": outputs.len(),
+                "active": outputs.iter().filter(|output| output.active).count(),
+                "active_primary": outputs.iter().filter(|output| output.active && output.primary).count()
+            }),
+        );
         let mut host = self
             .telemetry
             .host

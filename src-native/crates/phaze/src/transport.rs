@@ -408,9 +408,15 @@ async fn release_and_close(
 }
 
 fn startup_output(outputs: &[wire::Output]) -> Option<u32> {
+    next_startup_output(outputs, &[])
+}
+
+/// Only retry outputs the host currently advertises as active. An inactive
+/// or vanished physical display must not stay selected on a fresh connection.
+fn next_startup_output(outputs: &[wire::Output], tried: &[u32]) -> Option<u32> {
     outputs
         .iter()
-        .filter(|output| output.active)
+        .filter(|output| output.active && !tried.contains(&output.id))
         .min_by_key(|output| !output.primary)
         .map(|output| output.id)
 }
@@ -576,6 +582,8 @@ pub async fn run(
     let mut heartbeat_timer = tokio::time::interval(Duration::from_millis(200));
     heartbeat_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut selected_output = None;
+    let mut startup_attempted = Vec::new();
+    let mut startup_requested_at: Option<Instant> = None;
     let mut input = Vec::new();
     let mut controls = Vec::new();
     let mut deferred_motion = None;
@@ -618,7 +626,27 @@ pub async fn run(
                     && reliable.pending().count() < 62
                     && sink.take_video_recovery();
                 let update = sink.stream_request();
-                let request = update.or_else(|| {
+                // Only during initial connection: an unplugged DP monitor can
+                // remain advertised by the host but produce no frames. If the
+                // host offers another active output, try it before the
+                // existing 20-second first-video deadline. No live switching.
+                let retry_startup = !video_received
+                    && requested
+                    && !hid_mouse
+                    && reliable.pending().count() < 48
+                    && startup_requested_at.is_some_and(|at| {
+                        at.elapsed() >= Duration::from_secs(3)
+                            || selected_output.is_some_and(|id| {
+                                !outputs_available
+                                    .iter()
+                                    .any(|output: &wire::Output| output.id == id && output.active)
+                            })
+                    });
+                let alternate = retry_startup
+                    .then(|| next_startup_output(&outputs_available, &startup_attempted))
+                    .flatten()
+                    .map(|output| (output, sink.video_config()));
+                let request = update.or(alternate).or_else(|| {
                     selected_output.filter(|_| recovering).map(|output| (output, sink.video_config()))
                 });
                 if let Some((output,config))=request {
@@ -633,7 +661,14 @@ pub async fn run(
                         for p in reliable.frame(command)? { send(&mut c,&p)?; }
                     }
                     selected_output=Some(output);
-                    stream_request=update;
+                    if !video_received && changing_output {
+                        startup_attempted.push(output);
+                        startup_requested_at = Some(Instant::now());
+                    }
+                    if alternate.is_some() && update.is_none() {
+                        sink.stage("retrying_startup_display");
+                    }
+                    stream_request=update.or(alternate);
                     recovery_output = recovering.then_some(output);
                 }
                 if let Some(output)=selected_output {
@@ -731,6 +766,8 @@ pub async fn run(
                                     send(&mut c, &p)?;
                                 }
                                 selected_output = Some(output);
+                                startup_attempted.push(output);
+                                startup_requested_at = Some(Instant::now());
                                 requested = true;
                                 stream_request = Some((output, config));
                                 sink.stage("video_requested");
@@ -920,6 +957,29 @@ mod tests {
             startup_output(&[output(2, true, false), output(3, true, true)]),
             Some(3)
         );
+    }
+
+    #[test]
+    fn headless_reconnect_retries_other_advertised_active_outputs() {
+        let output = |id, active, primary| wire::Output {
+            id,
+            name: String::new(),
+            width: 1920,
+            height: 1080,
+            active,
+            primary,
+        };
+        let initial = vec![output(41, true, true), output(42, true, false)];
+        assert_eq!(startup_output(&initial), Some(41));
+        // The old physical display may still be advertised as primary, but
+        // its capture is black after DP disconnection. Try the alternative.
+        assert_eq!(next_startup_output(&initial, &[41]), Some(42));
+        assert_eq!(next_startup_output(&initial, &[41, 42]), None);
+        // A later list can retire the old display and advertise a virtual one.
+        let refreshed = vec![output(41, false, true), output(43, true, true)];
+        assert_eq!(next_startup_output(&refreshed, &[41]), Some(43));
+        assert_eq!(next_startup_output(&[output(41, true, true)], &[41]), None);
+        assert_eq!(next_startup_output(&[output(44, false, true)], &[]), None);
     }
 
     #[test]

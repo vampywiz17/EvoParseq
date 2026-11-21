@@ -256,6 +256,16 @@ feedback contains two smoothed bounds in bytes per second. Short, incomplete
 or coalesced samples without enough usable intervals produce no estimate.
 This transport measurement is separate from the requested encoder limit and
 from the received encoded payload rate.
+On a new connection, if the host still advertises an unplugged physical
+output but it produces no first video, the client makes a bounded attempt
+to switch to another active output the host has reported. This recovery
+is limited to startup, before the first frame; it never changes a live
+stream. A refreshed host output list can supply a newly created virtual
+display. If the host reports only the stale physical output, the client
+cannot force virtual-display creation with the currently implemented
+Phaze protocol: no undocumented display-layout request is sent. Linux
+logs active/primary output counts without logging output names.
+
 Host resolution/rotation/constant-FPS, display refresh requests,
 additional simultaneous displays and USB forwarding remain unavailable until
 implemented. The official product's support does not establish our client support.
