@@ -414,14 +414,33 @@ fn startup_output(outputs: &[wire::Output]) -> Option<u32> {
 /// In explicitly requested client-layout mode, never select a still-advertised
 /// physical output while waiting for the Phaze virtual display to appear.
 fn startup_virtual_output(outputs: &[wire::Output]) -> Option<u32> {
+    next_startup_virtual_output(outputs, &[])
+}
+fn next_startup_virtual_output(outputs: &[wire::Output], tried: &[u32]) -> Option<u32> {
     outputs
         .iter()
-        .find(|output| {
+        .filter(|output| {
             output.active
+                && !tried.contains(&output.id)
                 && (output.name.starts_with("PhazeVDD")
                     || output.name.to_ascii_lowercase().contains("virtual"))
         })
+        .min_by_key(|output| !output.primary)
         .map(|output| output.id)
+}
+fn retry_startup_virtual_output(
+    outputs: &[wire::Output],
+    tried: &[u32],
+    selected: u32,
+    elapsed: Duration,
+) -> Option<u32> {
+    let selected_active = outputs
+        .iter()
+        .any(|output| output.id == selected && output.active);
+    if selected_active && elapsed < Duration::from_secs(12) {
+        return None;
+    }
+    next_startup_virtual_output(outputs, tried)
 }
 
 /// Only retry outputs the host currently advertises as active. An inactive
@@ -691,12 +710,21 @@ pub async fn run(
                     .then(|| {
                         selected_output.and_then(|selected| {
                             startup_requested_at.and_then(|at| {
-                                retry_startup_output(
-                                    &outputs_available,
-                                    &startup_attempted,
-                                    selected,
-                                    at.elapsed(),
-                                )
+                                if virtual_display.is_some() {
+                                    retry_startup_virtual_output(
+                                        &outputs_available,
+                                        &startup_attempted,
+                                        selected,
+                                        at.elapsed(),
+                                    )
+                                } else {
+                                    retry_startup_output(
+                                        &outputs_available,
+                                        &startup_attempted,
+                                        selected,
+                                        at.elapsed(),
+                                    )
+                                }
                             })
                         })
                     })
@@ -1048,6 +1076,24 @@ mod tests {
         let vdd = output(42, "PhazeVDD 1", true);
         let stale = output(41, "LS32AG55x", true);
         assert_eq!(startup_virtual_output(&[stale, vdd]), Some(42));
+        let displays = [
+            output(41, "LS32AG55x", true),
+            output(42, "PhazeVDD 1", true),
+        ];
+        assert_eq!(
+            retry_startup_virtual_output(&displays, &[42], 42, Duration::from_secs(13)),
+            None,
+            "Virtual-only retry must never select the stale physical display"
+        );
+        let displays = [
+            output(41, "LS32AG55x", true),
+            output(42, "PhazeVDD 1", true),
+            output(43, "PhazeVDD 2", true),
+        ];
+        assert_eq!(
+            retry_startup_virtual_output(&displays, &[42], 42, Duration::from_secs(13)),
+            Some(43)
+        );
         assert_eq!(
             startup_virtual_output(&[output(42, "PhazeVDD 1", false)]),
             None
