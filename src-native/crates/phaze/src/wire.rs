@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Result};
+use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -117,8 +117,72 @@ pub(crate) fn ack_bandwidth(ack: &[u8]) -> Option<(f64, f64)> {
 pub fn hello(raw_audio: bool) -> Vec<u8> {
     let mut b = vec![18];
     b.extend(u32::from(raw_audio).to_be_bytes());
-    b.extend(0u32.to_be_bytes()); // No virtual client display layout.
+    b.extend(0u32.to_be_bytes()); // Legacy host-driven layout.
     b
+}
+
+/// Experimental, explicit client-side display layout. The 0x1c0 option
+/// mask matches the vendor client's mirror-layout + client-display mode.
+/// Only independently reconstructed wire fields are sent; no native code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VirtualClientDisplay {
+    pub width: u32,
+    pub height: u32,
+}
+pub fn parse_virtual_client_display(value: &str) -> Result<VirtualClientDisplay> {
+    let (width, height) = value.split_once('x').context("Expected WIDTHxHEIGHT")?;
+    let width: u32 = width.parse().context("Invalid virtual display width")?;
+    let height: u32 = height.parse().context("Invalid virtual display height")?;
+    let display = VirtualClientDisplay { width, height };
+    ensure!(
+        (320..=8192).contains(&width)
+            && (240..=4320).contains(&height)
+            && u64::from(width) * u64::from(height) <= 33_177_600,
+        "Virtual display dimensions are out of range"
+    );
+    Ok(display)
+}
+
+/// Independently reconstructed from the Phaze 0.14.3 client serializer:
+/// 18 | BE options | BE count | (BE id, BE UTF-8 length, name, 11 BE
+/// display words, two BE fixed-point scale values, active, primary).
+/// The on-wire tail shares the 54-byte format accepted by outputs().
+/// Host acceptance and VDD behavior require live validation.
+pub fn hello_with_virtual_display(
+    raw_audio: bool,
+    display: Option<VirtualClientDisplay>,
+) -> Result<Vec<u8>> {
+    let mut b = hello(raw_audio);
+    let Some(display) = display else {
+        return Ok(b);
+    };
+    ensure!(
+        (320..=8192).contains(&display.width)
+            && (240..=4320).contains(&display.height)
+            && u64::from(display.width) * u64::from(display.height) <= 33_177_600,
+        "Virtual display dimensions are out of range"
+    );
+    const NAME: &[u8] = b"EvoParseq Virtual";
+    const CLIENT_LAYOUT_FLAGS: u32 = 0x100 | 0xc0;
+    let flags = u32::from(raw_audio) | CLIENT_LAYOUT_FLAGS;
+    b[1..5].copy_from_slice(&flags.to_be_bytes());
+    b[5..9].copy_from_slice(&1u32.to_be_bytes());
+    b.extend(0x4556_5031u32.to_be_bytes()); // Stable, synthetic client display ID.
+    b.extend((NAME.len() as u32).to_be_bytes());
+    b.extend(NAME);
+    // x, y, logical width/height, rotation, pixel width/height,
+    // refresh numerator/denominator, reserved display capabilities.
+    for word in [
+        0, 0, display.width, display.height, 0, display.width,
+        display.height, 60, 1, 0, 0,
+    ] {
+        b.extend(word.to_be_bytes());
+    }
+    // The vendor serializer scales both normalized floating values by 10,000.
+    b.extend(10_000u32.to_be_bytes());
+    b.extend(10_000u32.to_be_bytes());
+    b.extend([1, 1]); // Active, primary.
+    Ok(b)
 }
 
 pub(crate) fn video_request(
@@ -493,6 +557,48 @@ impl Reliable {
         Some(ack)
     }
 }
+#[cfg(test)]
+#[test]
+fn vendor_client_display_handshake_matches_reconstructed_wire_layout() -> Result<()> {
+    let display = parse_virtual_client_display("1920x1080")?;
+    let hello = hello_with_virtual_display(false, Some(display))?;
+    assert_eq!(&hello[0..1], &[18]);
+    assert_eq!(be(&hello, 1), 0x1c0);
+    assert_eq!(be(&hello, 5), 1);
+    assert_eq!(be(&hello, 9), 0x4556_5031);
+    let name_len = be(&hello, 13) as usize;
+    assert_eq!(&hello[17..17 + name_len], b"EvoParseq Virtual");
+    let tail = 17 + name_len;
+    assert_eq!(hello.len(), tail + 54);
+    assert_eq!(be(&hello, tail), 0); // x
+    assert_eq!(be(&hello, tail + 4), 0); // y
+    assert_eq!(be(&hello, tail + 8), 1920);
+    assert_eq!(be(&hello, tail + 12), 1080);
+    assert_eq!(be(&hello, tail + 44), 10_000);
+    assert_eq!(be(&hello, tail + 48), 10_000);
+    assert_eq!(&hello[tail + 52..], &[1, 1]);
+    assert_eq!(
+        hello_with_virtual_display(true, None)?,
+        hello(true),
+        "Disabled experiment must preserve the current handshake"
+    );
+    assert_eq!(
+        be(&hello_with_virtual_display(true, Some(display))?, 1),
+        0x1c1
+    );
+    for invalid in ["0x1080", "1920x0", "1920x1080x60", "8192x4320", "1920X1080", "bad"] {
+        assert!(parse_virtual_client_display(invalid).is_err(), "{invalid}");
+    }
+    assert!(
+        hello_with_virtual_display(false, Some(VirtualClientDisplay {
+            width: 0,
+            height: 1080
+        }))
+        .is_err()
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 #[test]
 fn wire_contracts() -> Result<()> {

@@ -411,6 +411,19 @@ fn startup_output(outputs: &[wire::Output]) -> Option<u32> {
     next_startup_output(outputs, &[])
 }
 
+/// In explicitly requested client-layout mode, never select a still-advertised
+/// physical output while waiting for the Phaze virtual display to appear.
+fn startup_virtual_output(outputs: &[wire::Output]) -> Option<u32> {
+    outputs
+        .iter()
+        .find(|output| {
+            output.active
+                && (output.name.starts_with("PhazeVDD")
+                    || output.name.to_ascii_lowercase().contains("virtual"))
+        })
+        .map(|output| output.id)
+}
+
 /// Only retry outputs the host currently advertises as active. An inactive
 /// or vanished physical display must not stay selected on a fresh connection.
 fn next_startup_output(outputs: &[wire::Output], tried: &[u32]) -> Option<u32> {
@@ -597,7 +610,17 @@ pub async fn run(
     if usb_probe.is_some() {
         sink.usb_probe_event("started", None, 0);
     }
-    for p in reliable.frame(&wire::hello(sink.raw_audio()))? {
+    // Opt-in diagnostic mode: do not change the normal host-selected layout.
+    // Recovered from the vendor client; host/VDD behavior is not yet proven.
+    let virtual_display = std::env::var("EVOPARSEQ_PHAZE_CLIENT_LAYOUT")
+        .ok()
+        .map(|value| wire::parse_virtual_client_display(&value))
+        .transpose()?;
+    if virtual_display.is_some() {
+        sink.stage("requesting_client_virtual_display");
+    }
+    let hello = wire::hello_with_virtual_display(sink.raw_audio(), virtual_display)?;
+    for p in reliable.frame(&hello)? {
         send(&mut c, &p)?;
     }
     let transmission_started = Instant::now();
@@ -799,7 +822,12 @@ pub async fn run(
                         if !requested {
                             // A headless host can publish the list before it
                             // has finished applying the display layout.
-                            if let Some(output) = startup_output(&outputs) {
+                            let preferred = if virtual_display.is_some() {
+                                startup_virtual_output(&outputs)
+                            } else {
+                                startup_output(&outputs)
+                            };
+                            if let Some(output) = preferred {
                                 let config = sink.video_config();
                                 for p in reliable.frame(&config.request(output)?)? {
                                     send(&mut c, &p)?;
@@ -1003,6 +1031,25 @@ mod tests {
             startup_output(&[output(2, true, false), output(3, true, true)]),
             Some(3)
         );
+    }
+
+    #[test]
+    fn client_layout_waits_for_virtual_output_not_stale_physical_output() {
+        let output = |id, name: &str, active| wire::Output {
+            id,
+            name: name.to_string(),
+            width: 1920,
+            height: 1080,
+            active,
+            primary: true,
+        };
+        let stale = output(41, "LS32AG55x", true);
+        assert_eq!(startup_virtual_output(&[stale]), None);
+        let vdd = output(42, "PhazeVDD 1", true);
+        let stale = output(41, "LS32AG55x", true);
+        assert_eq!(startup_virtual_output(&[stale, vdd]), Some(42));
+        assert_eq!(startup_virtual_output(&[output(42, "PhazeVDD 1", false)]), None);
+        assert_eq!(startup_virtual_output(&[output(43, "Virtual Display 1", true)]), Some(43));
     }
 
     #[test]

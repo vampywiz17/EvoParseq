@@ -264,10 +264,23 @@ can be replaced immediately. After a delayed host display report or fallback
 request, the first-frame deadline is extended with a 40-second overall cap.
 This recovery is limited to startup, before the first frame; it never changes
 a live stream. A refreshed host output list can supply a newly created virtual
-display. If the host reports only the stale physical output, the client
-cannot force virtual-display creation with the currently implemented
-Phaze protocol: no undocumented display-layout request is sent. Linux
-logs active/primary output counts without logging output names.
+display. If the host reports only a stale physical output, ordinary startup
+fallback cannot switch to a nonexistent alternative. Experimental client-
+layout handshake support is now available behind the process environment
+variable `EVOPARSEQ_PHAZE_CLIENT_LAYOUT=1920x1080` (WIDTHxHEIGHT,
+320–8192 by 240–4320, maximum 33,177,600 pixels). The default remains
+the original host-selected layout and sends identical handshake bytes.
+Only when opted in, the reconstructed Phaze 0.14.3 client-layout flags
+(0x1c0), one synthetic primary display and a bounded display description
+are sent at authenticated startup. The client then waits specifically for
+an active host-reported PhazeVDD/virtual output rather than requesting the
+stale physical one. The byte order and record shape were independently
+checked against the installed vendor client binary, but the synthetic
+field defaults and host VDD acceptance still require live validation.
+The experiment must not be described as an automatic headless fix, and
+the client does not modify the host or install drivers. To disable it,
+remove the variable and relaunch EvoParseq.
+Linux logs active/primary output counts without logging output names.
 
 Host resolution/rotation/constant-FPS, display refresh requests,
 additional simultaneous displays and USB forwarding remain unavailable until
