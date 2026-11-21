@@ -420,6 +420,23 @@ fn next_startup_output(outputs: &[wire::Output], tried: &[u32]) -> Option<u32> {
         .min_by_key(|output| !output.primary)
         .map(|output| output.id)
 }
+
+/// Give an advertised active primary enough time to start its encoder. A
+/// vanished output is different: immediately try another advertised output.
+fn retry_startup_output(
+    outputs: &[wire::Output],
+    tried: &[u32],
+    selected: u32,
+    elapsed: Duration,
+) -> Option<u32> {
+    let selected_active = outputs
+        .iter()
+        .any(|output| output.id == selected && output.active);
+    if selected_active && elapsed < Duration::from_secs(12) {
+        return None;
+    }
+    next_startup_output(outputs, tried)
+}
 async fn handle_stun(
     s: &impl crate::Datagram,
     b: &[u8],
@@ -630,20 +647,22 @@ pub async fn run(
                 // remain advertised by the host but produce no frames. If the
                 // host offers another active output, try it before the
                 // existing 20-second first-video deadline. No live switching.
-                let retry_startup = !video_received
+                let alternate = (!video_received
                     && requested
                     && !hid_mouse
-                    && reliable.pending().count() < 48
-                    && startup_requested_at.is_some_and(|at| {
-                        at.elapsed() >= Duration::from_secs(3)
-                            || selected_output.is_some_and(|id| {
-                                !outputs_available
-                                    .iter()
-                                    .any(|output: &wire::Output| output.id == id && output.active)
+                    && reliable.pending().count() < 48)
+                    .then(|| {
+                        selected_output.and_then(|selected| {
+                            startup_requested_at.and_then(|at| {
+                                retry_startup_output(
+                                    &outputs_available,
+                                    &startup_attempted,
+                                    selected,
+                                    at.elapsed(),
+                                )
                             })
-                    });
-                let alternate = retry_startup
-                    .then(|| next_startup_output(&outputs_available, &startup_attempted))
+                        })
+                    })
                     .flatten()
                     .map(|output| (output, sink.video_config()));
                 let request = update.or(alternate).or_else(|| {
@@ -974,11 +993,32 @@ mod tests {
         // The old physical display may still be advertised as primary, but
         // its capture is black after DP disconnection. Try the alternative.
         assert_eq!(next_startup_output(&initial, &[41]), Some(42));
+        // Do not interrupt a healthy primary that simply needs extra time
+        // to start encoding after a normal connection.
+        assert_eq!(
+            retry_startup_output(&initial, &[41], 41, Duration::from_secs(4)),
+            None
+        );
+        assert_eq!(
+            retry_startup_output(&initial, &[41], 41, Duration::from_secs(11)),
+            None
+        );
+        assert_eq!(
+            retry_startup_output(&initial, &[41], 41, Duration::from_secs(12)),
+            Some(42)
+        );
         assert_eq!(next_startup_output(&initial, &[41, 42]), None);
-        // A later list can retire the old display and advertise a virtual one.
+        // A refreshed list can retire the old display and advertise a
+        // virtual one. No 12-second wait is needed in that case.
         let refreshed = vec![output(41, false, true), output(43, true, true)];
-        assert_eq!(next_startup_output(&refreshed, &[41]), Some(43));
-        assert_eq!(next_startup_output(&[output(41, true, true)], &[41]), None);
+        assert_eq!(
+            retry_startup_output(&refreshed, &[41], 41, Duration::from_millis(10)),
+            Some(43)
+        );
+        assert_eq!(
+            retry_startup_output(&[output(41, true, true)], &[41], 41, Duration::from_secs(20)),
+            None
+        );
         assert_eq!(next_startup_output(&[output(44, false, true)], &[]), None);
     }
 
