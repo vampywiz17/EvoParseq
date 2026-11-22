@@ -117,17 +117,30 @@ fn run() -> Result<()> {
     }
 }
 
+// Keep these decisions independent of Windows GPU enumeration and network
+// access so first-run, corrupted-settings and cached-startup behavior can be
+// tested on a GitHub runner without an NVIDIA device.
+fn vsr_preparation_allowed(bridge_supported: bool, settings_valid: bool) -> bool {
+    bridge_supported && settings_valid
+}
+
+fn vsr_update_needed(cache_verified: bool, signed_updates: bool) -> bool {
+    !cache_verified || signed_updates
+}
+
 fn prepare_vsr_runtime(settings: &crate::connection_settings::Manager) {
     use crate::connection_settings::VsrRuntimeConsent;
-    if !crate::vsr_runtime::bridge_supported() || settings.view().1.is_some() {
+    if !vsr_preparation_allowed(
+        crate::vsr_runtime::bridge_supported(),
+        settings.view().1.is_none(),
+    ) {
         return;
     }
     let data = settings.directory();
     let reused = crate::vsr_runtime::reuse_previous(&data).unwrap_or(false);
-    // Even when the adapter is installed, a signed manifest may advertise
-    // newer compatible bytes. Offline startup retains the previous verified
-    // DLL and must never block normal video playback.
-    if reused && !crate::vsr_runtime::updates_enabled() {
+    // Reuse the verified cached DLL without network traffic if signed
+    // updates are unavailable; signed builds must recheck their manifest.
+    if !vsr_update_needed(reused, crate::vsr_runtime::updates_enabled()) {
         return;
     }
     if !crate::gpu_windows::enumerate()
@@ -191,6 +204,27 @@ fn prepare_vsr_runtime(settings: &crate::connection_settings::Manager) {
 
 #[cfg(test)]
 mod vsr_runtime_guard_tests {
+    #[test]
+    fn startup_does_not_attempt_optional_vsr_without_bridge_or_valid_settings() {
+        assert!(!super::vsr_preparation_allowed(false, false));
+        assert!(!super::vsr_preparation_allowed(false, true));
+        assert!(!super::vsr_preparation_allowed(true, false));
+        assert!(super::vsr_preparation_allowed(true, true));
+    }
+
+    #[test]
+    fn startup_reuses_verified_bridge_without_redundant_download() {
+        // A legacy/pinned EXE with the DLL already cached must skip the
+        // startup download even if a different EXE version is installed.
+        assert!(!super::vsr_update_needed(true, false));
+        // A manifest-aware build must still check for a new signed release,
+        // but the updater compares the SHA-256 before downloading a DLL.
+        assert!(super::vsr_update_needed(true, true));
+        // A first-run install has to be attempted regardless of channel.
+        assert!(super::vsr_update_needed(false, false));
+        assert!(super::vsr_update_needed(false, true));
+    }
+
     #[test]
     fn corrupt_settings_never_start_optional_nvidia_download() {
         let fixture = std::env::temp_dir().join(format!(
