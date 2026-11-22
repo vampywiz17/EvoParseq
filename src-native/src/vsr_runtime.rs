@@ -74,12 +74,36 @@ fn verify(path: &Path, size: u64, expected: &str) -> Result<()> {
 /// Accept the final HTTPS response body regardless of whether NVIDIA served it
 /// directly or reqwest already followed its redirects. The immutable archive
 /// size and SHA-256 remain mandatory before any extraction.
-fn save_checked_archive(mut body: impl Read, path: &Path, size: u64, expected: &str) -> Result<()> {
+fn save_checked_archive(body: impl Read, path: &Path, size: u64, expected: &str) -> Result<()> {
     let mut file = File::create(path)?;
     let count = std::io::copy(&mut body.take(size + 1), &mut file)?;
     drop(file);
     ensure!(count == size, "NVIDIA SDK download size mismatch");
     verify(path, size, expected)
+}
+
+/// The NGC API sometimes sends a redirect or a 200 metadata response with a
+/// Location header instead of archive bytes. Never interpret that body as ZIP.
+/// An ordinary 200 with no Location is a direct archive response.
+fn archive_download_location(
+    origin: &reqwest::Url,
+    status: reqwest::StatusCode,
+    location: Option<&str>,
+) -> Result<Option<reqwest::Url>> {
+    ensure!(
+        status.is_success() || status.is_redirection(),
+        "NVIDIA download service rejected the request"
+    );
+    if let Some(value) = location {
+        let url = origin.join(value)?;
+        ensure!(url.scheme() == "https", "NVIDIA download must use HTTPS");
+        return Ok(Some(url));
+    }
+    ensure!(
+        status.is_success(),
+        "NVIDIA download location missing from redirect response"
+    );
+    Ok(None)
 }
 pub fn validated_directory() -> Result<PathBuf> {
     let root = directory()?;
@@ -221,18 +245,32 @@ pub fn install() -> Result<()> {
     if verify(&root.join("nvngx_vsr.dll"), DLL_SIZE, DLL_HASH).is_ok() {
         return Ok(());
     }
-    let response = client
+    // Discover NGC's archive response WITHOUT auto-following redirects: doing
+    // so loses the Location header that NGC sometimes uses as metadata.
+    let discovery = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    let initial = discovery
         .get(URL)
         .send()
-        .context("Cannot contact NVIDIA download service")?
+        .context("Cannot contact NVIDIA download service")?;
+    let location = initial
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .map(|value| value.to_str())
+        .transpose()?;
+    let target = archive_download_location(initial.url(), initial.status(), location)?;
+    let response = if let Some(url) = target {
+        client.get(url).send()
+            .context("Cannot fetch NVIDIA's HTTPS archive location")?
+    } else {
+        initial
+    };
+    let response = response
         .error_for_status()
-        .context("NVIDIA download service rejected the request")?;
-    // The client follows HTTPS redirects automatically. A successful final
-    // response normally has no Location header, so never require one here.
-    ensure!(
-        response.url().scheme() == "https",
-        "NVIDIA download must use HTTPS"
-    );
+        .context("NVIDIA archive download was rejected")?;
+    ensure!(response.url().scheme() == "https", "NVIDIA download must use HTTPS");
     save_checked_archive(response, &temporary.0, ARCHIVE_SIZE, ARCHIVE_HASH)?;
     // These offsets are valid ONLY after checking the complete immutable SDK
     // 1.1.0 archive hash above. No filenames from an archive become filesystem paths.
@@ -269,6 +307,28 @@ fn extract(archive: &Path, output: &Path, offset: u64, compressed: u64, size: u6
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn nvidia_download_discovery_handles_metadata_redirect_and_direct_body() {
+        let origin = reqwest::Url::parse(URL).unwrap();
+        assert!(archive_download_location(&origin, reqwest::StatusCode::OK, None)
+            .unwrap().is_none());
+        let redirect = "https://download.nvidia.com/rtx-video-sdk.zip";
+        assert_eq!(
+            archive_download_location(&origin, reqwest::StatusCode::FOUND, Some(redirect))
+                .unwrap().unwrap().as_str(),
+            redirect,
+        );
+        assert_eq!(
+            archive_download_location(&origin, reqwest::StatusCode::OK, Some(redirect))
+                .unwrap().unwrap().as_str(),
+            redirect,
+        );
+        assert!(archive_download_location(&origin, reqwest::StatusCode::FOUND, None).is_err());
+        assert!(archive_download_location(
+            &origin, reqwest::StatusCode::FOUND, Some("http://other.example/zip")
+        ).is_err());
+    }
+
     #[test]
     fn pinned_download_accepts_final_response_body_without_location_header() {
         let path = std::env::temp_dir().join(format!(
