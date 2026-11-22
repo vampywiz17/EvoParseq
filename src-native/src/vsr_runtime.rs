@@ -43,8 +43,10 @@ pub fn directory() -> Result<PathBuf> {
 fn bridge_path(root: &Path) -> PathBuf {
     // Allow different versions of EvoParseq to run concurrently; DLLs are
     // immutable by digest and Windows keeps loaded modules locked.
-    root.join(format!("evoparseq-ngx-bridge-{}.dll",
-        BRIDGE_HASH.unwrap_or("unavailable")))
+    root.join(format!(
+        "evoparseq-ngx-bridge-{}.dll",
+        BRIDGE_HASH.unwrap_or("unavailable")
+    ))
 }
 
 pub fn validated_bridge_path() -> Result<PathBuf> {
@@ -77,14 +79,23 @@ pub fn validated_directory() -> Result<PathBuf> {
 }
 /// Verify the exact release adapter built for this executable before LoadLibraryExW.
 fn verify_bridge(path: &Path) -> Result<()> {
-    let expected = BRIDGE_HASH.context("This build has no pinned NVIDIA NGX bridge; build through the Windows release CI")?;
-    ensure!(expected.len() == 64 && expected.bytes().all(|c| c.is_ascii_hexdigit()),
-        "Invalid compile-time NGX bridge digest");
-    let file = File::open(path).context("NVIDIA NGX adapter not installed; approve its download in Settings")?;
-    ensure!(file.metadata()?.len() > 0 && file.metadata()?.len() <= BRIDGE_MAX_SIZE,
-        "Invalid NVIDIA NGX adapter size");
-    ensure!(hash(&file)?.eq_ignore_ascii_case(expected),
-        "NVIDIA NGX adapter checksum mismatch");
+    let expected = BRIDGE_HASH.context(
+        "This build has no pinned NVIDIA NGX bridge; build through the Windows release CI",
+    )?;
+    ensure!(
+        expected.len() == 64 && expected.bytes().all(|c| c.is_ascii_hexdigit()),
+        "Invalid compile-time NGX bridge digest"
+    );
+    let file = File::open(path)
+        .context("NVIDIA NGX adapter not installed; approve its download in Settings")?;
+    ensure!(
+        file.metadata()?.len() > 0 && file.metadata()?.len() <= BRIDGE_MAX_SIZE,
+        "Invalid NVIDIA NGX adapter size"
+    );
+    ensure!(
+        hash(&file)?.eq_ignore_ascii_case(expected),
+        "NVIDIA NGX adapter checksum mismatch"
+    );
     Ok(())
 }
 
@@ -92,20 +103,28 @@ fn verify_bridge(path: &Path) -> Result<()> {
 /// The checksum itself is compiled into the EXE, not fetched from a mutable manifest.
 fn install_bridge(root: &Path, client: &reqwest::blocking::Client) -> Result<()> {
     let expected = BRIDGE_HASH.context("This build has no NVIDIA NGX adapter digest")?;
-    ensure!(expected.len() == 64 && expected.bytes().all(|c| c.is_ascii_hexdigit()),
-        "Invalid NGX adapter digest");
+    ensure!(
+        expected.len() == 64 && expected.bytes().all(|c| c.is_ascii_hexdigit()),
+        "Invalid NGX adapter digest"
+    );
     let version = env!("CARGO_PKG_VERSION");
     let url = format!(
         "https://github.com/vampywiz17/EvoParseq/releases/download/v{version}/EvoParseq-NGX-Bridge.dll"
     );
-    let response = client.get(url).send()
+    let response = client
+        .get(url)
+        .send()
         .context("Cannot download the optional NGX adapter from the matching EvoParseq release")?
-        .error_for_status().context("The matching NGX adapter release asset is unavailable")?;
+        .error_for_status()
+        .context("The matching NGX adapter release asset is unavailable")?;
     let temp = Temporary(root.join("ngx-bridge.tmp"));
     let mut file = File::create(&temp.0)?;
     let length = std::io::copy(&mut response.take(BRIDGE_MAX_SIZE + 1), &mut file)?;
     drop(file);
-    ensure!(length > 0 && length <= BRIDGE_MAX_SIZE, "NGX adapter exceeds size limit");
+    ensure!(
+        length > 0 && length <= BRIDGE_MAX_SIZE,
+        "NGX adapter exceeds size limit"
+    );
     verify_bridge(&temp.0)?;
     let target = bridge_path(root);
     if target.exists() {
