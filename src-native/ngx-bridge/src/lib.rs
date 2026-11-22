@@ -80,8 +80,8 @@ pub unsafe extern "C" fn evoparseq_ngx_create(
         // Optional, bounded client-side diagnostics; unchanged NGX feature path.
         logging: Logging {
             callback: log_callback,
-            level: if log_callback.is_some() { 2 } else { 0 },
-            other_sinks_disabled: false,
+            level: if log_callback.is_some() { 1 } else { 0 },
+            other_sinks_disabled: log_callback.is_some(),
         },
     };
     let result = NVSDK_NGX_D3D11_Init(0, directory, device, &common, 0x15);
