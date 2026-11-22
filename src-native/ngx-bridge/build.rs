@@ -8,7 +8,7 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", lib.parent().unwrap().display());
     println!("cargo:rustc-link-lib=static=nvsdk_ngx_s");
     for name in ["advapi32", "shell32", "ole32", "shlwapi", "version",
-                 "wintrust", "crypt32", "dxgi", "d3d11"] {
+                 "wintrust", "crypt32", "dxgi", "d3d11", "user32"] {
         println!("cargo:rustc-link-lib={name}");
     }
 }
