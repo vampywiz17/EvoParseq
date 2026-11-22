@@ -2280,9 +2280,25 @@ fn nvidia_vsr_eligible(nvidia: bool, upscale: bool, format: DXGI_FORMAT) -> bool
     nvidia && upscale && matches!(format, DXGI_FORMAT_NV12 | DXGI_FORMAT_P010)
 }
 
+const VSR_RETRY: &str = "video-processor-vsr-retry";
+
+fn vsr_blt_result(
+    result: windows::core::Result<()>,
+    driver_requested: bool,
+    device_status: impl FnOnce() -> windows::core::Result<()>,
+) -> Result<()> {
+    let stage = if result.is_err() && driver_requested {
+        api("video-processor-blt", device_status())?;
+        VSR_RETRY
+    } else {
+        "video-processor-blt"
+    };
+    api(stage, result)
+}
+
 fn retry_rejected_vsr<T>(mut present: impl FnMut() -> Result<T>) -> Result<T> {
     match present() {
-        Err(error) if error.stage == "video-processor-vsr-retry" => present(),
+        Err(error) if error.stage == VSR_RETRY => present(),
         result => result,
     }
 }
@@ -2863,8 +2879,18 @@ impl Renderer {
         _window: &crate::window::Window,
     ) -> Result<Presentation> {
         self.ten_bit_attempted = false;
-        let result =
-            retry_rejected_vsr(|| self.present_frame(texture, subresource, source, color, shared));
+        let result = retry_rejected_vsr(|| {
+            let result = self.present_frame(texture, subresource, source, color, shared);
+            if let Err(error) = &result {
+                if error.stage == VSR_RETRY {
+                    // The failed frame has released its backbuffer references.
+                    self.disable_vsr(error.hresult.as_deref().unwrap_or(error.stage));
+                    self.processor = None;
+                    update(shared, |s| s.vsr_status = self.vsr_status);
+                }
+            }
+            result
+        });
         // Retry only a rejected 10-bit output operation, never a lost device or
         // decoder error. The decoded P010 surface is retained; no re-decode/copy.
         match result {
@@ -3242,16 +3268,7 @@ impl Renderer {
         );
         ManuallyDrop::drop(&mut stream.pInputSurface);
         let driver_vsr = cached.nvidia_vsr_requested;
-        if let Err(error) = result {
-            if driver_vsr && self.device.GetDeviceRemovedReason().is_ok() {
-                self.disable_vsr(error);
-                self.processor = None;
-                update(shared, |s| s.vsr_status = self.vsr_status);
-                // Let the backbuffer references drop before the normal-path retry.
-                return Err(unavailable("video-processor-vsr-retry"));
-            }
-            return api("video-processor-blt", Err(error));
-        }
+        vsr_blt_result(result, driver_vsr, || self.device.GetDeviceRemovedReason())?;
         if driver_vsr {
             self.vsr_status = Some("Requested: NVIDIA driver VSR; verify in NVIDIA App");
         }
@@ -3366,6 +3383,28 @@ mod tests {
             assert!(!nvidia_vsr_eligible(true, false, format));
         }
         assert!(!nvidia_vsr_eligible(true, true, DXGI_FORMAT_Y410));
+    }
+
+    #[test]
+    fn nvidia_vsr_blit_preserves_device_loss_and_normal_errors() {
+        use windows::Win32::Foundation::E_INVALIDARG;
+
+        vsr_blt_result(Ok(()), true, || {
+            panic!("healthy blit must not query the device")
+        })
+        .unwrap();
+        let rejected = || Err(E_INVALIDARG.into());
+        let normal_error = vsr_blt_result(rejected(), false, || panic!("normal blit")).unwrap_err();
+        assert_eq!(normal_error.stage, "video-processor-blt");
+
+        let retry = vsr_blt_result(rejected(), true, || Ok(())).unwrap_err();
+        assert_eq!(retry.stage, VSR_RETRY);
+        assert_eq!(retry.hresult, normal_error.hresult);
+
+        let removed =
+            vsr_blt_result(rejected(), true, || Err(DXGI_ERROR_DEVICE_REMOVED.into())).unwrap_err();
+        assert_eq!(removed.stage, "video-processor-blt");
+        assert_eq!(removed.hresult.as_deref(), Some("0x887A0005"));
     }
 
     #[test]

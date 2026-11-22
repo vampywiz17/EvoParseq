@@ -4,6 +4,14 @@
 
 ## v0.9.9-dev.2 — Driver-based NVIDIA VSR preview (2026-11-22)
 
+This development preview builds on **EvoParseq v0.9.9-dev.1**. It includes
+Windows x64, the distribution-signed Android TV APK and the experimental Linux
+x86_64 Flatpak. All three clients report **0.9.9-dev.2**.
+
+**This is a development preview. EvoParseq v0.9.8 remains the stable release.**
+
+### What's new and improved
+
 - **Windows RTX VSR:** request Super Resolution from the installed NVIDIA
   driver during the existing D3D11 video processor pass. Keep a local on/off
   preference and use NVIDIA App for quality. When the driver rejects the
@@ -18,6 +26,27 @@
 - **Phaze input:** normal mouse or keyboard events can occasionally be missed,
   including in the official Phaze client. This has not been observed in USB
   HID mode.
+
+### Compatibility and validation
+
+The Windows client asks the installed NVIDIA driver for VSR when scaling
+eligible NV12 or P010 video. The RTX 3060 driver accepted the request in a
+synthetic D3D11 test. Actual image enhancement still needs verification on
+an RTX system with Super Resolution enabled in NVIDIA App.
+
+### Updating
+
+Windows: close the client and extract **EvoParseq-v0.9.9-dev.2-win64.zip**.
+The legacy **ParsecWebTurn-v0.9.9-dev.2-win64.zip** contains the same executable
+under its previous name. The ZIPs exclude user settings.
+
+Android TV: install **EvoParseq-TV.apk** or select the prerelease channel in
+Settings > Updates. The APK uses the existing distribution signing identity.
+
+Linux: install **EvoParseq-Linux-v0.9.9-dev.2-x86_64.flatpak**. The application ID
+and settings directory remain the same.
+
+[Driver-based NVIDIA VSR and verification](https://github.com/vampywiz17/EvoParseq/pull/28)
 
 ## v0.9.8 — Multi-display streaming and Linux Flatpak (2026-11-19)
 
