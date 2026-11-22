@@ -70,6 +70,17 @@ fn verify(path: &Path, size: u64, expected: &str) -> Result<()> {
     );
     Ok(())
 }
+
+/// Accept the final HTTPS response body regardless of whether NVIDIA served it
+/// directly or reqwest already followed its redirects. The immutable archive
+/// size and SHA-256 remain mandatory before any extraction.
+fn save_checked_archive(mut body: impl Read, path: &Path, size: u64, expected: &str) -> Result<()> {
+    let mut file = File::create(path)?;
+    let count = std::io::copy(&mut body.take(size + 1), &mut file)?;
+    drop(file);
+    ensure!(count == size, "NVIDIA SDK download size mismatch");
+    verify(path, size, expected)
+}
 pub fn validated_directory() -> Result<PathBuf> {
     let root = directory()?;
     verify(&root.join("nvngx_vsr.dll"), DLL_SIZE, DLL_HASH)
@@ -216,27 +227,13 @@ pub fn install() -> Result<()> {
         .context("Cannot contact NVIDIA download service")?
         .error_for_status()
         .context("NVIDIA download service rejected the request")?;
-    let location = response
-        .headers()
-        .get(reqwest::header::LOCATION)
-        .context("NVIDIA download location missing")?
-        .to_str()?;
-    let location = reqwest::Url::parse(location)?;
+    // The client follows HTTPS redirects automatically. A successful final
+    // response normally has no Location header, so never require one here.
     ensure!(
-        location.scheme() == "https",
+        response.url().scheme() == "https",
         "NVIDIA download must use HTTPS"
     );
-    let response = client
-        .get(location)
-        .send()
-        .map_err(|_| anyhow::anyhow!("NVIDIA download failed"))?
-        .error_for_status()
-        .map_err(|_| anyhow::anyhow!("NVIDIA download was rejected"))?;
-    let mut archive = File::create(&temporary.0)?;
-    let count = std::io::copy(&mut response.take(ARCHIVE_SIZE + 1), &mut archive)?;
-    drop(archive);
-    ensure!(count == ARCHIVE_SIZE, "NVIDIA SDK download size mismatch");
-    verify(&temporary.0, ARCHIVE_SIZE, ARCHIVE_HASH)?;
+    save_checked_archive(response, &temporary.0, ARCHIVE_SIZE, ARCHIVE_HASH)?;
     // These offsets are valid ONLY after checking the complete immutable SDK
     // 1.1.0 archive hash above. No filenames from an archive become filesystem paths.
     extract(
@@ -272,6 +269,34 @@ fn extract(archive: &Path, output: &Path, offset: u64, compressed: u64, size: u6
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pinned_download_accepts_final_response_body_without_location_header() {
+        let path = std::env::temp_dir().join(format!(
+            "evoparseq-ngx-direct-body-{}.bin", std::process::id()
+        ));
+        let _cleanup = Temporary(path.clone());
+        let body = b"already followed HTTPS redirect";
+        let digest = format!("{:x}", Sha256::digest(body));
+        save_checked_archive(std::io::Cursor::new(body), &path, body.len() as u64, &digest)
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), body);
+    }
+
+    #[test]
+    fn pinned_download_rejects_tampering_and_oversized_body() {
+        let path = std::env::temp_dir().join(format!(
+            "evoparseq-ngx-invalid-body-{}.bin", std::process::id()
+        ));
+        let _cleanup = Temporary(path.clone());
+        let digest = format!("{:x}", Sha256::digest(b"correct"));
+        assert!(save_checked_archive(
+            std::io::Cursor::new(b"changed"), &path, 7, &digest
+        ).is_err());
+        assert!(save_checked_archive(
+            std::io::Cursor::new(b"extra!"), &path, 5, &digest
+        ).is_err());
+    }
+
     #[test]
     fn invalid_previous_cache_is_not_migrated() {
         let fixture =
