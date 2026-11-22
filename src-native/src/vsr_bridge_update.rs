@@ -350,8 +350,14 @@ fn commit_immutable(stage: &Path, target: &Path, hash: &str, size: Option<u64>) 
     }
     // A newly downloaded digest gets a brand-new directory. Never overwrite
     // a loaded or signed DLL; this is both downgrade-safe and Win32-lock-safe.
-    ensure!(!target.exists(), "Invalid NGX cache entry requires manual repair");
-    std::fs::rename(stage, target)?;
+    if target.exists() {
+        // Replacing a *corrupt* cache entry is safe; a verified immutable
+        // adapter was already accepted by the early return above. A locked
+        // target fails cleanly on Windows and can be retried next launch.
+        replace(stage, target)?;
+    } else {
+        std::fs::rename(stage, target)?;
+    }
     Ok(())
 }
 fn needs_download(path: &Path, manifest: &Payload) -> bool {
@@ -377,7 +383,7 @@ impl UpdateLock {
         let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 0, name.as_ptr()) };
         ensure!(!handle.is_null(), "Cannot create NGX bridge update mutex");
         let guard = Self(handle);
-        let status = unsafe { WaitForSingleObject(handle, 60_000) };
+        let status = unsafe { WaitForSingleObject(handle, 5_000) };
         ensure!(status == 0 || status == 0x80,
             "NGX bridge updater is already running or could not acquire lock");
         Ok(guard)
@@ -451,6 +457,67 @@ pub fn refresh(root: &Path, client: &reqwest::blocking::Client,
 mod tests {
     use super::*;
     use ring::signature::{Ed25519KeyPair, KeyPair};
+    #[test]
+    fn pinned_builds_reuse_independent_dlls_with_identical_filename() {
+        let root = std::env::temp_dir().join(format!(
+            "evoparseq-bridge-cross-build-{}", std::process::id()
+        ));
+        let samples: [&[u8]; 2] = [b"synthetic adapter A", b"synthetic adapter B"];
+        let mut paths = Vec::new();
+        for bytes in samples {
+            let hash = format!("{:x}", Sha256::digest(bytes));
+            let path = cache_path(&root, &hash).unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+            assert_eq!(verified_path(&root, Some(&hash)).unwrap(), path);
+            assert_eq!(path.file_name().unwrap(), DLL_NAME);
+            paths.push(path);
+        }
+        assert_ne!(paths[0], paths[1]);
+        assert_eq!(std::fs::read(&paths[0]).unwrap(), samples[0]);
+        assert_eq!(std::fs::read(&paths[1]).unwrap(), samples[1]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn concurrent_staging_paths_are_unique_and_owned() {
+        let root = std::env::temp_dir().join(format!(
+            "evoparseq-bridge-staging-{}", std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let (first, mut one) = unique_stage(&root, "test").unwrap();
+        let (second, mut two) = unique_stage(&root, "test").unwrap();
+        assert_ne!(first.path, second.path);
+        one.write_all(b"first").unwrap();
+        two.write_all(b"second").unwrap();
+        drop(one);
+        drop(two);
+        assert_eq!(std::fs::read(&first.path).unwrap(), b"first");
+        assert_eq!(std::fs::read(&second.path).unwrap(), b"second");
+        drop(first);
+        assert!(!second.path.as_os_str().is_empty());
+        assert_eq!(std::fs::read(&second.path).unwrap(), b"second");
+        drop(second);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn legacy_migration_does_not_modify_the_old_root_dll() {
+        let root = std::env::temp_dir().join(format!(
+            "evoparseq-bridge-migration-{}", std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let old_signed = b"older signed adapter bytes";
+        let bootstrap = b"exact bootstrap bytes";
+        std::fs::write(root.join(DLL_NAME), old_signed).unwrap();
+        let hash = format!("{:x}", Sha256::digest(bootstrap));
+        let old_path = root.join(format!("evoparseq-ngx-bridge-{hash}.dll"));
+        std::fs::write(&old_path, bootstrap).unwrap();
+        migrate_legacy(&root, Some(&hash)).unwrap();
+        let new_path = cache_path(&root, &hash).unwrap();
+        assert_eq!(std::fs::read(&new_path).unwrap(), bootstrap);
+        assert_eq!(std::fs::read(root.join(DLL_NAME)).unwrap(), old_signed);
+        migrate_legacy(&root, Some(&hash)).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn unchanged_bridge_hash_never_requires_another_download() {
         let file =
