@@ -31,7 +31,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           cargo build --release --manifest-path src-native/ngx-bridge/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw 'NGX adapter build failed' }
-          $bridge = 'src-native/ngx-bridge/target/release/evoparseq_ngx_bridge.dll'
+          $bridge = 'src-native/ngx-bridge/target/x86_64-pc-windows-msvc/release/evoparseq_ngx_bridge.dll'
           if (!(Test-Path -LiteralPath $bridge)) { throw 'NGX adapter DLL missing' }
           $hash = (Get-FileHash -LiteralPath $bridge -Algorithm SHA256).Hash.ToLowerInvariant()
           "EVOPARSEQ_NGX_BRIDGE_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
