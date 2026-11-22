@@ -72,9 +72,8 @@ fn validate_payload(value: &Payload) -> Result<()> {
     ensure!(url.scheme() == "https" && url.host_str() == Some("github.com") &&
         url.port().is_none(), "NGX bridge must come from GitHub HTTPS");
     let segments: Vec<_> = url.path_segments().context("Invalid NGX bridge URL")?.collect();
-    ensure!(segments.len() == 7 && segments[..5] == ["vampywiz17","EvoParseq","releases","download",segments[4]] &&
-        !segments[4].is_empty() && segments[5] == DLL_NAME &&
-        segments[6].is_empty(), "Invalid NGX bridge release asset path");
+    ensure!(segments.len() == 6 && segments[..4] == ["vampywiz17","EvoParseq","releases","download"] &&
+        !segments[4].is_empty() && segments[5] == DLL_NAME, "Invalid NGX bridge release asset path");
     ensure!(url.query().is_none() && url.fragment().is_none(), "NGX bridge URL contains a query or fragment");
     Ok(())
 }
@@ -189,7 +188,11 @@ fn download(client: &reqwest::blocking::Client, url: &str, limit: u64) -> Result
 /// Check signed channel data at startup. A new release is downloaded only if
 /// the local DLL digest differs. The manifest is persisted after DLL verification.
 pub fn refresh(root: &Path, client: &reqwest::blocking::Client, legacy_hash: Option<&str>) -> Result<()> {
-    migrate_legacy(root, legacy_hash)?;
+    // Do not overwrite a verified, already installed signed adapter with an
+    // older build merely because an EXE also carries a bootstrap digest.
+    if verified(root, legacy_hash).is_err() {
+        migrate_legacy(root, legacy_hash)?;
+    }
     let Some(key) = public_key()? else {
         return verified(root, legacy_hash).context("No manifest signing key is configured in this build");
     };
