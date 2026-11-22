@@ -110,6 +110,7 @@ impl Vsr {
 
 mod sdk {
     use super::*;
+    use sha2::{Digest, Sha256};
     use std::{
         ffi::{c_char, c_void, CStr, OsString},
         os::windows::ffi::{OsStrExt, OsStringExt},
@@ -138,6 +139,32 @@ mod sdk {
     static NGX_INIT_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
     const NGX_INIT_LOG_LIMIT: usize = 48;
 
+    /// Keep actionable SDK hints without recording vendor-provided free text,
+    /// which can contain private usernames, file paths, or URLs.
+    fn ngx_log_category(message: &[u8]) -> &'static str {
+        let lower: Vec<u8> = message
+            .iter()
+            .take(1024)
+            .map(u8::to_ascii_lowercase)
+            .collect();
+        let has = |needle: &[u8]| lower.windows(needle.len()).any(|w| w == needle);
+        if has(b"nvngx_vsr") || has(b"feature dll") {
+            "feature_module"
+        } else if has(b"driver") {
+            "driver"
+        } else if has(b"unsupported") || has(b"unavailable") {
+            "unsupported"
+        } else if has(b"vsr") {
+            "vsr_capability"
+        } else if has(b"load") || has(b"missing") || has(b"not found") {
+            "module_lookup"
+        } else if has(b"error") || has(b"fail") {
+            "sdk_error"
+        } else {
+            "other"
+        }
+    }
+
     unsafe extern "C" fn ngx_init_log(message: *const c_char, level: u32, component: u32) {
         if message.is_null()
             || !NGX_INIT_LOG_ACTIVE.load(Ordering::Acquire)
@@ -146,18 +173,21 @@ mod sdk {
         {
             return;
         }
-        // Callbacks may run on NVIDIA worker threads. Do not unwind across FFI.
+        // NVIDIA can call from arbitrary SDK threads. Do not unwind across FFI
+        // or send raw vendor strings into user-shareable JSONL files.
         let _ = std::panic::catch_unwind(|| {
-            let raw = unsafe { CStr::from_ptr(message) }.to_string_lossy();
-            let snippet: String = raw
-                .chars()
-                .filter(|ch| !ch.is_control() || *ch == ' ')
-                .take(320)
-                .collect();
+            let bytes = unsafe { CStr::from_ptr(message) }.to_bytes();
+            let digest = format!("{:x}", Sha256::digest(bytes));
             crate::event_log::record(
                 "INFO",
                 "video_ngx_sdk_log",
-                serde_json::json!({"level":level,"component":component,"message":snippet}),
+                serde_json::json!({
+                    "level":level,
+                    "component":component,
+                    "message_length":bytes.len(),
+                    "message_sha256":digest,
+                    "category":ngx_log_category(bytes)
+                }),
             );
         });
     }
