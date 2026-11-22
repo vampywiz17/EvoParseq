@@ -19,18 +19,48 @@ adapter or require re-downloading it on each switch. Cached adapters are
 never overwritten in place while another Windows process may have them
 loaded. The pinned NVIDIA SDK runtime is still independently verified.
 
+## Browser-only binary acquisition (no manual file placement)
+
+EvoParseq **never downloads DLL or SDK ZIP bytes**. The only automatic
+network fetch is the small, authenticated `dev`/`stable` JSON manifest.
+Actual file acquisition requires a user action:
+
+1. If the signed manifest advertises a new adapter, EvoParseq offers to
+   open its approved GitHub Release asset in the system default browser.
+   Without a manifest, an older build can offer the exact EXE-pinned
+   adapter release asset instead. User consent is always required.
+2. After the browser download completes, the user selects the downloaded
+   file using the Windows native file picker, initially in Downloads.
+   They **never** need to know or edit a cache path.
+3. For a signed adapter, the importer rechecks Ed25519 signature, channel,
+   monotonic sequence, ABI, expected size and SHA-256. The EXE-pinned
+   fallback accepts only its compile-time SHA-256. Altered files are rejected.
+4. The importer copies verified content to a unique stage and commits to
+   `bridge-cache/<sha256>/EvoParseq-NGX-Bridge.dll` automatically. Existing
+   validated content is reused; other EvoParseq versions remain intact.
+5. For first-time NVIDIA SDK setup, the same browser-and-picker flow handles
+   the official `RTX_Video_SDK_v1.1.0.zip`, checking its pinned size and hash
+   before extracting the precise runtime DLL and license into the private cache.
+
+Canceling either picker leaves installed components unchanged and normal
+video playback available. The browser or Windows Defender may still scan or
+warn about a downloaded file; this workflow avoids **in-app binary downloads**,
+not Windows security checks.
+
 ## Trust and startup
 
-- The automatic check runs before NGX loading, only on Windows RTX systems
-  with the user's saved download consent. Normal GPU video works without NGX.
+- The signed JSON update check runs before NGX loading, only on Windows RTX
+  systems with saved user consent. Normal GPU video works without NGX.
+- The updater NEVER issues HTTP requests for DLL or ZIP bytes. Users explicitly
+  download binaries in their browser and choose them in a file picker.
 - Signed `dev`/`stable` manifests are independently selected from the
   project's `dev` and `main` branches. The client authenticates the
   Ed25519 signature with a public key embedded in the EXE.
 - ABI must be 3; URL must name a fixed
   `https://github.com/vampywiz17/EvoParseq/releases/download/<tag>/EvoParseq-NGX-Bridge.dll`
   asset; SHA-256, size, channel and monotonic sequence are enforced.
-- Each startup compares the manifest SHA-256 to the matching immutable
-  cached DLL. An identical DLL is **never downloaded again**, even if its
+- Each startup compares the manifest SHA-256 to the matching immutable cached
+  DLL. An identical DLL is **reused without prompting again**, even if its
   manifest version changed or the EXE was rebuilt.
 - Signed manifests are cached separately for `dev` and `stable`. An
   invalid, unavailable or downgraded remote manifest cannot replace the
@@ -41,15 +71,15 @@ loaded. The pinned NVIDIA SDK runtime is still independently verified.
   adapter. Previously installed `evoparseq-ngx-bridge-<sha256>.dll` files
   are accepted and migrated to the content-addressed directory after
   verification. No unsigned bootstrap can modify a signed adapter.
-- Failed signed-update checks still permit an EXE-pinned bootstrap asset
-  to be installed. NVIDIA runtime installation is independent of bridge
-  update errors and is not skipped.
+- Failed signed-update checks still permit EXE-pinned bootstrap via the
+  browser and native picker. NVIDIA SDK installation is independent of the
+  bridge and never starts a hidden binary download.
 - Updates are serialized with an OS-owned Windows named mutex. Temporary
   files are exclusively created with unique process/nonce names. The mutex
   is automatically released if an updater process crashes. DLLs in an
   existing content-addressed directory remain immutable.
-- No repeated startup download-error dialog is shown. Optional failures
-  remain visible in the event log.
+- Canceling a browser download or file picker is not an error and does not
+  create an invalid cache entry. Optional failures are recorded in the event log.
 
 ## Operator-only release procedure
 
@@ -88,12 +118,12 @@ file paths supplied on the command line (preventing unsafe path traversal):
 ## Verification
 
 - Unchanged SHA-256 across EXE versions: reuse the same cached DLL.
-- Different signed SHA-256: install a separate immutable DLL, update
-  only the corresponding channel's signed manifest.
+- Different signed SHA-256: prompt for browser download, then automatically
+  import a selected, verified DLL to its immutable cache directory.
 - Old or new EXE: retain different verified content in parallel.
-- Missing manifest: bootstrap with compiled SHA-256; do not block
-  the independent NVIDIA SDK runtime installation.
-- Failed download, bad signature, wrong ABI or unsupported URL: fall back
-  to last verified signed or pinned adapter; normal video remains available.
-- Parallel startup: update mutex and unique staging prevent collisions.
+- Missing manifest: optional browser/picker bootstrap with compiled SHA-256;
+  do not block independent NVIDIA runtime setup.
+- Canceled selection, altered DLL, bad signature, wrong ABI or unsupported URL:
+  retain the last verified signed or pinned adapter; normal video remains available.
+- Parallel import: update mutex and unique staging prevent collisions.
 - Release publication requires operator approval and NVIDIA licensing.
