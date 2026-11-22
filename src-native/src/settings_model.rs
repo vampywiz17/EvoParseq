@@ -672,9 +672,7 @@ mod vsr_tests {
                 );
                 assert_eq!(
                     available.zero_copy,
-                    quality == 0
-                        || vendor != 0x10de
-                        || !crate::vsr_runtime::bridge_supported()
+                    quality == 0 || vendor != 0x10de || !crate::vsr_runtime::bridge_supported()
                 );
             }
         }
