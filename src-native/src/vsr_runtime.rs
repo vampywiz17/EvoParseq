@@ -13,7 +13,9 @@ use std::{
 #[path = "vsr_bridge_update.rs"]
 mod bridge_update;
 
-pub const fn updates_enabled() -> bool { bridge_update::enabled() }
+pub const fn updates_enabled() -> bool {
+    bridge_update::enabled()
+}
 pub const fn bridge_supported() -> bool {
     bridge_update::enabled() || option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256").is_some()
 }
