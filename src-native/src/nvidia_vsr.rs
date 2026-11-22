@@ -110,7 +110,13 @@ impl Vsr {
 
 mod sdk {
     use super::*;
-    use std::{ffi::c_void, ptr::null_mut};
+    use std::{
+        ffi::{c_char, c_void, CStr, OsString},
+        os::windows::ffi::{OsStrExt, OsStringExt},
+        path::{Path, PathBuf},
+        ptr::null_mut,
+        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
     use windows::{core::Interface, Win32::Graphics::Direct3D10::ID3D10Multithread};
 
     #[link(name = "kernel32")]
@@ -118,9 +124,89 @@ mod sdk {
         fn LoadLibraryExW(path: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
         fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
         fn FreeLibrary(module: *mut c_void) -> i32;
+        fn GetModuleHandleW(name: *const u16) -> *mut c_void;
+        fn GetModuleFileNameW(module: *mut c_void, path: *mut u16, length: u32) -> u32;
     }
     const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x100;
     const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x1000;
+
+    // NVIDIA NGX public API uses a cdecl log callback on Windows x64.
+    // It can be called from arbitrary SDK threads. The event logger is bounded
+    // and asynchronous; never block GPU threads on file I/O.
+    type SdkLogCallback = unsafe extern "C" fn(*const c_char, u32, u32);
+    static NGX_INIT_LOG_ACTIVE: AtomicBool = AtomicBool::new(false);
+    static NGX_INIT_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
+    const NGX_INIT_LOG_LIMIT: usize = 48;
+
+    unsafe extern "C" fn ngx_init_log(message: *const c_char, level: u32, component: u32) {
+        if message.is_null()
+            || !NGX_INIT_LOG_ACTIVE.load(Ordering::Acquire)
+            || !crate::event_log::enabled()
+            || NGX_INIT_LOG_COUNT.fetch_add(1, Ordering::Relaxed) >= NGX_INIT_LOG_LIMIT
+        {
+            return;
+        }
+        // Callbacks may run on NVIDIA worker threads. Do not unwind across FFI.
+        let _ = std::panic::catch_unwind(|| {
+            let raw = unsafe { CStr::from_ptr(message) }.to_string_lossy();
+            let snippet: String = raw.chars()
+                .filter(|ch| !ch.is_control() || *ch == ' ')
+                .take(320)
+                .collect();
+            crate::event_log::record(
+                "INFO",
+                "video_ngx_sdk_log",
+                serde_json::json!({"level":level,"component":component,"message":snippet}),
+            );
+        });
+    }
+
+    /// Query already-loaded modules only. Never preload a DLL merely to probe it.
+    /// Report path equality, not potentially private filesystem paths.
+    unsafe fn module_state(name: &str, expected: Option<&Path>) -> (bool, Option<bool>) {
+        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        let handle = GetModuleHandleW(wide.as_ptr());
+        if handle.is_null() {
+            return (false, None);
+        }
+        let Some(expected) = expected else {
+            return (true, None);
+        };
+        let mut filename = [0u16; 1024];
+        let count = GetModuleFileNameW(handle, filename.as_mut_ptr(), filename.len() as u32) as usize;
+        if count == 0 || count >= filename.len() {
+            return (true, None);
+        }
+        let found = PathBuf::from(OsString::from_wide(&filename[..count]));
+        let matches = match (std::fs::canonicalize(found), std::fs::canonicalize(expected)) {
+            (Ok(a), Ok(b)) => Some(a == b),
+            _ => None,
+        };
+        (true, matches)
+    }
+
+    unsafe fn log_module_probe(root: &Path, phase: &'static str) {
+        if !crate::event_log::enabled() {
+            return;
+        }
+        let (runtime_loaded, runtime_is_verified) =
+            module_state("nvngx_vsr.dll", Some(&root.join("nvngx_vsr.dll")));
+        let (core_loaded, _) = module_state("_nvngx.dll", None);
+        crate::event_log::record(
+            "INFO",
+            "video_ngx_module_probe",
+            serde_json::json!({
+                "phase":phase,
+                "runtime_loaded":runtime_loaded,
+                "runtime_matches_verified_file":runtime_is_verified,
+                "ngx_driver_core_loaded":core_loaded,
+                "search_directory":"verified_user_vsr_cache",
+                "bridge_abi":3,
+                "sdk_version":"1.1.0",
+                "ngx_api_version":"0x15"
+            }),
+        );
+    }
 
     #[repr(C)]
     #[derive(Default)]
@@ -135,6 +221,7 @@ mod sdk {
         *const u16,
         *mut *mut c_void,
         *mut CreateDiagnostics,
+        Option<SdkLogCallback>,
     ) -> u32;
     type Evaluate = unsafe extern "C" fn(
         *mut c_void,
@@ -159,7 +246,6 @@ mod sdk {
     }
     impl Library {
         unsafe fn open(path: &std::path::Path) -> anyhow::Result<Self> {
-            use std::os::windows::ffi::OsStrExt;
             let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
             let module = LoadLibraryExW(
                 wide.as_ptr(),
@@ -207,23 +293,31 @@ mod sdk {
             let root = crate::vsr_runtime::validated_directory()?;
             let library = Library::open(&crate::vsr_runtime::validated_bridge_path()?)?;
             let abi: Abi = library.symbol(b"evoparseq_ngx_bridge_abi\0")?;
-            anyhow::ensure!(abi() == 2, "Unsupported NVIDIA NGX bridge ABI");
+            anyhow::ensure!(abi() == 3, "Unsupported NVIDIA NGX bridge ABI");
             let create: Create = library.symbol(b"evoparseq_ngx_create\0")?;
             let evaluate: Evaluate = library.symbol(b"evoparseq_ngx_evaluate\0")?;
             let destroy: Destroy = library.symbol(b"evoparseq_ngx_destroy\0")?;
-            use std::os::windows::ffi::OsStrExt;
             let path: Vec<u16> = root.as_os_str().encode_wide().chain(Some(0)).collect();
             let context = device.GetImmediateContext()?;
             let _lock = ContextLock::enter(device)?;
+            log_module_probe(&root, "before_init");
+            NGX_INIT_LOG_COUNT.store(0, Ordering::Relaxed);
+            let logging = crate::event_log::enabled();
+            NGX_INIT_LOG_ACTIVE.store(logging, Ordering::Release);
             let mut session = null_mut();
             let mut diagnostics = CreateDiagnostics::default();
+            // Preserve the original direct-SDK init inputs: app=0,
+            // API=0x15, D3D11 device/context and the same verified path list.
             let created = create(
                 device.as_raw(),
                 context.as_raw(),
                 path.as_ptr(),
                 &mut session,
                 &mut diagnostics,
+                if logging { Some(ngx_init_log) } else { None },
             );
+            NGX_INIT_LOG_ACTIVE.store(false, Ordering::Release);
+            log_module_probe(&root, "after_init");
             if created != 1 || session.is_null() {
                 let stage = match diagnostics.stage {
                     1 => "invalid bridge ABI input",
