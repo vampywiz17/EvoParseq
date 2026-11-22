@@ -1515,6 +1515,15 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                 s.queue_clipboard();
                 return 0;
             }
+            #[cfg(test)]
+            m if m == WM_APP + 91 => {
+                // The isolated foreground fixture must restore the UI thread's
+                // actual keyboard focus, not just the foreground HWND. Hosted
+                // Windows test runners can leave focus on an owned popup after
+                // coverage instrumentation creates its test windows.
+                SetFocus(hwnd);
+                return 0;
+            }
 
             m if m == crate::input_windows::CAPTURED_KEY => {
                 crate::input_windows::captured_key(wp, lp, &s.pressed_keys, |event| s.push(event));
@@ -2361,6 +2370,24 @@ mod tests {
             for hid in hid_modes {
                 #[cfg(feature = "bud")]
                 window.hid_mouse_active.store(hid, Ordering::Release);
+                // This test intentionally checks real Win32 cursor restoration.
+                // Foreground ownership alone does not imply GetFocus()==HWND,
+                // which the application's input_allowed() requires on its UI
+                // thread before performing any cursor warp.
+                unsafe {
+                    SetForegroundWindow(window.handle());
+                    SendMessageW(window.handle(), WM_APP + 91, 0, 0);
+                }
+                wait(|| unsafe {
+                    let mut info = GUITHREADINFO {
+                        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+                        ..Default::default()
+                    };
+                    let thread = GetWindowThreadProcessId(window.handle(), std::ptr::null_mut());
+                    GetForegroundWindow() == window.handle()
+                        && GetGUIThreadInfo(thread, &mut info) != 0
+                        && info.hwndFocus == window.handle()
+                });
                 // Replay the observed hidden-only drag -> visible cursor
                 // transition, with a different HID endpoint from its anchor.
                 let target = if hid { (480, 270) } else { (960, 540) };

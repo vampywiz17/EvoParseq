@@ -3,7 +3,7 @@ name: EvoParseq native client
 on:
   workflow_dispatch:
   push:
-    branches: [main, dev, codex/phaze-protocol]
+    branches: [main, dev, codex/phaze-protocol, codex/optional-nvidia-ngx-bridge]
 
 permissions:
   contents: read
@@ -25,6 +25,24 @@ jobs:
       - name: Prepare optional RTX Video SDK
         shell: pwsh
         run: ./scripts/fetch-rtx-video-sdk.ps1 -Destination (Join-Path $env:RUNNER_TEMP 'rtx-video-sdk-1.1.0')
+      - name: Build isolated NVIDIA NGX adapter and pin its digest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build --release --manifest-path src-native/ngx-bridge/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'NGX adapter build failed' }
+          $bridge = 'src-native/ngx-bridge/target/x86_64-pc-windows-msvc/release/evoparseq_ngx_bridge.dll'
+          if (!(Test-Path -LiteralPath $bridge)) { throw 'NGX adapter DLL missing' }
+          $hash = (Get-FileHash -LiteralPath $bridge -Algorithm SHA256).Hash.ToLowerInvariant()
+          "EVOPARSEQ_NGX_BRIDGE_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          New-Item -ItemType Directory -Path dist/ngx-bridge -Force | Out-Null
+          Copy-Item -LiteralPath $bridge -Destination dist/ngx-bridge/EvoParseq-NGX-Bridge.dll
+          "$hash  EvoParseq-NGX-Bridge.dll" | Set-Content dist/ngx-bridge/SHA256.txt -Encoding ascii
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: EvoParseq-optional-NGX-bridge
+          path: dist/ngx-bridge/*
+          if-no-files-found: error
       - name: Verify EvoParseq native build
         shell: pwsh
         run: |
@@ -69,6 +87,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Isolated additional display lifecycle regression failed' }
           cargo build --locked --release --manifest-path src-native/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw 'Native core build failed' }
+          # Guard against accidentally linking proprietary NGX SDK into the public EXE.
+          $exePath = 'src-native/target/x86_64-pc-windows-msvc/release/evoparseq.exe'
+          $exeBytes = [IO.File]::ReadAllBytes((Resolve-Path $exePath))
+          $exeText = [Text.Encoding]::Latin1.GetString($exeBytes)
+          foreach ($marker in @('NVSDK_NGX_D3D11_Init', 'nvsdk_ngx_d3d11_lib.cpp')) {
+            if ($exeText.Contains($marker)) { throw "Proprietary NGX implementation leaked into EXE: $marker" }
+          }
           New-Item -ItemType Directory -Path dist/native-core -Force | Out-Null
           $nativeTree | Set-Content -LiteralPath dist/native-core/dependencies.txt -Encoding utf8
           Copy-Item -LiteralPath src-native/target/x86_64-pc-windows-msvc/release/evoparseq.exe -Destination dist/native-core/EvoParseq.exe

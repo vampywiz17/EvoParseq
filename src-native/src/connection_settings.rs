@@ -187,7 +187,7 @@ impl Settings {
         }
     }
     pub fn nvidia_vsr_quality(&self, vendor: Option<u32>) -> u8 {
-        if cfg!(nvidia_vsr_sdk) && vendor == Some(0x10de) {
+        if option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256").is_some() && vendor == Some(0x10de) {
             self.nvidia_vsr.min(4)
         } else {
             0

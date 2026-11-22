@@ -1452,7 +1452,7 @@ unsafe fn save(hwnd: HWND, page: &mut Page) {
     let needs_vsr = s.nvidia_vsr != 0 && vsr_available && !crate::vsr_runtime::present();
     if needs_vsr && s.vsr_runtime_consent != crate::connection_settings::VsrRuntimeConsent::Allowed
     {
-        let accepted = MessageBoxW(hwnd, wide("The NVIDIA VSR runtime is missing. Allow its verified download from NVIDIA on the next app start? Normal video remains available without it.").as_ptr(), wide("EvoParseq - NVIDIA VSR").as_ptr(), MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES;
+        let accepted = MessageBoxW(hwnd, wide("The optional NVIDIA VSR runtime or EvoParseq NGX adapter is missing. Allow verified downloads from NVIDIA and the matching EvoParseq GitHub release on the next app start? Normal video remains available without them.").as_ptr(), wide("EvoParseq - NVIDIA VSR").as_ptr(), MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES;
         if accepted {
             s.vsr_runtime_consent = crate::connection_settings::VsrRuntimeConsent::Allowed;
         } else {

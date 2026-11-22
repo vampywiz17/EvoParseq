@@ -12,7 +12,7 @@ pub enum AiUpscaler {
 impl AiUpscaler {
     pub fn for_vendor(vendor: Option<u32>) -> Self {
         match vendor {
-            Some(0x10de) if cfg!(nvidia_vsr_sdk) => Self::Nvidia,
+            Some(0x10de) if option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256").is_some() => Self::Nvidia,
             Some(0x8086) if cfg!(feature = "vendor-video") => Self::Intel,
             _ => Self::Unavailable,
         }
@@ -618,7 +618,7 @@ mod vsr_tests {
             let allowed = vendor == 0x8086 && cfg!(feature = "vendor-video");
             assert_eq!(
                 available.ai_upscale,
-                (cfg!(nvidia_vsr_sdk) && vendor == 0x10de)
+                (option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256").is_some() && vendor == 0x10de)
                     || (cfg!(feature = "vendor-video") && vendor == 0x8086)
             );
             assert_eq!(available.zero_copy, !allowed);
@@ -667,12 +667,14 @@ mod vsr_tests {
                 let available = form.availability();
                 assert_eq!(
                     available.ai_upscale,
-                    (cfg!(nvidia_vsr_sdk) && vendor == 0x10de)
+                    (option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256").is_some() && vendor == 0x10de)
                         || (cfg!(feature = "vendor-video") && vendor == 0x8086)
                 );
                 assert_eq!(
                     available.zero_copy,
-                    quality == 0 || vendor != 0x10de || !cfg!(nvidia_vsr_sdk)
+                    quality == 0
+                        || vendor != 0x10de
+                        || !option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256").is_some()
                 );
             }
         }

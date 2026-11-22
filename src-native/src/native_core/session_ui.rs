@@ -1596,7 +1596,7 @@ mod tests {
                         | crate::window::Event::Motion(..)
                         | crate::window::Event::RelativeMotion(..)
                 )),
-                "Badge dragging must stay local"
+                "Badge dragging must stay local; unexpected queued events: {drag_events:?}"
             );
             if let Some(path) = std::env::var_os("EVOPARSEQ_UI_CAPTURE") {
                 let path = std::path::PathBuf::from(path).with_file_name("stream-waiting.png");

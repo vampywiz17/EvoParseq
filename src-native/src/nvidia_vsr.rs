@@ -59,7 +59,6 @@ impl Surfaces {
 }
 
 pub struct Vsr {
-    #[cfg(nvidia_vsr_sdk)]
     sdk: sdk::Instance,
     surfaces: Option<Surfaces>,
     quality: u8,
@@ -68,20 +67,12 @@ pub struct Vsr {
 impl Vsr {
     pub unsafe fn new(device: &ID3D11Device, quality: u8) -> anyhow::Result<Self> {
         anyhow::ensure!((1..=4).contains(&quality), "Invalid RTX VSR quality");
-        #[cfg(nvidia_vsr_sdk)]
-        {
-            Ok(Self {
-                sdk: sdk::Instance::new(device)?,
-                surfaces: None,
-                quality,
-                evaluated: false,
-            })
-        }
-        #[cfg(not(nvidia_vsr_sdk))]
-        {
-            let _ = device;
-            anyhow::bail!("RTX Video SDK was not included in this build")
-        }
+        Ok(Self {
+            sdk: sdk::Instance::new(device)?,
+            surfaces: None,
+            quality,
+            evaluated: false,
+        })
     }
     /// One source-sized conversion target and one UAV output, reused across frames.
     /// The caller skips VSR when the viewport does not upscale in both dimensions.
@@ -111,29 +102,200 @@ impl Vsr {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("VSR surfaces missing"))?;
         context.ClearRenderTargetView(&surfaces.clear, &[0.0, 0.0, 0.0, 1.0]);
-        #[cfg(nvidia_vsr_sdk)]
-        {
-            let result = self.sdk.evaluate(context, surfaces, target, self.quality);
-            self.evaluated = result.is_ok();
-            result
-        }
-        #[cfg(not(nvidia_vsr_sdk))]
-        {
-            let _ = (target, self.quality);
-            anyhow::bail!("RTX Video SDK unavailable")
-        }
+        let result = self.sdk.evaluate(context, surfaces, target, self.quality);
+        self.evaluated = result.is_ok();
+        result
     }
 }
 
-#[cfg(nvidia_vsr_sdk)]
 mod sdk {
     use super::*;
     use std::{
         ffi::{c_char, c_void},
+        os::windows::ffi::OsStrExt,
+        path::Path,
         ptr::null_mut,
     };
-    use windows::core::Interface;
-    use windows::Win32::Graphics::Direct3D10::ID3D10Multithread;
+    use windows::{core::Interface, Win32::Graphics::Direct3D10::ID3D10Multithread};
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn LoadLibraryExW(path: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
+        fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
+        fn FreeLibrary(module: *mut c_void) -> i32;
+    }
+    const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x100;
+    const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x1000;
+
+    /// Return a regular Win32 absolute directory for NGX feature discovery.
+    /// std::fs::canonicalize() on Windows usually returns a verbatim \\?\\ path.
+    /// NVIDIA NGX appends feature names using '/', which may produce invalid
+    /// paths when combined with a verbatim Win32 prefix. Do not change the
+    /// verified filesystem location, only the spelling passed to the SDK.
+    ///
+    /// The returned UTF-16 buffer has one trailing NUL and owns its storage
+    /// until NVSDK_NGX_D3D11_Init returns.
+    fn ngx_search_directory(root: &Path) -> anyhow::Result<(Vec<u16>, bool)> {
+        anyhow::ensure!(root.is_absolute(), "NGX runtime directory must be absolute");
+        let mut path: Vec<u16> = root.as_os_str().encode_wide().collect();
+        anyhow::ensure!(!path.contains(&0), "NGX runtime directory contains a NUL");
+        // Match the Windows separator spelling expected by NGX's path builder.
+        for unit in &mut path {
+            if *unit == b'/' as u16 {
+                *unit = b'\\' as u16;
+            }
+        }
+        const SLASH: u16 = b'\\' as u16;
+        const VERBATIM: [u16; 4] = [SLASH, SLASH, b'?' as u16, SLASH];
+        const VERBATIM_UNC: [u16; 8] = [
+            SLASH,
+            SLASH,
+            b'?' as u16,
+            SLASH,
+            b'U' as u16,
+            b'N' as u16,
+            b'C' as u16,
+            SLASH,
+        ];
+        let mut removed_prefix = false;
+        if path.starts_with(&VERBATIM_UNC) {
+            let mut normal = vec![SLASH, SLASH];
+            normal.extend_from_slice(&path[VERBATIM_UNC.len()..]);
+            path = normal;
+            removed_prefix = true;
+        } else if path.starts_with(&VERBATIM) {
+            path.drain(..VERBATIM.len());
+            removed_prefix = true;
+        }
+        let drive = path.len() >= 3
+            && matches!(path[0], 65..=90 | 97..=122)
+            && path[1] == b':' as u16
+            && path[2] == SLASH;
+        let unc = path.len() > 4
+            && path.starts_with(&[SLASH, SLASH])
+            && path[2] != SLASH
+            && path[2..].contains(&SLASH);
+        anyhow::ensure!(
+            drive || unc,
+            "NGX runtime directory has an unsupported path form"
+        );
+        // The SDK may use legacy Win32 file APIs. Avoid handing it a normal
+        // path that already exceeds traditional MAX_PATH and cannot resolve.
+        anyhow::ensure!(
+            path.len() < 248,
+            "NGX runtime directory exceeds Win32 path limit"
+        );
+        path.push(0);
+        Ok((path, removed_prefix))
+    }
+
+    #[cfg(test)]
+    mod search_directory_tests {
+        use super::*;
+
+        fn decode(wide: &[u16]) -> String {
+            assert_eq!(wide.last().copied(), Some(0));
+            String::from_utf16(&wide[..wide.len() - 1]).unwrap()
+        }
+
+        #[test]
+        fn canonical_drive_directory_becomes_normal_windows_path() {
+            let (wide, converted) = ngx_search_directory(Path::new(
+                r"\\?\C:\Users\Test\AppData\Local\EvoParseq\vsr\1.1.0",
+            ))
+            .unwrap();
+            assert!(converted);
+            assert_eq!(
+                decode(&wide),
+                r"C:\Users\Test\AppData\Local\EvoParseq\vsr\1.1.0"
+            );
+        }
+
+        #[test]
+        fn canonical_unc_directory_retains_server_and_share() {
+            let (wide, converted) =
+                ngx_search_directory(Path::new(r"\\?\UNC\server\share\NGX")).unwrap();
+            assert!(converted);
+            assert_eq!(decode(&wide), r"\\server\share\NGX");
+        }
+
+        #[test]
+        fn ordinary_path_is_preserved_and_slashes_are_normalized() {
+            let (wide, converted) = ngx_search_directory(Path::new("C:/Users/Test/VSR")).unwrap();
+            assert!(!converted);
+            assert_eq!(decode(&wide), r"C:\Users\Test\VSR");
+        }
+
+        #[test]
+        fn unicode_path_and_invalid_forms_are_handled_without_lossy_encoding() {
+            let (wide, _) = ngx_search_directory(Path::new(r"\\?\C:\Felhasználó\VSR")).unwrap();
+            assert_eq!(decode(&wide), r"C:\Felhasználó\VSR");
+            assert!(ngx_search_directory(Path::new(r"relative\VSR")).is_err());
+            assert!(ngx_search_directory(Path::new(r"\\?\Volume{0000}\VSR")).is_err());
+        }
+    }
+
+    // The private bridge v3 ABI retains an optional callback argument, but
+    // production passes None: no vendor SDK messages are collected or logged.
+    type SdkLogCallback = unsafe extern "C" fn(*const c_char, u32, u32);
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct CreateDiagnostics {
+        stage: u32,
+        sdk_result: u32,
+        available: i32,
+    }
+    type Create = unsafe extern "C" fn(
+        *mut c_void,
+        *mut c_void,
+        *const u16,
+        *mut *mut c_void,
+        *mut CreateDiagnostics,
+        Option<SdkLogCallback>,
+    ) -> u32;
+    type Evaluate = unsafe extern "C" fn(
+        *mut c_void,
+        *mut c_void,
+        *mut c_void,
+        *mut c_void,
+        u32,
+        u32,
+        *const i32,
+        u32,
+    ) -> u32;
+    type Destroy = unsafe extern "C" fn(*mut c_void);
+    type Abi = unsafe extern "C" fn() -> u32;
+
+    struct Library(*mut c_void);
+    impl Drop for Library {
+        fn drop(&mut self) {
+            unsafe {
+                FreeLibrary(self.0);
+            }
+        }
+    }
+    impl Library {
+        unsafe fn open(path: &std::path::Path) -> anyhow::Result<Self> {
+            let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            let module = LoadLibraryExW(
+                wide.as_ptr(),
+                null_mut(),
+                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+            );
+            anyhow::ensure!(
+                !module.is_null(),
+                "Cannot load the verified NVIDIA NGX bridge"
+            );
+            Ok(Self(module))
+        }
+        unsafe fn symbol<T: Copy>(&self, symbol: &'static [u8]) -> anyhow::Result<T> {
+            let ptr = GetProcAddress(self.0, symbol.as_ptr());
+            anyhow::ensure!(!ptr.is_null(), "NVIDIA NGX bridge ABI symbol missing");
+            Ok(std::mem::transmute_copy(&ptr))
+        }
+    }
+
     struct ContextLock(ID3D10Multithread);
     impl ContextLock {
         unsafe fn enter(device: &ID3D11Device) -> anyhow::Result<Self> {
@@ -150,169 +312,93 @@ mod sdk {
         }
     }
 
-    // Layout and signatures from RTX Video SDK 1.1 public nvsdk_ngx*.h C API.
-    #[repr(C)]
-    struct Paths {
-        paths: *const *const u16,
-        count: u32,
-    }
-    #[repr(C)]
-    struct Logging {
-        callback: *const c_void,
-        level: u32,
-        other_sinks_disabled: bool,
-    }
-    #[repr(C)]
-    struct Common {
-        paths: Paths,
-        internal: *mut c_void,
-        logging: Logging,
-    }
-    extern "C" {
-        fn NVSDK_NGX_D3D11_Init(
-            app: u64,
-            data: *const u16,
-            device: *mut c_void,
-            common: *const Common,
-            version: u32,
-        ) -> u32;
-        fn NVSDK_NGX_D3D11_Shutdown1(device: *mut c_void) -> u32;
-        fn NVSDK_NGX_D3D11_GetCapabilityParameters(parameters: *mut *mut c_void) -> u32;
-        fn NVSDK_NGX_D3D11_DestroyParameters(parameters: *mut c_void) -> u32;
-        fn NVSDK_NGX_D3D11_CreateFeature(
-            context: *mut c_void,
-            feature: u32,
-            parameters: *mut c_void,
-            handle: *mut *mut c_void,
-        ) -> u32;
-        fn NVSDK_NGX_D3D11_ReleaseFeature(handle: *mut c_void) -> u32;
-        fn NVSDK_NGX_D3D11_EvaluateFeature_C(
-            context: *mut c_void,
-            handle: *const c_void,
-            parameters: *mut c_void,
-            callback: *const c_void,
-        ) -> u32;
-        fn NVSDK_NGX_Parameter_GetI(
-            parameters: *mut c_void,
-            name: *const c_char,
-            value: *mut i32,
-        ) -> u32;
-        fn NVSDK_NGX_Parameter_SetUI(parameters: *mut c_void, name: *const c_char, value: u32);
-        fn NVSDK_NGX_Parameter_SetD3d11Resource(
-            parameters: *mut c_void,
-            name: *const c_char,
-            value: *mut c_void,
-        );
-    }
-    fn check(result: u32) -> anyhow::Result<()> {
-        anyhow::ensure!(result == 1, "RTX Video SDK status 0x{result:08X}");
-        Ok(())
-    }
     pub struct Instance {
         device: ID3D11Device,
-        parameters: *mut c_void,
-        handle: *mut c_void,
+        _library: Library,
+        session: *mut c_void,
+        evaluate: Evaluate,
+        destroy: Destroy,
     }
     impl Instance {
         pub unsafe fn new(device: &ID3D11Device) -> anyhow::Result<Self> {
             let root = crate::vsr_runtime::validated_directory()?;
-            use std::os::windows::ffi::OsStrExt;
-            let path: Vec<u16> = root.as_os_str().encode_wide().chain(Some(0)).collect();
-            let paths = [path.as_ptr()];
-            let common = Common {
-                paths: Paths {
-                    paths: paths.as_ptr(),
-                    count: 1,
-                },
-                internal: null_mut(),
-                logging: Logging {
-                    callback: std::ptr::null(),
-                    level: 0,
-                    other_sinks_disabled: false,
-                },
-            };
-            let _lock = ContextLock::enter(device)?;
-            check(NVSDK_NGX_D3D11_Init(
-                0,
-                path.as_ptr(),
-                device.as_raw(),
-                &common,
-                0x15,
-            ))?;
-            let mut instance = Self {
-                device: device.clone(),
-                parameters: null_mut(),
-                handle: null_mut(),
-            };
-            check(NVSDK_NGX_D3D11_GetCapabilityParameters(
-                &mut instance.parameters,
-            ))?;
-            let mut available = 0;
-            check(NVSDK_NGX_Parameter_GetI(
-                instance.parameters,
-                c"VSR.Available".as_ptr(),
-                &mut available,
-            ))?;
-            anyhow::ensure!(available != 0, "RTX VSR is unsupported by this GPU/driver");
+            let library = Library::open(&crate::vsr_runtime::validated_bridge_path()?)?;
+            let abi: Abi = library.symbol(b"evoparseq_ngx_bridge_abi\0")?;
+            anyhow::ensure!(abi() == 3, "Unsupported NVIDIA NGX bridge ABI");
+            let create: Create = library.symbol(b"evoparseq_ngx_create\0")?;
+            let evaluate: Evaluate = library.symbol(b"evoparseq_ngx_evaluate\0")?;
+            let destroy: Destroy = library.symbol(b"evoparseq_ngx_destroy\0")?;
+            // Use a normal absolute Win32 path when passing the *verified*
+            // runtime directory into the NVIDIA SDK; leave the bridge path and
+            // on-disk SHA-256 checks unchanged.
+            let (path, _) = ngx_search_directory(&root)?;
             let context = device.GetImmediateContext()?;
-            check(NVSDK_NGX_D3D11_CreateFeature(
+            let _lock = ContextLock::enter(device)?;
+            let mut session = null_mut();
+            let mut diagnostics = CreateDiagnostics::default();
+            // Preserve the original direct-SDK init inputs: app=0,
+            // API=0x15, D3D11 device/context and the same verified path list.
+            let created = create(
+                device.as_raw(),
                 context.as_raw(),
-                16,
-                instance.parameters,
-                &mut instance.handle,
-            ))?;
-            Ok(instance)
+                path.as_ptr(),
+                &mut session,
+                &mut diagnostics,
+                None,
+            );
+            if created != 1 || session.is_null() {
+                let stage = match diagnostics.stage {
+                    1 => "invalid bridge ABI input",
+                    2 => "NGX D3D11 initialization",
+                    3 => "NGX D3D11 capability parameters",
+                    4 => "NGX VSR availability query",
+                    5 => "VSR.Available is false",
+                    6 => "NGX VSR feature creation",
+                    _ => "unknown NGX bridge initialization failure",
+                };
+                anyhow::bail!(
+                    "NVIDIA NGX VSR failed at {stage}: status 0x{:08X}, available={}",
+                    diagnostics.sdk_result,
+                    diagnostics.available
+                );
+            }
+            Ok(Self {
+                device: device.clone(),
+                _library: library,
+                session,
+                evaluate,
+                destroy,
+            })
         }
         pub unsafe fn evaluate(
             &self,
             context: &ID3D11DeviceContext,
-            s: &Surfaces,
+            surfaces: &Surfaces,
             rect: [i32; 4],
             quality: u8,
         ) -> anyhow::Result<()> {
             let _lock = ContextLock::enter(&self.device)?;
-            NVSDK_NGX_Parameter_SetD3d11Resource(
-                self.parameters,
-                c"Input1".as_ptr(),
-                s.input.as_raw(),
+            anyhow::ensure!(
+                (self.evaluate)(
+                    self.session,
+                    context.as_raw(),
+                    surfaces.input.as_raw(),
+                    surfaces.output.as_raw(),
+                    surfaces.key.0,
+                    surfaces.key.1,
+                    rect.as_ptr(),
+                    u32::from(quality)
+                ) == 1,
+                "NVIDIA NGX VSR frame evaluation failed"
             );
-            NVSDK_NGX_Parameter_SetD3d11Resource(
-                self.parameters,
-                c"Output".as_ptr(),
-                s.output.as_raw(),
-            );
-            for (name, value) in [
-                (c"Rect.X", 0),
-                (c"Rect.Y", 0),
-                (c"Rect.W", s.key.0),
-                (c"Rect.H", s.key.1),
-                (c"OutRect.X", rect[0] as u32),
-                (c"OutRect.Y", rect[1] as u32),
-                (c"OutRect.W", (rect[2] - rect[0]) as u32),
-                (c"OutRect.H", (rect[3] - rect[1]) as u32),
-                (c"VSR.QualityLevel", u32::from(quality)),
-            ] {
-                NVSDK_NGX_Parameter_SetUI(self.parameters, name.as_ptr(), value);
-            }
-            check(NVSDK_NGX_D3D11_EvaluateFeature_C(
-                context.as_raw(),
-                self.handle,
-                self.parameters,
-                std::ptr::null(),
-            ))
+            Ok(())
         }
     }
     impl Drop for Instance {
         fn drop(&mut self) {
             unsafe {
                 let _lock = ContextLock::enter(&self.device).ok();
-                if !self.handle.is_null() {
-                    NVSDK_NGX_D3D11_ReleaseFeature(self.handle);
-                }
-                if !self.parameters.is_null() {
-                    NVSDK_NGX_D3D11_DestroyParameters(self.parameters);
-                }
-                NVSDK_NGX_D3D11_Shutdown1(self.device.as_raw());
+                (self.destroy)(self.session);
             }
         }
     }
