@@ -151,6 +151,9 @@ pub fn migrate_legacy(root: &Path, legacy_hash: Option<&str>) -> Result<()> {
     }
     Ok(())
 }
+pub fn legacy_install_replace(source: &Path, target: &Path) -> Result<()> {
+    replace(source, target)
+}
 fn replace(source: &Path, target: &Path) -> Result<()> {
     if !target.exists() {
         std::fs::rename(source, target)?;
