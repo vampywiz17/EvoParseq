@@ -10,6 +10,7 @@ use std::{
     fs::File,
     io::Read,
     path::Path,
+    time::Duration,
 };
 
 pub const DLL_NAME: &str = "EvoParseq-NGX-Bridge.dll";
@@ -167,9 +168,13 @@ fn cached(root: &Path, key: &[u8]) -> Result<Option<Payload>> {
 pub fn verified(root: &Path, legacy_hash: Option<&str>) -> Result<()> {
     let target = root.join(DLL_NAME);
     if let Some(key) = public_key()? {
-        if let Ok(Some(manifest)) = cached(root, &key) {
-            if digest(&target, &manifest.sha256, manifest.size).is_ok() {
-                return Ok(());
+        for name in [MANIFEST_NAME, "bridge-manifest.tmp"] {
+            if let Ok(bytes) = std::fs::read(root.join(name)) {
+                if let Ok(manifest) = validate_manifest(&bytes, &key) {
+                    if digest(&target, &manifest.sha256, manifest.size).is_ok() {
+                        return Ok(());
+                    }
+                }
             }
         }
     }
@@ -258,7 +263,11 @@ fn replace(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 fn download(client: &reqwest::blocking::Client, url: &str, limit: u64) -> Result<Vec<u8>> {
-    let response = client.get(url).send()?.error_for_status()?;
+    // Metadata must not delay the login screen on slow/offline networks.
+    let timeout = if limit == MAX_MANIFEST { 5 } else { 30 };
+    let response = client.get(url)
+        .timeout(Duration::from_secs(timeout))
+        .send()?.error_for_status()?;
     let mut bytes = Vec::new();
     response.take(limit + 1).read_to_end(&mut bytes)?;
     ensure!(
@@ -266,6 +275,9 @@ fn download(client: &reqwest::blocking::Client, url: &str, limit: u64) -> Result
         "NGX metadata/download too large"
     );
     Ok(bytes)
+}
+fn needs_download(path: &Path, manifest: &Payload) -> bool {
+    digest(path, &manifest.sha256, manifest.size).is_err()
 }
 /// Check signed channel data at startup. A new release is downloaded only if
 /// the local DLL digest differs. The manifest is persisted after DLL verification.
@@ -311,7 +323,7 @@ pub fn refresh(
         return verified(root, legacy_hash);
     }
     let target = root.join(DLL_NAME);
-    if digest(&target, &manifest.sha256, manifest.size).is_err() {
+    if needs_download(&target, &manifest) {
         let bytes = download(client, &manifest.url, MAX_BRIDGE)?;
         ensure!(
             bytes.len() as u64 == manifest.size,
@@ -340,6 +352,29 @@ pub fn refresh(
 mod tests {
     use super::*;
     use ring::signature::{Ed25519KeyPair, KeyPair};
+    #[test]
+    fn unchanged_bridge_hash_never_requires_another_download() {
+        let file = std::env::temp_dir().join(format!(
+            "evoparseq-bridge-unchanged-{}", std::process::id()
+        ));
+        let bytes = b"synthetic bridge bytes, not NVIDIA code";
+        std::fs::write(&file, bytes).unwrap();
+        let manifest = Payload {
+            schema: 1,
+            channel: channel().into(),
+            sequence: 1,
+            version: "test".into(),
+            abi: ABI,
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+            size: bytes.len() as u64,
+            url: "https://github.com/vampywiz17/EvoParseq/releases/download/v1/EvoParseq-NGX-Bridge.dll".into(),
+        };
+        assert!(!needs_download(&file, &manifest));
+        let mut newer = manifest.clone();
+        newer.sha256 = "a".repeat(64);
+        assert!(needs_download(&file, &newer));
+        std::fs::remove_file(file).unwrap();
+    }
     #[test]
     fn envelope_requires_signature_matching_exact_payload() {
         let signer = Ed25519KeyPair::from_seed_unchecked(&[9; 32]).unwrap();
