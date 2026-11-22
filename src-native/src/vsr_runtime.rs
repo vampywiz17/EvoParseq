@@ -82,6 +82,13 @@ fn verify_bridge(path: &Path) -> Result<()> {
     let expected = BRIDGE_HASH.context(
         "This build has no pinned NVIDIA NGX bridge; build through the Windows release CI",
     )?;
+    verify_bridge_with_hash(path, expected)
+}
+
+/// Keep the byte-level verification testable without loading NVIDIA code or
+/// contacting the live release service. Production always passes the pinned
+/// hash embedded into EvoParseq.exe.
+fn verify_bridge_with_hash(path: &Path, expected: &str) -> Result<()> {
     ensure!(
         expected.len() == 64 && expected.bytes().all(|c| c.is_ascii_hexdigit()),
         "Invalid compile-time NGX bridge digest"
@@ -286,6 +293,51 @@ mod tests {
         assert!(verify(&path, 15, DLL_HASH).is_err());
         std::fs::remove_file(path).unwrap();
     }
+    #[test]
+    fn optional_bridge_hash_validation_rejects_tampering() {
+        let fixture =
+            std::env::temp_dir().join(format!("evoparseq-ngx-verify-{}", std::process::id()));
+        std::fs::create_dir_all(&fixture).unwrap();
+        let dll = fixture.join("evoparseq-ngx-bridge.dll");
+        let sample = b"synthetic adapter fixture; no NVIDIA SDK content";
+        std::fs::write(&dll, sample).unwrap();
+        let digest = format!("{:x}", Sha256::digest(sample));
+
+        // Real bytes must match the expected 64-character digest exactly.
+        assert!(verify_bridge_with_hash(&dll, &digest).is_ok());
+        assert!(verify_bridge_with_hash(&dll, &digest.to_uppercase()).is_ok());
+        assert!(verify_bridge_with_hash(&dll, "not-a-digest").is_err());
+        assert!(verify_bridge_with_hash(&dll, &"g".repeat(64)).is_err());
+        assert!(verify_bridge_with_hash(&dll, &"0".repeat(64)).is_err());
+
+        std::fs::write(&dll, b"altered fixture").unwrap();
+        assert!(verify_bridge_with_hash(&dll, &digest).is_err());
+        std::fs::write(&dll, []).unwrap();
+        assert!(verify_bridge_with_hash(&dll, &digest).is_err());
+
+        // A sparse oversized file must fail before its content is hashed.
+        File::create(&dll)
+            .unwrap()
+            .set_len(BRIDGE_MAX_SIZE + 1)
+            .unwrap();
+        assert!(verify_bridge_with_hash(&dll, &digest).is_err());
+        std::fs::remove_file(&dll).unwrap();
+        assert!(verify_bridge_with_hash(&dll, &digest).is_err());
+        std::fs::remove_dir_all(&fixture).unwrap();
+    }
+
+    #[test]
+    fn optional_bridge_filename_is_version_isolated_by_digest() {
+        let cache = Path::new("evoparseq-test-cache");
+        let adapter = bridge_path(cache);
+        let expected = BRIDGE_HASH.unwrap_or("unavailable");
+        assert_eq!(
+            adapter,
+            cache.join(format!("evoparseq-ngx-bridge-{expected}.dll"))
+        );
+        assert!(adapter.starts_with(cache));
+    }
+
     #[test]
     fn pinned_archive_stream_offsets_reproduce_the_official_runtime() {
         let Some(sdk) = std::env::var_os("EVOPARSEQ_RTX_VIDEO_SDK") else {
