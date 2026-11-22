@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## v0.9.9-dev.2 — NVIDIA VSR bridge update and cache preview (2026-11-22)
+
+This development preview includes the Phaze and Parsec improvements from
+v0.9.9-dev.1 plus the changes merged into dev afterwards.
+
+- **NVIDIA NGX bridge cache:** keep `EvoParseq-NGX-Bridge.dll` in
+  immutable per-SHA-256 directories; preserve older EXEs and reuse a verified
+  adapter across restarts without downloading identical content again.
+- **Signed metadata:** support separate Ed25519-verified dev and stable
+  manifests, authenticated ABI 3 and exact release assets. A compiled
+  SHA-256 bootstrap keeps existing installs functional until a signed
+  manifest and separately approved adapter are published.
+- **Safety:** reject invalid hashes, malformed manifests and rollback;
+  isolate concurrent staging files and avoid overriding loaded DLLs.
+- **RTX testing:** Windows RTX 3060 confirmed VSR initializes and works,
+  with cache reuse and compatibility between older/newer EXEs.
+- **Known limitations:** Windows VSR setup can temporarily backlog video
+  frames. Signed-channel updates require a published manifest and a separate
+  NVIDIA-linked DLL asset, subject to its redistribution terms.
+- **Release policy:** the adapter is NOT bundled in the regular Windows ZIP.
+  Publication of the separately staged DLL requires NVIDIA license review.
+
+
 ## v0.9.8 — Multi-display streaming and Linux Flatpak (2026-11-19)
 
 
