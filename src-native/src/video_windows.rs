@@ -2276,6 +2276,17 @@ fn presentation_status(status: windows::core::HRESULT) -> Result<Presentation> {
     })
 }
 
+fn nvidia_vsr_eligible(nvidia: bool, upscale: bool, format: DXGI_FORMAT) -> bool {
+    nvidia && upscale && matches!(format, DXGI_FORMAT_NV12 | DXGI_FORMAT_P010)
+}
+
+fn retry_rejected_vsr<T>(mut present: impl FnMut() -> Result<T>) -> Result<T> {
+    match present() {
+        Err(error) if error.stage == "video-processor-vsr-retry" => present(),
+        result => result,
+    }
+}
+
 struct ProcessorCache {
     rotation_set: bool,
     enumeration: ID3D11VideoProcessorEnumerator,
@@ -2852,13 +2863,8 @@ impl Renderer {
         _window: &crate::window::Window,
     ) -> Result<Presentation> {
         self.ten_bit_attempted = false;
-        let mut result = self.present_frame(texture, subresource, source, color, shared);
-        if result
-            .as_ref()
-            .is_err_and(|error| error.stage == "video-processor-vsr-retry")
-        {
-            result = self.present_frame(texture, subresource, source, color, shared);
-        }
+        let result =
+            retry_rejected_vsr(|| self.present_frame(texture, subresource, source, color, shared));
         // Retry only a rejected 10-bit output operation, never a lost device or
         // decoder error. The decoded P010 surface is retained; no re-decode/copy.
         match result {
@@ -2916,8 +2922,7 @@ impl Renderer {
         let upscale =
             (right - left) as u32 > source_size.0 && (bottom - top) as u32 > source_size.1;
         let nvidia = matches!(self.vsr, Some(crate::video_upscale::Effect::Nvidia));
-        let nvidia_vsr =
-            nvidia && upscale && matches!(td.Format, DXGI_FORMAT_NV12 | DXGI_FORMAT_P010);
+        let nvidia_vsr = nvidia_vsr_eligible(nvidia, upscale, td.Format);
         let key = (
             td.Width, td.Height, size.0, size.1, td.Format, color, nvidia_vsr,
         );
@@ -2993,7 +2998,14 @@ impl Renderer {
                 .VideoProcessorSetStreamAutoProcessingMode(&processor, 0, nvidia_vsr);
             let nvidia_vsr_requested = if nvidia_vsr {
                 match crate::nvidia_vsr::request(&self.video_context, &processor) {
-                    Ok(()) => true,
+                    Ok(()) => {
+                        crate::event_log::record(
+                            "INFO",
+                            "video_vsr_driver_request_accepted",
+                            serde_json::json!({"vendor":"NVIDIA","hardware_activation_verified":false}),
+                        );
+                        true
+                    }
                     Err(error) => {
                         api("video-processor-vsr", self.device.GetDeviceRemovedReason())?;
                         self.video_context
@@ -3345,6 +3357,44 @@ pub(crate) fn display_extents(width: u32, height: u32, rotation: u8) -> (u32, u3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nvidia_vsr_requests_only_upscaled_nv12_or_p010() {
+        for format in [DXGI_FORMAT_NV12, DXGI_FORMAT_P010] {
+            assert!(nvidia_vsr_eligible(true, true, format));
+            assert!(!nvidia_vsr_eligible(false, true, format));
+            assert!(!nvidia_vsr_eligible(true, false, format));
+        }
+        assert!(!nvidia_vsr_eligible(true, true, DXGI_FORMAT_Y410));
+    }
+
+    #[test]
+    fn nvidia_vsr_retries_only_a_rejected_vsr_frame() {
+        let mut calls = 0;
+        let frame = retry_rejected_vsr(|| {
+            calls += 1;
+            if calls == 1 {
+                Err(unavailable("video-processor-vsr-retry"))
+            } else {
+                Ok(42)
+            }
+        })
+        .unwrap();
+        assert_eq!((frame, calls), (42, 2));
+
+        for (stage, expected_calls) in
+            [("video-processor-blt", 1), ("video-processor-vsr-retry", 2)]
+        {
+            let mut calls = 0;
+            let error = retry_rejected_vsr::<()>(|| {
+                calls += 1;
+                Err(unavailable(stage))
+            })
+            .unwrap_err();
+            assert_eq!((error.stage, calls), (stage, expected_calls));
+        }
+    }
+
     #[test]
     fn vrr_creation_falls_back_in_order_without_hiding_device_loss() {
         let wait = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32;

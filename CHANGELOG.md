@@ -8,10 +8,16 @@
   driver during the existing D3D11 video processor pass. Keep a local on/off
   preference and use NVIDIA App for quality. When the driver rejects the
   request, the stream can continue through normal GPU rendering.
-- **Windows build and packaging:** remove the NVIDIA SDK, bridge build,
-  download and signed manifest paths. The Windows CI build also runs for
-  pull requests targeting dev.
+- **Windows build and packaging:** remove the NVIDIA SDK and bridge tooling.
+  The Windows CI build also runs for pull requests targeting dev.
+- **VSR diagnostics:** log when the driver accepts the VSR request. This event
+  records driver acceptance. RTX image enhancement remains unverified.
 
+### Known issues
+
+- **Phaze input:** normal mouse or keyboard events can occasionally be missed,
+  including in the official Phaze client. This has not been observed in USB
+  HID mode.
 
 ## v0.9.8 — Multi-display streaming and Linux Flatpak (2026-11-19)
 
