@@ -15,7 +15,7 @@ const ARCHIVE_HASH: &str = "abf4f34e2b5a618e355b0d5a0365d8ecc3db4396e756e4c850a8
 const ARCHIVE_SIZE: u64 = 63_493_768;
 const DLL_SIZE: u64 = 19_140_144;
 const URL: &str = "https://api.ngc.nvidia.com/v2/models/nvidia/multimedia/dlpp/versions/1.5/files/RTX_Video_SDK_v1.1.0.zip";
-pub const PROMPT: &str = "Download the optional NVIDIA RTX Video Super Resolution runtime from NVIDIA?\n\nThe download is about 61 MB. The checked NVIDIA runtime DLL (about 19 MB) and a version-pinned EvoParseq NGX adapter DLL will be stored under %LOCALAPPDATA%/EvoParseq/vsr/1.1.0 for your Windows user (no administrator rights required). Sign-in opens after setup finishes.\n\nVSR requires a compatible RTX GPU/driver, is off by default and may increase latency. The NVIDIA SDK license is included in the application package. Choosing No keeps ordinary GPU video available.";
+pub const PROMPT: &str = "Download the optional NVIDIA VSR runtime from NVIDIA and the EvoParseq NGX adapter from GitHub?\n\nThe download is about 61 MB. The checked NVIDIA runtime DLL (about 19 MB) and a version-pinned EvoParseq NGX adapter DLL will be stored under %LOCALAPPDATA%/EvoParseq/vsr/1.1.0 for your Windows user (no administrator rights required). Sign-in opens after setup finishes.\n\nVSR requires a compatible RTX GPU/driver, is off by default and may increase latency. The NVIDIA SDK license is included in the application package. Choosing No keeps ordinary GPU video available.";
 const BRIDGE_NAME: &str = "evoparseq-ngx-bridge.dll";
 const BRIDGE_MAX_SIZE: u64 = 16 * 1024 * 1024;
 // This digest is injected by the release build after compiling the isolated DLL.
@@ -41,9 +41,7 @@ pub fn directory() -> Result<PathBuf> {
     Ok(directory_under(&local_directory()?))
 }
 pub fn present() -> bool {
-    directory().is_ok_and(|root| {
-        root.join("nvngx_vsr.dll").is_file() && root.join(BRIDGE_NAME).is_file()
-    })
+    validated_directory().is_ok()
 }
 fn hash(mut file: &File) -> Result<String> {
     let mut digest = Sha256::new();
@@ -158,7 +156,13 @@ pub fn install() -> Result<()> {
         }))
         .build()?;
     // First verify the separately built adapter. Never load an unverified DLL.
-    install_bridge(&root, &client)?;
+    if verify_bridge(&root.join(BRIDGE_NAME)).is_err() {
+        install_bridge(&root, &client)?;
+    }
+    // A previously installed, hash-verified NVIDIA runtime remains usable.
+    if verify(&root.join("nvngx_vsr.dll"), DLL_SIZE, DLL_HASH).is_ok() {
+        return Ok(());
+    }
     let response = client
         .get(URL)
         .send()
