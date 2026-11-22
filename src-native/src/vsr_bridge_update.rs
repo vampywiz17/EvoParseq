@@ -6,12 +6,7 @@ use base64::Engine as _;
 use ring::signature::{UnparsedPublicKey, ED25519};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::{
-    fs::File,
-    io::Read,
-    path::Path,
-    time::Duration,
-};
+use std::{fs::File, io::Read, path::Path, time::Duration};
 
 pub const DLL_NAME: &str = "EvoParseq-NGX-Bridge.dll";
 const MANIFEST_NAME: &str = "bridge-manifest.json";
@@ -265,9 +260,11 @@ fn replace(source: &Path, target: &Path) -> Result<()> {
 fn download(client: &reqwest::blocking::Client, url: &str, limit: u64) -> Result<Vec<u8>> {
     // Metadata must not delay the login screen on slow/offline networks.
     let timeout = if limit == MAX_MANIFEST { 5 } else { 30 };
-    let response = client.get(url)
+    let response = client
+        .get(url)
         .timeout(Duration::from_secs(timeout))
-        .send()?.error_for_status()?;
+        .send()?
+        .error_for_status()?;
     let mut bytes = Vec::new();
     response.take(limit + 1).read_to_end(&mut bytes)?;
     ensure!(
@@ -354,9 +351,8 @@ mod tests {
     use ring::signature::{Ed25519KeyPair, KeyPair};
     #[test]
     fn unchanged_bridge_hash_never_requires_another_download() {
-        let file = std::env::temp_dir().join(format!(
-            "evoparseq-bridge-unchanged-{}", std::process::id()
-        ));
+        let file =
+            std::env::temp_dir().join(format!("evoparseq-bridge-unchanged-{}", std::process::id()));
         let bytes = b"synthetic bridge bytes, not NVIDIA code";
         std::fs::write(&file, bytes).unwrap();
         let manifest = Payload {
