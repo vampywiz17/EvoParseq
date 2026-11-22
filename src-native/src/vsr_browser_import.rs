@@ -2,7 +2,7 @@
 //! EvoParseq never retrieves an executable DLL or NVIDIA SDK ZIP itself.
 use anyhow::{bail, Result};
 use std::{
-    ffi::{c_void, OsString},
+    ffi::OsString,
     os::windows::ffi::{OsStrExt, OsStringExt},
     path::PathBuf,
 };
@@ -121,12 +121,3 @@ pub fn choose(url: &str, extension: &str) -> Result<Option<PathBuf>> {
     select_download(extension)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn file_picker_types_are_explicit() {
-        assert!(["dll", "zip"].iter().all(|e| matches!(*e, "dll" | "zip")));
-        // No ambient scanning, implicit Downloads trust or arbitrary installer.
-    }
-}
