@@ -474,6 +474,18 @@ impl Queue {
             self.report.frames_dropped += 1;
             return false;
         }
+        // While optional GPU initialization owns the video worker, the first
+        // full queue already invalidated the reference chain. Do not accept
+        // another burst (or another IDR) until initialization finishes and a
+        // fresh keyframe can be requested. Otherwise each 32-frame burst
+        // triggers another recovery, without any chance to decode it.
+        if self.optional_setup
+            && self.report.recovery_reason == Some("optional_video_setup_backlog")
+        {
+            self.report.frames_dropped = self.report.frames_dropped.saturating_add(1);
+            self.recycle(bytes);
+            return false;
+        }
         if self.frames.len() >= MAX_FRAMES
             || self.report.queue_bytes.saturating_add(bytes.len()) > MAX_BYTES
         {
@@ -668,6 +680,10 @@ impl Queue {
         if self.stopped
             || self.report.failure_stage.is_some()
             || !self.request_pending
+            // The decoder cannot service the requested keyframe until the
+            // optional setup releases its worker. Ask only after it finishes.
+            || (self.optional_setup
+                && self.report.recovery_reason == Some("optional_video_setup_backlog"))
             || self
                 .last_request
                 .is_some_and(|last| now.duration_since(last) < Duration::from_secs(1))
@@ -1335,31 +1351,41 @@ mod optional_warmup_tests {
         assert!(!can_preserve_effect(Some("unknown_future_failure")));
     }
     #[test]
-    fn bounded_optional_warmup_drops_stale_input_without_consuming_error_retries() {
+    fn optional_warmup_overflow_restarts_once_after_setup_with_fresh_keyframe() {
         let mut queue = Queue::default();
         let start = Instant::now();
         queue.begin_native_call(NativeOperation::Setup, start);
         queue.optional_setup(true);
-        for _ in 0..5 {
-            for _ in 0..MAX_FRAMES {
-                assert!(queue.submit(&[1], true, false, 0));
-            }
-            assert!(!queue.submit(&[1], true, false, 0));
-            assert_eq!(queue.recovery_attempts, 0);
-            assert_eq!(queue.report.queue_depth, 0);
-            assert_eq!(
-                queue.report.recovery_reason,
-                Some("optional_video_setup_backlog")
-            );
-            assert!(queue.report.failure_stage.is_none());
-        }
-        queue.optional_setup(false);
         for _ in 0..MAX_FRAMES {
             assert!(queue.submit(&[1], true, false, 0));
         }
         assert!(!queue.submit(&[1], true, false, 0));
-        assert_eq!(queue.recovery_attempts, 1);
-        assert_eq!(queue.report.recovery_reason, Some("compressed_queue_full"));
+        let generation = queue.reset_generation;
+        assert_eq!(queue.recovery_attempts, 0);
+        assert_eq!(queue.report.queue_depth, 0);
+        assert_eq!(
+            queue.report.recovery_reason,
+            Some("optional_video_setup_backlog")
+        );
+        // Further IDRs and deltas are all stale until the blocked GPU worker
+        // has finished initialization. No second recovery / queue filling.
+        for index in 0..5 * MAX_FRAMES {
+            assert!(!queue.submit(&[1], index % 10 == 0, false, index as i64));
+            assert_eq!(queue.reset_generation, generation);
+            assert_eq!(queue.report.queue_depth, 0);
+        }
+        assert!(queue.take_keyframe_request(start).is_none());
+        assert!(queue.report.failure_stage.is_none());
+        queue.optional_setup(false);
+        assert!(queue.take_keyframe_request(start).is_some());
+        assert!(queue.take_keyframe_request(start).is_none());
+        assert!(!queue.submit(&[1], false, false, 1));
+        assert!(queue.submit(&[1], true, false, 2));
+        assert!(queue.submit(&[1], false, false, 3));
+        assert_eq!(queue.pop().unwrap().timestamp_100ns, 2);
+        assert_eq!(queue.pop().unwrap().timestamp_100ns, 3);
+        assert_eq!(queue.recovery_attempts, 0);
+        assert_eq!(queue.report.failure_stage, None);
         queue.check_native_call(start + Duration::from_secs(10));
         assert_eq!(
             queue.report.failure_stage,
