@@ -175,8 +175,8 @@ fn install_bridge(root: &Path, client: &reqwest::blocking::Client) -> Result<()>
         length > 0 && length <= BRIDGE_MAX_SIZE,
         "NGX adapter exceeds size limit"
     );
-    verify_bridge(&temp)?;
-    bridge_update::commit_bootstrap(&temp, &target, expected)?;
+    verify_bridge(&temp.path)?;
+    bridge_update::commit_bootstrap(&temp.path, &target, expected)?;
     Ok(())
 }
 
