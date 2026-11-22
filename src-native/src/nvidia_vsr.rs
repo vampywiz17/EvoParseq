@@ -167,7 +167,7 @@ mod sdk {
 
     pub struct Instance {
         device: ID3D11Device,
-        library: Library,
+        _library: Library,
         session: *mut c_void,
         evaluate: Evaluate,
         destroy: Destroy,
@@ -189,7 +189,7 @@ mod sdk {
             anyhow::ensure!(create(device.as_raw(), context.as_raw(), path.as_ptr(),
                 &mut session) == 1 && !session.is_null(),
                 "NVIDIA NGX VSR initialization failed or GPU/driver unsupported");
-            Ok(Self { device: device.clone(), library, session, evaluate, destroy })
+            Ok(Self { device: device.clone(), _library: library, session, evaluate, destroy })
         }
         pub unsafe fn evaluate(&self, context: &ID3D11DeviceContext,
             surfaces: &Surfaces, rect: [i32; 4], quality: u8) -> anyhow::Result<()> {
