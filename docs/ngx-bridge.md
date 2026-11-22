@@ -22,7 +22,8 @@ and **no NGX bridge DLL is bundled in the Windows ZIP**.
    and NVIDIA's pinned `nvngx_vsr.dll`. The runtime stores both under the
    user's `%LOCALAPPDATA%/EvoParseq/vsr/1.1.0`.
 5. EvoParseq validates the adapter against its **embedded SHA-256** and the
-   NVIDIA runtime against the pinned SDK SHA-256, then uses an absolute-path
+   NVIDIA runtime against the pinned SDK SHA-256, and stores the bridge with a hash-qualified filename (allowing concurrent
+   EvoParseq versions), then uses an absolute-path
    `LoadLibraryExW` and resolves the adapter's private ABI v1.
 6. The adapter forwards the same D3D11 texture and VSR quality/viewport data
    to NVIDIA NGX as the earlier static integration. The main program retains
