@@ -152,8 +152,14 @@ mod sdk {
         const SLASH: u16 = b'\\' as u16;
         const VERBATIM: [u16; 4] = [SLASH, SLASH, b'?' as u16, SLASH];
         const VERBATIM_UNC: [u16; 8] = [
-            SLASH, SLASH, b'?' as u16, SLASH,
-            b'U' as u16, b'N' as u16, b'C' as u16, SLASH,
+            SLASH,
+            SLASH,
+            b'?' as u16,
+            SLASH,
+            b'U' as u16,
+            b'N' as u16,
+            b'C' as u16,
+            SLASH,
         ];
         let mut removed_prefix = false;
         if path.starts_with(&VERBATIM_UNC) {
@@ -173,10 +179,16 @@ mod sdk {
             && path.starts_with(&[SLASH, SLASH])
             && path[2] != SLASH
             && path[2..].contains(&SLASH);
-        anyhow::ensure!(drive || unc, "NGX runtime directory has an unsupported path form");
+        anyhow::ensure!(
+            drive || unc,
+            "NGX runtime directory has an unsupported path form"
+        );
         // The SDK may use legacy Win32 file APIs. Avoid handing it a normal
         // path that already exceeds traditional MAX_PATH and cannot resolve.
-        anyhow::ensure!(path.len() < 248, "NGX runtime directory exceeds Win32 path limit");
+        anyhow::ensure!(
+            path.len() < 248,
+            "NGX runtime directory exceeds Win32 path limit"
+        );
         path.push(0);
         Ok((path, removed_prefix))
     }
@@ -192,10 +204,15 @@ mod sdk {
 
         #[test]
         fn canonical_drive_directory_becomes_normal_windows_path() {
-            let (wide, converted) =
-                ngx_search_directory(Path::new(r"\\?\C:\Users\Test\AppData\Local\EvoParseq\vsr\1.1.0")).unwrap();
+            let (wide, converted) = ngx_search_directory(Path::new(
+                r"\\?\C:\Users\Test\AppData\Local\EvoParseq\vsr\1.1.0",
+            ))
+            .unwrap();
             assert!(converted);
-            assert_eq!(decode(&wide), r"C:\Users\Test\AppData\Local\EvoParseq\vsr\1.1.0");
+            assert_eq!(
+                decode(&wide),
+                r"C:\Users\Test\AppData\Local\EvoParseq\vsr\1.1.0"
+            );
         }
 
         #[test]
@@ -208,16 +225,14 @@ mod sdk {
 
         #[test]
         fn ordinary_path_is_preserved_and_slashes_are_normalized() {
-            let (wide, converted) =
-                ngx_search_directory(Path::new("C:/Users/Test/VSR")).unwrap();
+            let (wide, converted) = ngx_search_directory(Path::new("C:/Users/Test/VSR")).unwrap();
             assert!(!converted);
             assert_eq!(decode(&wide), r"C:\Users\Test\VSR");
         }
 
         #[test]
         fn unicode_path_and_invalid_forms_are_handled_without_lossy_encoding() {
-            let (wide, _) =
-                ngx_search_directory(Path::new(r"\\?\C:\Felhasználó\VSR")).unwrap();
+            let (wide, _) = ngx_search_directory(Path::new(r"\\?\C:\Felhasználó\VSR")).unwrap();
             assert_eq!(decode(&wide), r"C:\Felhasználó\VSR");
             assert!(ngx_search_directory(Path::new(r"relative\VSR")).is_err());
             assert!(ngx_search_directory(Path::new(r"\\?\Volume{0000}\VSR")).is_err());
