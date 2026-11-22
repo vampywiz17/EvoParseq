@@ -308,8 +308,8 @@ fn download(client: &reqwest::blocking::Client, url: &str, limit: u64) -> Result
 
 /// Unique, exclusively created staging files cannot be truncated by a second
 /// EvoParseq process, even when two instances start at the same millisecond.
-struct Stage {
-    path: PathBuf,
+pub struct Stage {
+    pub path: PathBuf,
 }
 impl Drop for Stage {
     fn drop(&mut self) {
@@ -329,6 +329,12 @@ fn unique_stage(root: &Path, name: &str) -> Result<(Stage, File)> {
         }
     }
     bail!("Unable to reserve a unique NGX staging file")
+}
+pub fn unique_stage_for_bootstrap(root: &Path) -> Result<(Stage, File)> {
+    unique_stage(root, "bridge-bootstrap")
+}
+pub fn commit_bootstrap(stage: &Path, target: &Path, digest: &str) -> Result<()> {
+    commit_immutable(stage, target, digest, None)
 }
 fn commit_immutable(stage: &Path, target: &Path, hash: &str, size: Option<u64>) -> Result<()> {
     if let Some(size) = size {
