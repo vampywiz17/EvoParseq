@@ -175,7 +175,7 @@ mod sdk {
     impl Instance {
         pub unsafe fn new(device: &ID3D11Device) -> anyhow::Result<Self> {
             let root = crate::vsr_runtime::validated_directory()?;
-            let library = Library::open(&root.join("evoparseq-ngx-bridge.dll"))?;
+            let library = Library::open(&crate::vsr_runtime::validated_bridge_path()?)?;
             let abi: Abi = library.symbol(b"evoparseq_ngx_bridge_abi\0")?;
             anyhow::ensure!(abi() == 1, "Unsupported NVIDIA NGX bridge ABI");
             let create: Create = library.symbol(b"evoparseq_ngx_create\0")?;
