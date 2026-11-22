@@ -3,7 +3,9 @@
 #[path = "settings_controls.rs"]
 pub(crate) mod controls;
 use crate::connection_settings::Manager;
-use crate::settings_model::{BinaryChoice, Feature, Form, InputMode, RouteMode, Tab, VideoFormat};
+use crate::settings_model::{
+    AiUpscaler, BinaryChoice, Feature, Form, InputMode, RouteMode, Tab, VideoFormat,
+};
 use std::{
     ptr::{null, null_mut},
     sync::Arc,
