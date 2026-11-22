@@ -262,7 +262,9 @@ pub fn install() -> Result<()> {
         .transpose()?;
     let target = archive_download_location(initial.url(), initial.status(), location)?;
     let response = if let Some(url) = target {
-        client.get(url).send()
+        client
+            .get(url)
+            .send()
             .context("Cannot fetch NVIDIA's HTTPS archive location")?
     } else {
         initial
@@ -270,7 +272,10 @@ pub fn install() -> Result<()> {
     let response = response
         .error_for_status()
         .context("NVIDIA archive download was rejected")?;
-    ensure!(response.url().scheme() == "https", "NVIDIA download must use HTTPS");
+    ensure!(
+        response.url().scheme() == "https",
+        "NVIDIA download must use HTTPS"
+    );
     save_checked_archive(response, &temporary.0, ARCHIVE_SIZE, ARCHIVE_HASH)?;
     // These offsets are valid ONLY after checking the complete immutable SDK
     // 1.1.0 archive hash above. No filenames from an archive become filesystem paths.
@@ -310,51 +315,64 @@ mod tests {
     #[test]
     fn nvidia_download_discovery_handles_metadata_redirect_and_direct_body() {
         let origin = reqwest::Url::parse(URL).unwrap();
-        assert!(archive_download_location(&origin, reqwest::StatusCode::OK, None)
-            .unwrap().is_none());
+        assert!(
+            archive_download_location(&origin, reqwest::StatusCode::OK, None)
+                .unwrap()
+                .is_none()
+        );
         let redirect = "https://download.nvidia.com/rtx-video-sdk.zip";
         assert_eq!(
             archive_download_location(&origin, reqwest::StatusCode::FOUND, Some(redirect))
-                .unwrap().unwrap().as_str(),
+                .unwrap()
+                .unwrap()
+                .as_str(),
             redirect,
         );
         assert_eq!(
             archive_download_location(&origin, reqwest::StatusCode::OK, Some(redirect))
-                .unwrap().unwrap().as_str(),
+                .unwrap()
+                .unwrap()
+                .as_str(),
             redirect,
         );
         assert!(archive_download_location(&origin, reqwest::StatusCode::FOUND, None).is_err());
         assert!(archive_download_location(
-            &origin, reqwest::StatusCode::FOUND, Some("http://other.example/zip")
-        ).is_err());
+            &origin,
+            reqwest::StatusCode::FOUND,
+            Some("http://other.example/zip")
+        )
+        .is_err());
     }
 
     #[test]
     fn pinned_download_accepts_final_response_body_without_location_header() {
         let path = std::env::temp_dir().join(format!(
-            "evoparseq-ngx-direct-body-{}.bin", std::process::id()
+            "evoparseq-ngx-direct-body-{}.bin",
+            std::process::id()
         ));
         let _cleanup = Temporary(path.clone());
         let body = b"already followed HTTPS redirect";
         let digest = format!("{:x}", Sha256::digest(body));
-        save_checked_archive(std::io::Cursor::new(body), &path, body.len() as u64, &digest)
-            .unwrap();
+        save_checked_archive(
+            std::io::Cursor::new(body),
+            &path,
+            body.len() as u64,
+            &digest,
+        )
+        .unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), body);
     }
 
     #[test]
     fn pinned_download_rejects_tampering_and_oversized_body() {
         let path = std::env::temp_dir().join(format!(
-            "evoparseq-ngx-invalid-body-{}.bin", std::process::id()
+            "evoparseq-ngx-invalid-body-{}.bin",
+            std::process::id()
         ));
         let _cleanup = Temporary(path.clone());
         let digest = format!("{:x}", Sha256::digest(b"correct"));
-        assert!(save_checked_archive(
-            std::io::Cursor::new(b"changed"), &path, 7, &digest
-        ).is_err());
-        assert!(save_checked_archive(
-            std::io::Cursor::new(b"extra!"), &path, 5, &digest
-        ).is_err());
+        assert!(save_checked_archive(std::io::Cursor::new(b"changed"), &path, 7, &digest).is_err());
+        assert!(save_checked_archive(std::io::Cursor::new(b"extra!"), &path, 5, &digest).is_err());
     }
 
     #[test]
