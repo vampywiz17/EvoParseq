@@ -24,7 +24,7 @@ and **no NGX bridge DLL is bundled in the Windows ZIP**.
 5. EvoParseq validates the adapter against its **embedded SHA-256** and the
    NVIDIA runtime against the pinned SDK SHA-256, and stores the bridge with a hash-qualified filename (allowing concurrent
    EvoParseq versions), then uses an absolute-path
-   `LoadLibraryExW` and resolves the adapter's private ABI v1.
+   `LoadLibraryExW` and resolves the adapter's private ABI v3.
 6. The adapter forwards the same D3D11 texture and VSR quality/viewport data
    to NVIDIA NGX as the earlier static integration. The main program retains
    GPU surface ownership and the D3D10Multithread critical section.
