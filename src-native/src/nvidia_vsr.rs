@@ -149,7 +149,8 @@ mod sdk {
         // Callbacks may run on NVIDIA worker threads. Do not unwind across FFI.
         let _ = std::panic::catch_unwind(|| {
             let raw = unsafe { CStr::from_ptr(message) }.to_string_lossy();
-            let snippet: String = raw.chars()
+            let snippet: String = raw
+                .chars()
                 .filter(|ch| !ch.is_control() || *ch == ' ')
                 .take(320)
                 .collect();
@@ -173,12 +174,16 @@ mod sdk {
             return (true, None);
         };
         let mut filename = [0u16; 1024];
-        let count = GetModuleFileNameW(handle, filename.as_mut_ptr(), filename.len() as u32) as usize;
+        let count =
+            GetModuleFileNameW(handle, filename.as_mut_ptr(), filename.len() as u32) as usize;
         if count == 0 || count >= filename.len() {
             return (true, None);
         }
         let found = PathBuf::from(OsString::from_wide(&filename[..count]));
-        let matches = match (std::fs::canonicalize(found), std::fs::canonicalize(expected)) {
+        let matches = match (
+            std::fs::canonicalize(found),
+            std::fs::canonicalize(expected),
+        ) {
             (Ok(a), Ok(b)) => Some(a == b),
             _ => None,
         };
