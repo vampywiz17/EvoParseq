@@ -43,3 +43,42 @@ impl Effect {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::{
+        Foundation::HMODULE,
+        Graphics::{Direct3D::D3D_DRIVER_TYPE_WARP, Direct3D11::*},
+    };
+
+    #[test]
+    fn effect_checks_the_actual_render_device_and_reports_nvidia_pending() {
+        let mut device = None;
+        unsafe {
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_WARP,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                None,
+            )
+            .unwrap();
+        }
+        // The software adapter must never be reported as a hardware AI effect.
+        let error = unsafe { Effect::new(&device.unwrap()) }.err().unwrap();
+        assert_eq!(
+            error.to_string(),
+            "AI upscaling is unavailable for the selected GPU"
+        );
+        assert_eq!(Effect::Nvidia.vendor(), "NVIDIA");
+        assert_eq!(
+            Effect::Nvidia.ready_status(),
+            "Waiting for an eligible frame to request NVIDIA driver VSR",
+        );
+    }
+}
