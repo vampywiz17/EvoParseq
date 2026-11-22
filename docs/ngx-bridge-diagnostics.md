@@ -23,7 +23,7 @@ The intentional differences are **where the static SDK code runs** (inside an in
 ## Events to inspect
 
 - `video_ngx_module_probe`: emitted before and after NGX initialization. `runtime_loaded` checks whether Windows has loaded a module named `nvngx_vsr.dll`; `runtime_matches_verified_file` compares its resolved location to the SHA-256-verified per-user runtime file. It does **not** force-load the module. `ngx_driver_core_loaded` probes `_nvngx.dll`, if present. `null` indicates that a path comparison was not available.
-- `video_ngx_sdk_log`: NVIDIA's NGX callback during initialization, limited to 48 messages and 320 characters per message per attempt. Requires EvoParseq event logging to be enabled. May contain system paths or other NVIDIA diagnostic context; review before sharing.
+- `video_ngx_sdk_log`: NVIDIA's NGX callback during initialization, limited to 48 events per attempt. Requires EvoParseq event logging. To preserve log privacy, records only the SDK log level and component, the message byte length, a SHA-256 fingerprint and a coarse diagnostic category. **No raw NVIDIA message text or filesystem paths are written.** Uses NGX logging level ON (not VERBOSE) and disables NVIDIA's other log sinks while the callback is registered.
 - `video_vsr_fallback`: exact failing NGX initialization stage and SDK status. `VSR.Available is false` means the capability query succeeded but NVIDIA returned zero, not that the SDK failed to initialize.
 - `video_vsr_setup_finished`: setup duration and whether the VSR instance exists.
 - `video_vsr_active`: at least one GPU-side VSR evaluation completed.
