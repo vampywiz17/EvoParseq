@@ -122,26 +122,42 @@ mod sdk {
     const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x100;
     const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x1000;
 
-    type Create = unsafe extern "C" fn(*mut c_void, *mut c_void, *const u16,
-        *mut *mut c_void) -> u32;
-    type Evaluate = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void,
-        *mut c_void, u32, u32, *const i32, u32) -> u32;
+    type Create =
+        unsafe extern "C" fn(*mut c_void, *mut c_void, *const u16, *mut *mut c_void) -> u32;
+    type Evaluate = unsafe extern "C" fn(
+        *mut c_void,
+        *mut c_void,
+        *mut c_void,
+        *mut c_void,
+        u32,
+        u32,
+        *const i32,
+        u32,
+    ) -> u32;
     type Destroy = unsafe extern "C" fn(*mut c_void);
     type Abi = unsafe extern "C" fn() -> u32;
 
     struct Library(*mut c_void);
     impl Drop for Library {
         fn drop(&mut self) {
-            unsafe { FreeLibrary(self.0); }
+            unsafe {
+                FreeLibrary(self.0);
+            }
         }
     }
     impl Library {
         unsafe fn open(path: &std::path::Path) -> anyhow::Result<Self> {
             use std::os::windows::ffi::OsStrExt;
             let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-            let module = LoadLibraryExW(wide.as_ptr(), null_mut(),
-                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-            anyhow::ensure!(!module.is_null(), "Cannot load the verified NVIDIA NGX bridge");
+            let module = LoadLibraryExW(
+                wide.as_ptr(),
+                null_mut(),
+                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+            );
+            anyhow::ensure!(
+                !module.is_null(),
+                "Cannot load the verified NVIDIA NGX bridge"
+            );
             Ok(Self(module))
         }
         unsafe fn symbol<T: Copy>(&self, symbol: &'static [u8]) -> anyhow::Result<T> {
@@ -161,7 +177,9 @@ mod sdk {
     }
     impl Drop for ContextLock {
         fn drop(&mut self) {
-            unsafe { self.0.Leave(); }
+            unsafe {
+                self.0.Leave();
+            }
         }
     }
 
@@ -186,18 +204,45 @@ mod sdk {
             let context = device.GetImmediateContext()?;
             let _lock = ContextLock::enter(device)?;
             let mut session = null_mut();
-            anyhow::ensure!(create(device.as_raw(), context.as_raw(), path.as_ptr(),
-                &mut session) == 1 && !session.is_null(),
-                "NVIDIA NGX VSR initialization failed or GPU/driver unsupported");
-            Ok(Self { device: device.clone(), _library: library, session, evaluate, destroy })
+            anyhow::ensure!(
+                create(
+                    device.as_raw(),
+                    context.as_raw(),
+                    path.as_ptr(),
+                    &mut session
+                ) == 1
+                    && !session.is_null(),
+                "NVIDIA NGX VSR initialization failed or GPU/driver unsupported"
+            );
+            Ok(Self {
+                device: device.clone(),
+                _library: library,
+                session,
+                evaluate,
+                destroy,
+            })
         }
-        pub unsafe fn evaluate(&self, context: &ID3D11DeviceContext,
-            surfaces: &Surfaces, rect: [i32; 4], quality: u8) -> anyhow::Result<()> {
+        pub unsafe fn evaluate(
+            &self,
+            context: &ID3D11DeviceContext,
+            surfaces: &Surfaces,
+            rect: [i32; 4],
+            quality: u8,
+        ) -> anyhow::Result<()> {
             let _lock = ContextLock::enter(&self.device)?;
-            anyhow::ensure!((self.evaluate)(self.session, context.as_raw(),
-                surfaces.input.as_raw(), surfaces.output.as_raw(), surfaces.key.0,
-                surfaces.key.1, rect.as_ptr(), u32::from(quality)) == 1,
-                "NVIDIA NGX VSR frame evaluation failed");
+            anyhow::ensure!(
+                (self.evaluate)(
+                    self.session,
+                    context.as_raw(),
+                    surfaces.input.as_raw(),
+                    surfaces.output.as_raw(),
+                    surfaces.key.0,
+                    surfaces.key.1,
+                    rect.as_ptr(),
+                    u32::from(quality)
+                ) == 1,
+                "NVIDIA NGX VSR frame evaluation failed"
+            );
             Ok(())
         }
     }
