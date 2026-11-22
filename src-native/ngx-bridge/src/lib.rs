@@ -3,10 +3,13 @@
 //! Distributed independently of the single-EXE EvoParseq Windows package.
 use std::{ffi::{c_char, c_void}, ptr::null_mut};
 
+// Mirrors NVSDK_NGX_AppLogCallback (Windows x64 cdecl).
+type SdkLogCallback = unsafe extern "C" fn(*const c_char, u32, u32);
+
 #[repr(C)]
 struct Paths { paths: *const *const u16, count: u32 }
 #[repr(C)]
-struct Logging { callback: *const c_void, level: u32, other_sinks_disabled: bool }
+struct Logging { callback: Option<SdkLogCallback>, level: u32, other_sinks_disabled: bool }
 #[repr(C)]
 struct Common { paths: Paths, internal: *mut c_void, logging: Logging }
 
@@ -52,15 +55,16 @@ impl Drop for Session {
     }
 }
 
-// All exported functions are private ABI v1 and invoked only after hash verification.
+// All exported functions use private ABI v3 and are invoked only after hash verification.
 // The caller owns a D3D10Multithread lock for every entrypoint.
 #[no_mangle]
-pub unsafe extern "C" fn evoparseq_ngx_bridge_abi() -> u32 { 2 }
+pub unsafe extern "C" fn evoparseq_ngx_bridge_abi() -> u32 { 3 }
 
 #[no_mangle]
 pub unsafe extern "C" fn evoparseq_ngx_create(
     device: *mut c_void, context: *mut c_void, directory: *const u16,
-    out: *mut *mut Session, diagnostics: *mut CreateDiagnostics
+    out: *mut *mut Session, diagnostics: *mut CreateDiagnostics,
+    log_callback: Option<SdkLogCallback>
 ) -> u32 {
     if diagnostics.is_null() { return 0; }
     *diagnostics = CreateDiagnostics::default();
@@ -73,7 +77,12 @@ pub unsafe extern "C" fn evoparseq_ngx_create(
     let common = Common {
         paths: Paths { paths: paths.as_ptr(), count: 1 },
         internal: null_mut(),
-        logging: Logging { callback: std::ptr::null(), level: 0, other_sinks_disabled: false },
+        // Optional, bounded client-side diagnostics; unchanged NGX feature path.
+        logging: Logging {
+            callback: log_callback,
+            level: if log_callback.is_some() { 2 } else { 0 },
+            other_sinks_disabled: false,
+        },
     };
     let result = NVSDK_NGX_D3D11_Init(0, directory, device, &common, 0x15);
     if result != 1 {
