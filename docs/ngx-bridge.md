@@ -18,14 +18,16 @@ and **no NGX bridge DLL is bundled in the Windows ZIP**.
    This separately distributed adapter contains proprietary-linked NVIDIA
    code, is not covered by the EvoParseq MIT license, and its redistribution
    must be permitted by the NVIDIA SDK license.
-4. Only after an explicit user opt-in, EvoParseq downloads this release asset
-   and NVIDIA's pinned `nvngx_vsr.dll`. The runtime stores both under the
-   user's `%LOCALAPPDATA%/EvoParseq/vsr/1.1.0`.
+4. Only after an explicit user opt-in, EvoParseq downloads the adapter and
+   NVIDIA's pinned `nvngx_vsr.dll`. Both remain under
+   `%LOCALAPPDATA%/EvoParseq/vsr/1.1.0`; the adapter lives in a
+   content-addressed `bridge-cache/<sha256>/` subdirectory.
 5. EvoParseq validates the adapter against the **signed manifest SHA-256**
    (or the old EXE-embedded bootstrap digest) and the NVIDIA runtime against
-   the pinned SDK SHA-256. The adapter uses the stable filename
-   `EvoParseq-NGX-Bridge.dll` under the VSR cache and an absolute-path
-   `LoadLibraryExW` with private ABI v3. Updates occur before DLL loading.
+   the pinned SDK SHA-256. The adapter always uses the filename
+   `EvoParseq-NGX-Bridge.dll`, with each digest stored in an immutable
+   cache directory. An absolute-path `LoadLibraryExW` loads private ABI v3.
+   This allows distinct test builds to coexist without replacing a locked DLL.
 6. The adapter forwards the same D3D11 texture and VSR quality/viewport data
    to NVIDIA NGX as the earlier static integration. The main program retains
    GPU surface ownership and the D3D10Multithread critical section.
