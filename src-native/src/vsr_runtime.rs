@@ -151,6 +151,10 @@ fn install_bridge(root: &Path, client: &reqwest::blocking::Client) -> Result<()>
         expected.len() == 64 && expected.bytes().all(|c| c.is_ascii_hexdigit()),
         "Invalid NGX adapter digest"
     );
+    let target = bridge_update::cache_path(root, expected)?;
+    if verify_bridge_with_hash(&target, expected).is_ok() {
+        return Ok(());
+    }
     let version = env!("CARGO_PKG_VERSION");
     let url = format!(
         "https://github.com/vampywiz17/EvoParseq/releases/download/v{version}/EvoParseq-NGX-Bridge.dll"
@@ -161,10 +165,6 @@ fn install_bridge(root: &Path, client: &reqwest::blocking::Client) -> Result<()>
         .context("Cannot download the optional NGX adapter from the matching EvoParseq release")?
         .error_for_status()
         .context("The matching NGX adapter release asset is unavailable")?;
-    let target = bridge_update::cache_path(root, expected)?;
-    if verify_bridge_with_hash(&target, expected).is_ok() {
-        return Ok(());
-    }
     std::fs::create_dir_all(target.parent().context("NGX bridge cache directory unavailable")?)?;
     let (temp, mut file) = bridge_update::unique_stage_for_bootstrap(
         target.parent().unwrap()
