@@ -7,10 +7,9 @@ $sdk = Join-Path $Destination 'sdk'
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 $expected = 'ABF4F34E2B5A618E355B0D5A0365D8ECC3DB4396E756E4C850A867E1AE2ED69E'
 if (!(Test-Path -LiteralPath $archive) -or (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected) {
-    $response = Invoke-WebRequest -Uri 'https://api.ngc.nvidia.com/v2/models/nvidia/multimedia/dlpp/versions/1.5/files/RTX_Video_SDK_v1.1.0.zip'
-    $location = $response.Headers['Location']
-    if (!$location) { throw 'NVIDIA SDK download location missing' }
-    Invoke-WebRequest -Uri ([string]$location[0]) -OutFile $archive
+    # Invoke-WebRequest follows HTTPS redirects automatically; the final 200
+    # response generally does not contain a Location header.
+    Invoke-WebRequest -Uri 'https://api.ngc.nvidia.com/v2/models/nvidia/multimedia/dlpp/versions/1.5/files/RTX_Video_SDK_v1.1.0.zip' -OutFile $archive
 }
 if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected) { throw 'RTX Video SDK checksum mismatch' }
 Expand-Archive -LiteralPath $archive -DestinationPath $sdk -Force
