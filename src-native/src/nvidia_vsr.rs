@@ -110,13 +110,11 @@ impl Vsr {
 
 mod sdk {
     use super::*;
-    use sha2::{Digest, Sha256};
     use std::{
-        ffi::{c_char, c_void, CStr, OsString},
-        os::windows::ffi::{OsStrExt, OsStringExt},
-        path::{Path, PathBuf},
+        ffi::{c_char, c_void},
+        os::windows::ffi::OsStrExt,
+        path::Path,
         ptr::null_mut,
-        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use windows::{core::Interface, Win32::Graphics::Direct3D10::ID3D10Multithread};
 
@@ -125,8 +123,6 @@ mod sdk {
         fn LoadLibraryExW(path: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
         fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
         fn FreeLibrary(module: *mut c_void) -> i32;
-        fn GetModuleHandleW(name: *const u16) -> *mut c_void;
-        fn GetModuleFileNameW(module: *mut c_void, path: *mut u16, length: u32) -> u32;
     }
     const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x100;
     const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x1000;
@@ -239,117 +235,9 @@ mod sdk {
         }
     }
 
-    // NVIDIA NGX public API uses a cdecl log callback on Windows x64.
-    // It can be called from arbitrary SDK threads. The event logger is bounded
-    // and asynchronous; never block GPU threads on file I/O.
+    // The private bridge v3 ABI retains an optional callback argument, but
+    // production passes None: no vendor SDK messages are collected or logged.
     type SdkLogCallback = unsafe extern "C" fn(*const c_char, u32, u32);
-    static NGX_INIT_LOG_ACTIVE: AtomicBool = AtomicBool::new(false);
-    static NGX_INIT_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
-    const NGX_INIT_LOG_LIMIT: usize = 48;
-
-    /// Keep actionable SDK hints without recording vendor-provided free text,
-    /// which can contain private usernames, file paths, or URLs.
-    fn ngx_log_category(message: &[u8]) -> &'static str {
-        let lower: Vec<u8> = message
-            .iter()
-            .take(1024)
-            .map(u8::to_ascii_lowercase)
-            .collect();
-        let has = |needle: &[u8]| lower.windows(needle.len()).any(|w| w == needle);
-        if has(b"nvngx_vsr") || has(b"feature dll") {
-            "feature_module"
-        } else if has(b"driver") {
-            "driver"
-        } else if has(b"unsupported") || has(b"unavailable") {
-            "unsupported"
-        } else if has(b"vsr") {
-            "vsr_capability"
-        } else if has(b"load") || has(b"missing") || has(b"not found") {
-            "module_lookup"
-        } else if has(b"error") || has(b"fail") {
-            "sdk_error"
-        } else {
-            "other"
-        }
-    }
-
-    unsafe extern "C" fn ngx_init_log(message: *const c_char, level: u32, component: u32) {
-        if message.is_null()
-            || !NGX_INIT_LOG_ACTIVE.load(Ordering::Acquire)
-            || !crate::event_log::enabled()
-            || NGX_INIT_LOG_COUNT.fetch_add(1, Ordering::Relaxed) >= NGX_INIT_LOG_LIMIT
-        {
-            return;
-        }
-        // NVIDIA can call from arbitrary SDK threads. Do not unwind across FFI
-        // or send raw vendor strings into user-shareable JSONL files.
-        let _ = std::panic::catch_unwind(|| {
-            let bytes = unsafe { CStr::from_ptr(message) }.to_bytes();
-            let digest = format!("{:x}", Sha256::digest(bytes));
-            crate::event_log::record(
-                "INFO",
-                "video_ngx_sdk_log",
-                serde_json::json!({
-                    "level":level,
-                    "component":component,
-                    "message_length":bytes.len(),
-                    "message_sha256":digest,
-                    "category":ngx_log_category(bytes)
-                }),
-            );
-        });
-    }
-
-    /// Query already-loaded modules only. Never preload a DLL merely to probe it.
-    /// Report path equality, not potentially private filesystem paths.
-    unsafe fn module_state(name: &str, expected: Option<&Path>) -> (bool, Option<bool>) {
-        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
-        let handle = GetModuleHandleW(wide.as_ptr());
-        if handle.is_null() {
-            return (false, None);
-        }
-        let Some(expected) = expected else {
-            return (true, None);
-        };
-        let mut filename = [0u16; 1024];
-        let count =
-            GetModuleFileNameW(handle, filename.as_mut_ptr(), filename.len() as u32) as usize;
-        if count == 0 || count >= filename.len() {
-            return (true, None);
-        }
-        let found = PathBuf::from(OsString::from_wide(&filename[..count]));
-        let matches = match (
-            std::fs::canonicalize(found),
-            std::fs::canonicalize(expected),
-        ) {
-            (Ok(a), Ok(b)) => Some(a == b),
-            _ => None,
-        };
-        (true, matches)
-    }
-
-    unsafe fn log_module_probe(root: &Path, phase: &'static str) {
-        if !crate::event_log::enabled() {
-            return;
-        }
-        let (runtime_loaded, runtime_is_verified) =
-            module_state("nvngx_vsr.dll", Some(&root.join("nvngx_vsr.dll")));
-        let (core_loaded, _) = module_state("_nvngx.dll", None);
-        crate::event_log::record(
-            "INFO",
-            "video_ngx_module_probe",
-            serde_json::json!({
-                "phase":phase,
-                "runtime_loaded":runtime_loaded,
-                "runtime_matches_verified_file":runtime_is_verified,
-                "ngx_driver_core_loaded":core_loaded,
-                "search_directory":"verified_user_vsr_cache",
-                "bridge_abi":3,
-                "sdk_version":"1.1.0",
-                "ngx_api_version":"0x15"
-            }),
-        );
-    }
 
     #[repr(C)]
     #[derive(Default)]
@@ -443,24 +331,9 @@ mod sdk {
             // Use a normal absolute Win32 path when passing the *verified*
             // runtime directory into the NVIDIA SDK; leave the bridge path and
             // on-disk SHA-256 checks unchanged.
-            let (path, verbatim_prefix_removed) = ngx_search_directory(&root)?;
-            if crate::event_log::enabled() {
-                crate::event_log::record(
-                    "INFO",
-                    "video_ngx_search_path",
-                    serde_json::json!({
-                        "format":"standard_win32_absolute",
-                        "verbatim_prefix_removed":verbatim_prefix_removed,
-                        "runtime_hash_verified":true
-                    }),
-                );
-            }
+            let (path, _) = ngx_search_directory(&root)?;
             let context = device.GetImmediateContext()?;
             let _lock = ContextLock::enter(device)?;
-            log_module_probe(&root, "before_init");
-            NGX_INIT_LOG_COUNT.store(0, Ordering::Relaxed);
-            let logging = crate::event_log::enabled();
-            NGX_INIT_LOG_ACTIVE.store(logging, Ordering::Release);
             let mut session = null_mut();
             let mut diagnostics = CreateDiagnostics::default();
             // Preserve the original direct-SDK init inputs: app=0,
@@ -471,10 +344,8 @@ mod sdk {
                 path.as_ptr(),
                 &mut session,
                 &mut diagnostics,
-                if logging { Some(ngx_init_log) } else { None },
+                None,
             );
-            NGX_INIT_LOG_ACTIVE.store(false, Ordering::Release);
-            log_module_probe(&root, "after_init");
             if created != 1 || session.is_null() {
                 let stage = match diagnostics.stage {
                     1 => "invalid bridge ABI input",
