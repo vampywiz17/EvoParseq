@@ -1034,7 +1034,7 @@ fn run(
                 renderer.rotation = frame.rotation;
                 if vsr_disabled {
                     renderer.vsr_status =
-                        Some("Disabled after processing backlog; normal GPU rendering");
+                        Some("Disabled for this connection; normal GPU rendering");
                 }
                 if !verify_synthetic_pixels && vsr_quality != 0 && !vsr_disabled {
                     shared
@@ -1045,6 +1045,12 @@ fn run(
                     let began = Instant::now();
                     unsafe {
                         renderer.configure_vsr(vsr_quality);
+                    }
+                    // A failed NGX init can take seconds. Do not repeat it after
+                    // every decoder rebuild: that would starve the video queue
+                    // and cause a black/flashing image until reconnect.
+                    if renderer.vsr.is_none() {
+                        vsr_disabled = true;
                     }
                     shared
                         .0
