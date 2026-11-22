@@ -562,7 +562,26 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn unchanged_bridge_hash_never_requires_another_download() {
+    fn user_selected_pinned_import_is_content_addressed_and_rejects_tampering() {
+        let root = std::env::temp_dir().join(format!(
+            "evoparseq-bridge-picker-{}", std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let selected = root.join("downloaded.dll");
+        let bytes = b"synthetic downloaded adapter - not NVIDIA code";
+        std::fs::write(&selected, bytes).unwrap();
+        let expected = format!("{:x}", Sha256::digest(bytes));
+        import_pinned(&root, &selected, &expected).unwrap();
+        let cached = cache_path(&root, &expected).unwrap();
+        assert_eq!(std::fs::read(&cached).unwrap(), bytes);
+        import_pinned(&root, &selected, &expected).unwrap();
+        std::fs::write(&selected, b"malicious bytes").unwrap();
+        assert!(import_pinned(&root, &selected, &expected).is_err());
+        assert_eq!(std::fs::read(&cached).unwrap(), bytes);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn unchanged_bridge_hash_never_requires_another_import() {
         let file =
             std::env::temp_dir().join(format!("evoparseq-bridge-unchanged-{}", std::process::id()));
         let bytes = b"synthetic bridge bytes, not NVIDIA code";
@@ -577,10 +596,10 @@ mod tests {
             size: bytes.len() as u64,
             url: "https://github.com/vampywiz17/EvoParseq/releases/download/v1/EvoParseq-NGX-Bridge.dll".into(),
         };
-        assert!(!needs_download(&file, &manifest));
+        assert!(digest(&file, &manifest.sha256, manifest.size).is_ok());
         let mut newer = manifest.clone();
         newer.sha256 = "a".repeat(64);
-        assert!(needs_download(&file, &newer));
+        assert!(digest(&file, &newer.sha256, newer.size).is_err());
         std::fs::remove_file(file).unwrap();
     }
     #[test]
