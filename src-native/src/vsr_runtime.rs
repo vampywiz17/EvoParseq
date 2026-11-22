@@ -137,16 +137,21 @@ fn install_bridge(root: &Path, client: &reqwest::blocking::Client) -> Result<()>
 /// Reuse only our previously pinned runtime, not arbitrary driver/application DLLs.
 pub fn reuse_previous(data: &Path) -> Result<bool> {
     let root = directory()?;
-    if present() {
-        validated_directory()?;
+    if validated_directory().is_ok() {
         return Ok(true);
     }
-    let local = local_directory()?;
-    let candidates = [
-        data.join("vsr/1.1.0"),
-        local.join("EvoParseq/rtx-video").join(DLL_HASH),
-    ];
-    reuse_from(&root, &candidates)
+    // The existing NVIDIA runtime can be reused even if the new bridge is absent.
+    // Never recopy it while only the optional bridge is missing.
+    if verify(&root.join("nvngx_vsr.dll"), DLL_SIZE, DLL_HASH).is_err() {
+        let local = local_directory()?;
+        let candidates = [
+            data.join("vsr/1.1.0"),
+            local.join("EvoParseq/rtx-video").join(DLL_HASH),
+        ];
+        reuse_from(&root, &candidates)?;
+    }
+    // The bridge still needs to be fetched by install() when it is missing.
+    Ok(validated_directory().is_ok())
 }
 fn reuse_from(root: &Path, candidates: &[PathBuf]) -> Result<bool> {
     for old in candidates {
