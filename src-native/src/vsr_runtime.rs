@@ -165,10 +165,12 @@ fn install_bridge(root: &Path, client: &reqwest::blocking::Client) -> Result<()>
         .context("Cannot download the optional NGX adapter from the matching EvoParseq release")?
         .error_for_status()
         .context("The matching NGX adapter release asset is unavailable")?;
-    std::fs::create_dir_all(target.parent().context("NGX bridge cache directory unavailable")?)?;
-    let (temp, mut file) = bridge_update::unique_stage_for_bootstrap(
-        target.parent().unwrap()
+    std::fs::create_dir_all(
+        target
+            .parent()
+            .context("NGX bridge cache directory unavailable")?,
     )?;
+    let (temp, mut file) = bridge_update::unique_stage_for_bootstrap(target.parent().unwrap())?;
     let length = std::io::copy(&mut response.take(BRIDGE_MAX_SIZE + 1), &mut file)?;
     drop(file);
     ensure!(
@@ -251,9 +253,8 @@ pub fn install() -> Result<()> {
         if bridge_update::verified(&root, BRIDGE_HASH).is_err() {
             if BRIDGE_HASH.is_some() {
                 if let Err(bootstrap_error) = install_bridge(&root, &client) {
-                    bridge_error = Some(bootstrap_error.context(format!(
-                        "NGX manifest unavailable: {error}"
-                    )));
+                    bridge_error =
+                        Some(bootstrap_error.context(format!("NGX manifest unavailable: {error}")));
                 }
             } else {
                 bridge_error = Some(error);
@@ -454,7 +455,10 @@ mod tests {
         let digest = "a".repeat(64);
         let adapter = bridge_update::cache_path(cache, &digest).unwrap();
         assert_eq!(adapter.file_name().unwrap(), "EvoParseq-NGX-Bridge.dll");
-        assert_eq!(adapter.parent().unwrap().file_name().unwrap(), digest.as_str());
+        assert_eq!(
+            adapter.parent().unwrap().file_name().unwrap(),
+            digest.as_str()
+        );
         assert!(adapter.starts_with(cache));
     }
 
