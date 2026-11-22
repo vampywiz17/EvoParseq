@@ -229,7 +229,9 @@ fn digest_legacy(path: &Path, expected: &str) -> Result<()> {
 }
 
 pub fn migrate_legacy(root: &Path, legacy_hash: Option<&str>) -> Result<()> {
-    let Some(hash) = legacy_hash else { return Ok(()); };
+    let Some(hash) = legacy_hash else {
+        return Ok(());
+    };
     let dest = cache_path(root, hash)?;
     if digest_legacy(&dest, hash).is_ok() {
         return Ok(());
@@ -302,7 +304,10 @@ fn download(client: &reqwest::blocking::Client, url: &str, limit: u64) -> Result
         .error_for_status()?;
     let mut bytes = Vec::new();
     response.take(limit + 1).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() as u64 <= limit, "NGX metadata/download too large");
+    ensure!(
+        bytes.len() as u64 <= limit,
+        "NGX metadata/download too large"
+    );
     Ok(bytes)
 }
 
@@ -320,8 +325,11 @@ fn unique_stage(root: &Path, name: &str) -> Result<(Stage, File)> {
     for _ in 0..16 {
         let mut nonce = [0u8; 8];
         getrandom::fill(&mut nonce)?;
-        let path = root.join(format!(".{name}-{}-{:016x}.tmp",
-            std::process::id(), u64::from_le_bytes(nonce)));
+        let path = root.join(format!(
+            ".{name}-{}-{:016x}.tmp",
+            std::process::id(),
+            u64::from_le_bytes(nonce)
+        ));
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(file) => return Ok((Stage { path }, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
@@ -373,19 +381,25 @@ impl UpdateLock {
     fn acquire() -> Result<Self> {
         #[link(name = "kernel32")]
         extern "system" {
-            fn CreateMutexW(attributes: *mut std::ffi::c_void,
-                initial_owner: i32, name: *const u16) -> *mut std::ffi::c_void;
-            fn WaitForSingleObject(handle: *mut std::ffi::c_void,
-                milliseconds: u32) -> u32;
+            fn CreateMutexW(
+                attributes: *mut std::ffi::c_void,
+                initial_owner: i32,
+                name: *const u16,
+            ) -> *mut std::ffi::c_void;
+            fn WaitForSingleObject(handle: *mut std::ffi::c_void, milliseconds: u32) -> u32;
         }
         let name: Vec<u16> = "Local\\EvoParseq-NGX-Bridge-Update-v1"
-            .encode_utf16().chain(Some(0)).collect();
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
         let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 0, name.as_ptr()) };
         ensure!(!handle.is_null(), "Cannot create NGX bridge update mutex");
         let guard = Self(handle);
         let status = unsafe { WaitForSingleObject(handle, 5_000) };
-        ensure!(status == 0 || status == 0x80,
-            "NGX bridge updater is already running or could not acquire lock");
+        ensure!(
+            status == 0 || status == 0x80,
+            "NGX bridge updater is already running or could not acquire lock"
+        );
         Ok(guard)
     }
 }
@@ -406,8 +420,11 @@ impl Drop for UpdateLock {
 
 /// Fetch a signed manifest, reuse an existing matching digest or place a new
 /// immutable DLL before updating the channel's signed selection metadata.
-pub fn refresh(root: &Path, client: &reqwest::blocking::Client,
-    legacy_hash: Option<&str>) -> Result<()> {
+pub fn refresh(
+    root: &Path,
+    client: &reqwest::blocking::Client,
+    legacy_hash: Option<&str>,
+) -> Result<()> {
     #[cfg(windows)]
     let _lock = UpdateLock::acquire()?;
     migrate_legacy(root, legacy_hash)?;
@@ -424,7 +441,10 @@ pub fn refresh(root: &Path, client: &reqwest::blocking::Client,
         Ok(manifest) => manifest,
         Err(error) => return verified(root, legacy_hash).context(error),
     };
-    if current.as_ref().is_some_and(|old| old.sequence > manifest.sequence) {
+    if current
+        .as_ref()
+        .is_some_and(|old| old.sequence > manifest.sequence)
+    {
         return verified(root, legacy_hash);
     }
     let target = cache_path(root, &manifest.sha256)?;
@@ -433,15 +453,18 @@ pub fn refresh(root: &Path, client: &reqwest::blocking::Client,
             Ok(bytes) => bytes,
             Err(error) => return verified(root, legacy_hash).context(error),
         };
-        ensure!(bytes.len() as u64 == manifest.size,
-            "Downloaded NGX bridge size mismatch");
+        ensure!(
+            bytes.len() as u64 == manifest.size,
+            "Downloaded NGX bridge size mismatch"
+        );
         let parent = target.parent().context("Missing NGX bridge cache folder")?;
         std::fs::create_dir_all(parent)?;
         let (stage, mut file) = unique_stage(parent, "bridge-download")?;
         file.write_all(&bytes)?;
         drop(file);
-        if let Err(error) = commit_immutable(
-            &stage.path, &target, &manifest.sha256, Some(manifest.size)) {
+        if let Err(error) =
+            commit_immutable(&stage.path, &target, &manifest.sha256, Some(manifest.size))
+        {
             return verified(root, legacy_hash).context(error);
         }
     }
@@ -460,7 +483,8 @@ mod tests {
     #[test]
     fn pinned_builds_reuse_independent_dlls_with_identical_filename() {
         let root = std::env::temp_dir().join(format!(
-            "evoparseq-bridge-cross-build-{}", std::process::id()
+            "evoparseq-bridge-cross-build-{}",
+            std::process::id()
         ));
         let samples: [&[u8]; 2] = [b"synthetic adapter A", b"synthetic adapter B"];
         let mut paths = Vec::new();
@@ -480,9 +504,8 @@ mod tests {
     }
     #[test]
     fn concurrent_staging_paths_are_unique_and_owned() {
-        let root = std::env::temp_dir().join(format!(
-            "evoparseq-bridge-staging-{}", std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("evoparseq-bridge-staging-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let (first, mut one) = unique_stage(&root, "test").unwrap();
         let (second, mut two) = unique_stage(&root, "test").unwrap();
@@ -501,9 +524,8 @@ mod tests {
     }
     #[test]
     fn legacy_migration_does_not_modify_the_old_root_dll() {
-        let root = std::env::temp_dir().join(format!(
-            "evoparseq-bridge-migration-{}", std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("evoparseq-bridge-migration-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let old_signed = b"older signed adapter bytes";
         let bootstrap = b"exact bootstrap bytes";
