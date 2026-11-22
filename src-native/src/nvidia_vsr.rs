@@ -131,6 +131,99 @@ mod sdk {
     const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x100;
     const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x1000;
 
+    /// Return a regular Win32 absolute directory for NGX feature discovery.
+    /// std::fs::canonicalize() on Windows usually returns a verbatim \\?\\ path.
+    /// NVIDIA NGX appends feature names using '/', which may produce invalid
+    /// paths when combined with a verbatim Win32 prefix. Do not change the
+    /// verified filesystem location, only the spelling passed to the SDK.
+    ///
+    /// The returned UTF-16 buffer has one trailing NUL and owns its storage
+    /// until NVSDK_NGX_D3D11_Init returns.
+    fn ngx_search_directory(root: &Path) -> anyhow::Result<(Vec<u16>, bool)> {
+        anyhow::ensure!(root.is_absolute(), "NGX runtime directory must be absolute");
+        let mut path: Vec<u16> = root.as_os_str().encode_wide().collect();
+        anyhow::ensure!(!path.contains(&0), "NGX runtime directory contains a NUL");
+        // Match the Windows separator spelling expected by NGX's path builder.
+        for unit in &mut path {
+            if *unit == b'/' as u16 {
+                *unit = b'\\' as u16;
+            }
+        }
+        const SLASH: u16 = b'\\' as u16;
+        const VERBATIM: [u16; 4] = [SLASH, SLASH, b'?' as u16, SLASH];
+        const VERBATIM_UNC: [u16; 8] = [
+            SLASH, SLASH, b'?' as u16, SLASH,
+            b'U' as u16, b'N' as u16, b'C' as u16, SLASH,
+        ];
+        let mut removed_prefix = false;
+        if path.starts_with(&VERBATIM_UNC) {
+            let mut normal = vec![SLASH, SLASH];
+            normal.extend_from_slice(&path[VERBATIM_UNC.len()..]);
+            path = normal;
+            removed_prefix = true;
+        } else if path.starts_with(&VERBATIM) {
+            path.drain(..VERBATIM.len());
+            removed_prefix = true;
+        }
+        let drive = path.len() >= 3
+            && matches!(path[0], 65..=90 | 97..=122)
+            && path[1] == b':' as u16
+            && path[2] == SLASH;
+        let unc = path.len() > 4
+            && path.starts_with(&[SLASH, SLASH])
+            && path[2] != SLASH
+            && path[2..].contains(&SLASH);
+        anyhow::ensure!(drive || unc, "NGX runtime directory has an unsupported path form");
+        // The SDK may use legacy Win32 file APIs. Avoid handing it a normal
+        // path that already exceeds traditional MAX_PATH and cannot resolve.
+        anyhow::ensure!(path.len() < 248, "NGX runtime directory exceeds Win32 path limit");
+        path.push(0);
+        Ok((path, removed_prefix))
+    }
+
+    #[cfg(test)]
+    mod search_directory_tests {
+        use super::*;
+
+        fn decode(wide: &[u16]) -> String {
+            assert_eq!(wide.last().copied(), Some(0));
+            String::from_utf16(&wide[..wide.len() - 1]).unwrap()
+        }
+
+        #[test]
+        fn canonical_drive_directory_becomes_normal_windows_path() {
+            let (wide, converted) =
+                ngx_search_directory(Path::new(r"\\?\C:\Users\Test\AppData\Local\EvoParseq\vsr\1.1.0")).unwrap();
+            assert!(converted);
+            assert_eq!(decode(&wide), r"C:\Users\Test\AppData\Local\EvoParseq\vsr\1.1.0");
+        }
+
+        #[test]
+        fn canonical_unc_directory_retains_server_and_share() {
+            let (wide, converted) =
+                ngx_search_directory(Path::new(r"\\?\UNC\server\share\NGX")).unwrap();
+            assert!(converted);
+            assert_eq!(decode(&wide), r"\\server\share\NGX");
+        }
+
+        #[test]
+        fn ordinary_path_is_preserved_and_slashes_are_normalized() {
+            let (wide, converted) =
+                ngx_search_directory(Path::new("C:/Users/Test/VSR")).unwrap();
+            assert!(!converted);
+            assert_eq!(decode(&wide), r"C:\Users\Test\VSR");
+        }
+
+        #[test]
+        fn unicode_path_and_invalid_forms_are_handled_without_lossy_encoding() {
+            let (wide, _) =
+                ngx_search_directory(Path::new(r"\\?\C:\Felhasználó\VSR")).unwrap();
+            assert_eq!(decode(&wide), r"C:\Felhasználó\VSR");
+            assert!(ngx_search_directory(Path::new(r"relative\VSR")).is_err());
+            assert!(ngx_search_directory(Path::new(r"\\?\Volume{0000}\VSR")).is_err());
+        }
+    }
+
     // NVIDIA NGX public API uses a cdecl log callback on Windows x64.
     // It can be called from arbitrary SDK threads. The event logger is bounded
     // and asynchronous; never block GPU threads on file I/O.
@@ -332,7 +425,21 @@ mod sdk {
             let create: Create = library.symbol(b"evoparseq_ngx_create\0")?;
             let evaluate: Evaluate = library.symbol(b"evoparseq_ngx_evaluate\0")?;
             let destroy: Destroy = library.symbol(b"evoparseq_ngx_destroy\0")?;
-            let path: Vec<u16> = root.as_os_str().encode_wide().chain(Some(0)).collect();
+            // Use a normal absolute Win32 path when passing the *verified*
+            // runtime directory into the NVIDIA SDK; leave the bridge path and
+            // on-disk SHA-256 checks unchanged.
+            let (path, verbatim_prefix_removed) = ngx_search_directory(&root)?;
+            if crate::event_log::enabled() {
+                crate::event_log::record(
+                    "INFO",
+                    "video_ngx_search_path",
+                    serde_json::json!({
+                        "format":"standard_win32_absolute",
+                        "verbatim_prefix_removed":verbatim_prefix_removed,
+                        "runtime_hash_verified":true
+                    }),
+                );
+            }
             let context = device.GetImmediateContext()?;
             let _lock = ContextLock::enter(device)?;
             log_module_probe(&root, "before_init");
