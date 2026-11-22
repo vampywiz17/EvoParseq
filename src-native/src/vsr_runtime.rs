@@ -51,13 +51,9 @@ fn local_directory() -> Result<PathBuf> {
 pub fn directory() -> Result<PathBuf> {
     Ok(directory_under(&local_directory()?))
 }
-fn bridge_path(root: &Path) -> PathBuf {
-    root.join(bridge_update::DLL_NAME)
-}
-
 pub fn validated_bridge_path() -> Result<PathBuf> {
     let root = validated_directory()?;
-    Ok(bridge_path(&root))
+    bridge_update::verified_path(&root, BRIDGE_HASH)
 }
 
 pub fn present() -> bool {
@@ -165,24 +161,22 @@ fn install_bridge(root: &Path, client: &reqwest::blocking::Client) -> Result<()>
         .context("Cannot download the optional NGX adapter from the matching EvoParseq release")?
         .error_for_status()
         .context("The matching NGX adapter release asset is unavailable")?;
-    let temp = Temporary(root.join("ngx-bridge.tmp"));
-    let mut file = File::create(&temp.0)?;
+    let target = bridge_update::cache_path(root, expected)?;
+    if verify_bridge_with_hash(&target, expected).is_ok() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(target.parent().context("NGX bridge cache directory unavailable")?)?;
+    let (temp, mut file) = bridge_update::unique_stage_for_bootstrap(
+        target.parent().unwrap()
+    )?;
     let length = std::io::copy(&mut response.take(BRIDGE_MAX_SIZE + 1), &mut file)?;
     drop(file);
     ensure!(
         length > 0 && length <= BRIDGE_MAX_SIZE,
         "NGX adapter exceeds size limit"
     );
-    verify_bridge(&temp.0)?;
-    let target = bridge_path(root);
-    // The adapter is installed before the video worker loads it. If another
-    // EvoParseq process has the DLL open, keep that verified version and do
-    // not risk deleting it during an update.
-    if target.exists() {
-        bridge_update::legacy_install_replace(&temp.0, &target)?;
-    } else {
-        std::fs::rename(&temp.0, &target)?;
-    }
+    verify_bridge(&temp)?;
+    bridge_update::commit_bootstrap(&temp, &target, expected)?;
     Ok(())
 }
 
@@ -202,9 +196,8 @@ pub fn reuse_previous(data: &Path) -> Result<bool> {
         ];
         reuse_from(&root, &candidates)?;
     }
-    // A previously pinned adapter is eligible for one-time migration into
-    // the stable-name path, but the updater will still check for newer signed
-    // metadata at startup.
+    // Migrate only this EXE's hash-verified adapter into its own immutable
+    // cache entry. Never overwrite another build's signed or pinned DLL.
     bridge_update::migrate_legacy(&root, BRIDGE_HASH)?;
     Ok(validated_directory().is_ok())
 }
@@ -250,19 +243,26 @@ pub fn install() -> Result<()> {
             }
         }))
         .build()?;
-    // The signed channel manifest controls updates; a compiled digest is a
-    // migration/bootstrap fallback for builds without signing-key setup.
+    // A failed signed update must never prevent the exact EXE-pinned
+    // bootstrap or the independent NVIDIA runtime installation. The cached
+    // signed DLL remains the first choice when already verified.
+    let mut bridge_error = None;
     if let Err(error) = bridge_update::refresh(&root, &client, BRIDGE_HASH) {
         if bridge_update::verified(&root, BRIDGE_HASH).is_err() {
-            if bridge_update::enabled() {
-                return Err(error).context("No verified NGX bridge is available");
+            if BRIDGE_HASH.is_some() {
+                if let Err(bootstrap_error) = install_bridge(&root, &client) {
+                    bridge_error = Some(bootstrap_error.context(format!(
+                        "NGX manifest unavailable: {error}"
+                    )));
+                }
+            } else {
+                bridge_error = Some(error);
             }
-            install_bridge(&root, &client)?;
         }
     }
     // A previously installed, hash-verified NVIDIA runtime remains usable.
     if verify(&root.join("nvngx_vsr.dll"), DLL_SIZE, DLL_HASH).is_ok() {
-        return Ok(());
+        return bridge_error.map_or(Ok(()), Err);
     }
     // Discover NGC's archive response WITHOUT auto-following redirects: doing
     // so loses the Location header that NGC sometimes uses as metadata.
@@ -314,7 +314,7 @@ pub fn install() -> Result<()> {
         "vsr_runtime_installed",
         serde_json::json!({"sdk_version":"1.1.0","sha256":DLL_HASH}),
     );
-    Ok(())
+    bridge_error.map_or(Ok(()), Err)
 }
 fn extract(archive: &Path, output: &Path, offset: u64, compressed: u64, size: u64) -> Result<()> {
     let mut input = File::open(archive)?;
@@ -449,10 +449,12 @@ mod tests {
     }
 
     #[test]
-    fn optional_bridge_uses_stable_filename_regardless_of_digest() {
+    fn optional_bridge_uses_stable_basename_in_isolated_digest_directory() {
         let cache = Path::new("evoparseq-test-cache");
-        let adapter = bridge_path(cache);
-        assert_eq!(adapter, cache.join("EvoParseq-NGX-Bridge.dll"));
+        let digest = "a".repeat(64);
+        let adapter = bridge_update::cache_path(cache, &digest).unwrap();
+        assert_eq!(adapter.file_name().unwrap(), "EvoParseq-NGX-Bridge.dll");
+        assert_eq!(adapter.parent().unwrap().file_name().unwrap(), digest.as_str());
         assert!(adapter.starts_with(cache));
     }
 
