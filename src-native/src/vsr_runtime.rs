@@ -12,6 +12,8 @@ use std::{
 
 #[path = "vsr_bridge_update.rs"]
 mod bridge_update;
+#[path = "vsr_browser_import.rs"]
+mod browser_import;
 
 pub const fn updates_enabled() -> bool {
     bridge_update::enabled()
@@ -25,14 +27,14 @@ const ARCHIVE_HASH: &str = "abf4f34e2b5a618e355b0d5a0365d8ecc3db4396e756e4c850a8
 const ARCHIVE_SIZE: u64 = 63_493_768;
 const DLL_SIZE: u64 = 19_140_144;
 const URL: &str = "https://api.ngc.nvidia.com/v2/models/nvidia/multimedia/dlpp/versions/1.5/files/RTX_Video_SDK_v1.1.0.zip";
-pub const PROMPT: &str = "Download the optional NVIDIA VSR runtime from NVIDIA and the EvoParseq NGX adapter from GitHub?\n\nThe download is about 61 MB. The checked NVIDIA runtime DLL (about 19 MB) and a version-pinned EvoParseq NGX adapter DLL will be stored under %LOCALAPPDATA%/EvoParseq/vsr/1.1.0 for your Windows user (no administrator rights required). Sign-in opens after setup finishes.\n\nVSR requires a compatible RTX GPU/driver, is off by default and may increase latency. The NVIDIA SDK license is included in the application package. Choosing No keeps ordinary GPU video available.";
+pub const PROMPT: &str = "Enable optional NVIDIA VSR components?\\n\\nDownloads will open only in your default browser, never inside EvoParseq. After downloading, select the ZIP/DLL with the file picker: EvoParseq verifies the exact SDK SHA-256 or signed bridge manifest and installs it automatically in your per-user cache. No manual file copying or administrator rights are needed.\\n\\nVSR requires a compatible RTX GPU/driver, is off by default and may increase latency. Choosing No keeps ordinary GPU video available.";
 
 const BRIDGE_MAX_SIZE: u64 = 16 * 1024 * 1024;
 // Older builds pin their bootstrapping adapter; signed manifests can update
 // independently without recompiling the EXE.
 const BRIDGE_HASH: Option<&str> = option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256");
 pub const RESTART_HINT: &str =
-    " Restart the app to download the approved NVIDIA VSR runtime before sign-in.";
+    " Restart the app to choose the NVIDIA VSR runtime download in your browser.";
 
 fn directory_under(local: &Path) -> PathBuf {
     local.join("EvoParseq").join("vsr").join("1.1.0")
@@ -84,29 +86,6 @@ fn save_checked_archive(body: impl Read, path: &Path, size: u64, expected: &str)
     verify(path, size, expected)
 }
 
-/// The NGC API sometimes sends a redirect or a 200 metadata response with a
-/// Location header instead of archive bytes. Never interpret that body as ZIP.
-/// An ordinary 200 with no Location is a direct archive response.
-fn archive_download_location(
-    origin: &reqwest::Url,
-    status: reqwest::StatusCode,
-    location: Option<&str>,
-) -> Result<Option<reqwest::Url>> {
-    ensure!(
-        status.is_success() || status.is_redirection(),
-        "NVIDIA download service rejected the request"
-    );
-    if let Some(value) = location {
-        let url = origin.join(value)?;
-        ensure!(url.scheme() == "https", "NVIDIA download must use HTTPS");
-        return Ok(Some(url));
-    }
-    ensure!(
-        status.is_success(),
-        "NVIDIA download location missing from redirect response"
-    );
-    Ok(None)
-}
 pub fn validated_directory() -> Result<PathBuf> {
     let root = directory()?;
     verify(&root.join("nvngx_vsr.dll"), DLL_SIZE, DLL_HASH)
@@ -140,45 +119,6 @@ fn verify_bridge_with_hash(path: &Path, expected: &str) -> Result<()> {
         hash(&file)?.eq_ignore_ascii_case(expected),
         "NVIDIA NGX adapter checksum mismatch"
     );
-    Ok(())
-}
-
-/// Download only the version-pinned GitHub release asset for our own bridge.
-/// The checksum itself is compiled into the EXE, not fetched from a mutable manifest.
-fn install_bridge(root: &Path, client: &reqwest::blocking::Client) -> Result<()> {
-    let expected = BRIDGE_HASH.context("This build has no NVIDIA NGX adapter digest")?;
-    ensure!(
-        expected.len() == 64 && expected.bytes().all(|c| c.is_ascii_hexdigit()),
-        "Invalid NGX adapter digest"
-    );
-    let target = bridge_update::cache_path(root, expected)?;
-    if verify_bridge_with_hash(&target, expected).is_ok() {
-        return Ok(());
-    }
-    let version = env!("CARGO_PKG_VERSION");
-    let url = format!(
-        "https://github.com/vampywiz17/EvoParseq/releases/download/v{version}/EvoParseq-NGX-Bridge.dll"
-    );
-    let response = client
-        .get(url)
-        .send()
-        .context("Cannot download the optional NGX adapter from the matching EvoParseq release")?
-        .error_for_status()
-        .context("The matching NGX adapter release asset is unavailable")?;
-    std::fs::create_dir_all(
-        target
-            .parent()
-            .context("NGX bridge cache directory unavailable")?,
-    )?;
-    let (temp, mut file) = bridge_update::unique_stage_for_bootstrap(target.parent().unwrap())?;
-    let length = std::io::copy(&mut response.take(BRIDGE_MAX_SIZE + 1), &mut file)?;
-    drop(file);
-    ensure!(
-        length > 0 && length <= BRIDGE_MAX_SIZE,
-        "NGX adapter exceeds size limit"
-    );
-    verify_bridge(&temp.path)?;
-    bridge_update::commit_bootstrap(&temp.path, &target, expected)?;
     Ok(())
 }
 
@@ -231,91 +171,118 @@ impl Drop for Temporary {
     }
 }
 
-pub fn install() -> Result<()> {
-    let root = directory()?;
-    std::fs::create_dir_all(&root)?;
-    let temporary = Temporary(root.join("sdk-download.tmp"));
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if attempt.url().scheme() != "https" || attempt.previous().len() > 5 {
-                attempt.stop()
-            } else {
-                attempt.follow()
-            }
-        }))
-        .build()?;
-    // A failed signed update must never prevent the exact EXE-pinned
-    // bootstrap or the independent NVIDIA runtime installation. The cached
-    // signed DLL remains the first choice when already verified.
-    let mut bridge_error = None;
-    if let Err(error) = bridge_update::refresh(&root, &client, BRIDGE_HASH) {
-        if bridge_update::verified(&root, BRIDGE_HASH).is_err() {
-            if BRIDGE_HASH.is_some() {
-                if let Err(bootstrap_error) = install_bridge(&root, &client) {
-                    bridge_error =
-                        Some(bootstrap_error.context(format!("NGX manifest unavailable: {error}")));
-                }
-            } else {
-                bridge_error = Some(error);
+enum BridgeRequest {
+    Signed(bridge_update::UpdateOffer),
+    Pinned { url: String, sha256: &'static str },
+}
+
+fn bridge_request(root: &Path, client: &reqwest::blocking::Client) -> Result<Option<BridgeRequest>> {
+    if bridge_update::enabled() {
+        match bridge_update::check_manifest(root, client) {
+            Ok(Some(offer)) => return Ok(Some(BridgeRequest::Signed(offer))),
+            Ok(None) => (),
+            Err(error) => {
+                // Missing/offline manifest must never break the existing
+                // pinned adapter or require a binary network request.
+                crate::event_log::record(
+                    "WARN", "vsr_manifest_check_failed",
+                    serde_json::json!({"reason":error.to_string()}),
+                );
             }
         }
     }
-    // A previously installed, hash-verified NVIDIA runtime remains usable.
-    if verify(&root.join("nvngx_vsr.dll"), DLL_SIZE, DLL_HASH).is_ok() {
-        return bridge_error.map_or(Ok(()), Err);
+    if bridge_update::verified(root, BRIDGE_HASH).is_ok() {
+        return Ok(None);
     }
-    // Discover NGC's archive response WITHOUT auto-following redirects: doing
-    // so loses the Location header that NGC sometimes uses as metadata.
-    let discovery = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
-    let initial = discovery
-        .get(URL)
-        .send()
-        .context("Cannot contact NVIDIA download service")?;
-    let location = initial
-        .headers()
-        .get(reqwest::header::LOCATION)
-        .map(|value| value.to_str())
-        .transpose()?;
-    let target = archive_download_location(initial.url(), initial.status(), location)?;
-    let response = if let Some(url) = target {
-        client
-            .get(url)
-            .send()
-            .context("Cannot fetch NVIDIA's HTTPS archive location")?
-    } else {
-        initial
+    let Some(hash) = BRIDGE_HASH else {
+        anyhow::bail!("No signed NGX manifest and no pinned fallback DLL are available");
     };
-    let response = response
-        .error_for_status()
-        .context("NVIDIA archive download was rejected")?;
     ensure!(
-        response.url().scheme() == "https",
-        "NVIDIA download must use HTTPS"
+        hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()),
+        "Invalid compiled NGX adapter digest"
     );
-    save_checked_archive(response, &temporary.0, ARCHIVE_SIZE, ARCHIVE_HASH)?;
-    // These offsets are valid ONLY after checking the complete immutable SDK
-    // 1.1.0 archive hash above. No filenames from an archive become filesystem paths.
-    extract(
-        &temporary.0,
-        &root.join("NVIDIA-RTX-VIDEO-LICENSE.pdf"),
-        62_433_254,
-        131_214,
-        136_535,
-    )?;
-    let dll = Temporary(root.join("runtime.tmp"));
-    extract(&temporary.0, &dll.0, 37_964_664, 14_455_982, DLL_SIZE)?;
-    verify(&dll.0, DLL_SIZE, DLL_HASH)?;
-    std::fs::rename(&dll.0, root.join("nvngx_vsr.dll"))?;
+    let version = env!("CARGO_PKG_VERSION");
+    let url = format!(
+        "https://github.com/vampywiz17/EvoParseq/releases/download/v{version}/EvoParseq-NGX-Bridge.dll"
+    );
+    Ok(Some(BridgeRequest::Pinned { url, sha256: hash }))
+}
+
+fn install_sdk_from_browser(root: &Path, archive: &Path) -> Result<()> {
+    std::fs::create_dir_all(root)?;
+    // Verify the *copied* bytes before extracting fixed offsets, even if
+    // another process modified the user's Downloads directory meanwhile.
+    let (stage, mut output) = bridge_update::unique_stage_for_bootstrap(root)?;
+    save_checked_archive(File::open(archive)?, &stage.path, ARCHIVE_SIZE, ARCHIVE_HASH)?;
+    // save_checked_archive owns the stage pathname, so close the reserved
+    // handle before creating the checked copy.
+    drop(output);
+    let (dll_stage, dll_file) = bridge_update::unique_stage_for_bootstrap(root)?;
+    drop(dll_file);
+    extract(&stage.path, &dll_stage.path, 37_964_664, 14_455_982, DLL_SIZE)?;
+    verify(&dll_stage.path, DLL_SIZE, DLL_HASH)?;
+    let destination = root.join("nvngx_vsr.dll");
+    if !destination.is_file() {
+        std::fs::rename(&dll_stage.path, &destination)?;
+    } else if verify(&destination, DLL_SIZE, DLL_HASH).is_err() {
+        // A loaded but corrupt DLL cannot be replaced on Windows; leave the
+        // existing file untouched if rename/replace is not permitted.
+        std::fs::remove_file(&destination)?;
+        std::fs::rename(&dll_stage.path, &destination)?;
+    }
+    if !root.join("NVIDIA-RTX-VIDEO-LICENSE.pdf").is_file() {
+        extract(
+            &stage.path,
+            &root.join("NVIDIA-RTX-VIDEO-LICENSE.pdf"),
+            62_433_254,
+            131_214,
+            136_535,
+        )?;
+    }
     crate::event_log::record(
-        "INFO",
-        "vsr_runtime_installed",
-        serde_json::json!({"sdk_version":"1.1.0","sha256":DLL_HASH}),
+        "INFO", "vsr_runtime_installed",
+        serde_json::json!({"sdk_version":"1.1.0","sha256":DLL_HASH,"source":"browser_import"}),
     );
-    bridge_error.map_or(Ok(()), Err)
+    Ok(())
+}
+
+/// Browser-based acquisition: the app downloads signed JSON metadata only.
+/// All SDK ZIP and NGX DLL bytes come from a user-selected local file.
+pub fn install() -> Result<()> {
+    let root = directory()?;
+    std::fs::create_dir_all(&root)?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .https_only(true)
+        .build()?;
+    // Check signed JSON only. No HTTP request for executable contents.
+    let bridge = bridge_request(&root, &client)?;
+    if verify(&root.join("nvngx_vsr.dll"), DLL_SIZE, DLL_HASH).is_err() {
+        let Some(path) = browser_import::choose(URL, "zip")? else {
+            return Ok(()); // User deferred download; normal video still works.
+        };
+        install_sdk_from_browser(&root, &path)?;
+    }
+    if let Some(bridge) = bridge {
+        let (url, signed) = match &bridge {
+            BridgeRequest::Signed(offer) => (&offer.browser_url, true),
+            BridgeRequest::Pinned { url, .. } => (url, false),
+        };
+        let Some(path) = browser_import::choose(url, "dll")? else {
+            return Ok(());
+        };
+        match &bridge {
+            BridgeRequest::Signed(offer) => bridge_update::import_signed(&root, offer, &path)?,
+            BridgeRequest::Pinned { sha256, .. } => {
+                bridge_update::import_pinned(&root, &path, sha256)?
+            }
+        }
+        crate::event_log::record(
+            "INFO", "vsr_bridge_imported",
+            serde_json::json!({"source":"browser_import","signed":signed}),
+        );
+    }
+    Ok(())
 }
 fn extract(archive: &Path, output: &Path, offset: u64, compressed: u64, size: u64) -> Result<()> {
     let mut input = File::open(archive)?;
@@ -333,35 +300,10 @@ fn extract(archive: &Path, output: &Path, offset: u64, compressed: u64, size: u6
 mod tests {
     use super::*;
     #[test]
-    fn nvidia_download_discovery_handles_metadata_redirect_and_direct_body() {
-        let origin = reqwest::Url::parse(URL).unwrap();
-        assert!(
-            archive_download_location(&origin, reqwest::StatusCode::OK, None)
-                .unwrap()
-                .is_none()
-        );
-        let redirect = "https://download.nvidia.com/rtx-video-sdk.zip";
-        assert_eq!(
-            archive_download_location(&origin, reqwest::StatusCode::FOUND, Some(redirect))
-                .unwrap()
-                .unwrap()
-                .as_str(),
-            redirect,
-        );
-        assert_eq!(
-            archive_download_location(&origin, reqwest::StatusCode::OK, Some(redirect))
-                .unwrap()
-                .unwrap()
-                .as_str(),
-            redirect,
-        );
-        assert!(archive_download_location(&origin, reqwest::StatusCode::FOUND, None).is_err());
-        assert!(archive_download_location(
-            &origin,
-            reqwest::StatusCode::FOUND,
-            Some("http://other.example/zip")
-        )
-        .is_err());
+    fn vendor_sdk_browser_address_is_https() {
+        let url = reqwest::Url::parse(URL).unwrap();
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(url.host_str(), Some("api.ngc.nvidia.com"));
     }
 
     #[test]
