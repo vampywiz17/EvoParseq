@@ -184,3 +184,24 @@ fn prepare_vsr_runtime(settings: &crate::connection_settings::Manager) {
         }
     }
 }
+
+#[cfg(test)]
+mod vsr_runtime_guard_tests {
+    #[test]
+    fn corrupt_settings_never_start_optional_nvidia_download() {
+        let fixture = std::env::temp_dir().join(format!(
+            "evoparseq-vsr-invalid-settings-{}.json",
+            std::process::id()
+        ));
+        let invalid = b"{not-valid-json";
+        std::fs::write(&fixture, invalid).unwrap();
+        let settings = crate::connection_settings::Manager::open(fixture.clone());
+        assert!(settings.view().1.is_some());
+
+        // Even an RTX-enabled release must return before GPU enumeration,
+        // displaying any consent dialog or starting a vendor download.
+        super::prepare_vsr_runtime(&settings);
+        assert_eq!(std::fs::read(&fixture).unwrap(), invalid);
+        std::fs::remove_file(fixture).unwrap();
+    }
+}
