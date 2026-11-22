@@ -221,6 +221,8 @@ Choose the service at sign-in and reconnect after changing connection
 capabilities. Remembered sessions use the platform's protected storage.
 Users upgrading from ParsecWebTurn can refer to the [migration guide](MIGRATION.md).
 
+[Code signing policy](CODE_SIGNING.md) · [Privacy policy](PRIVACY.md)
+
 ### Windows shortcuts
 
 | Shortcut | Action |
