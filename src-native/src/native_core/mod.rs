@@ -119,7 +119,7 @@ fn run() -> Result<()> {
 
 fn prepare_vsr_runtime(settings: &crate::connection_settings::Manager) {
     use crate::connection_settings::VsrRuntimeConsent;
-    if !cfg!(nvidia_vsr_sdk) || settings.view().1.is_some() {
+    if !option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256").is_some() || settings.view().1.is_some() {
         return;
     }
     let data = settings.directory();
