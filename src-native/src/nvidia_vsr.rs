@@ -122,8 +122,20 @@ mod sdk {
     const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x100;
     const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x1000;
 
-    type Create =
-        unsafe extern "C" fn(*mut c_void, *mut c_void, *const u16, *mut *mut c_void) -> u32;
+    #[repr(C)]
+    #[derive(Default)]
+    struct CreateDiagnostics {
+        stage: u32,
+        sdk_result: u32,
+        available: i32,
+    }
+    type Create = unsafe extern "C" fn(
+        *mut c_void,
+        *mut c_void,
+        *const u16,
+        *mut *mut c_void,
+        *mut CreateDiagnostics,
+    ) -> u32;
     type Evaluate = unsafe extern "C" fn(
         *mut c_void,
         *mut c_void,
@@ -195,7 +207,7 @@ mod sdk {
             let root = crate::vsr_runtime::validated_directory()?;
             let library = Library::open(&crate::vsr_runtime::validated_bridge_path()?)?;
             let abi: Abi = library.symbol(b"evoparseq_ngx_bridge_abi\0")?;
-            anyhow::ensure!(abi() == 1, "Unsupported NVIDIA NGX bridge ABI");
+            anyhow::ensure!(abi() == 2, "Unsupported NVIDIA NGX bridge ABI");
             let create: Create = library.symbol(b"evoparseq_ngx_create\0")?;
             let evaluate: Evaluate = library.symbol(b"evoparseq_ngx_evaluate\0")?;
             let destroy: Destroy = library.symbol(b"evoparseq_ngx_destroy\0")?;
@@ -204,16 +216,30 @@ mod sdk {
             let context = device.GetImmediateContext()?;
             let _lock = ContextLock::enter(device)?;
             let mut session = null_mut();
-            anyhow::ensure!(
-                create(
-                    device.as_raw(),
-                    context.as_raw(),
-                    path.as_ptr(),
-                    &mut session
-                ) == 1
-                    && !session.is_null(),
-                "NVIDIA NGX VSR initialization failed or GPU/driver unsupported"
+            let mut diagnostics = CreateDiagnostics::default();
+            let created = create(
+                device.as_raw(),
+                context.as_raw(),
+                path.as_ptr(),
+                &mut session,
+                &mut diagnostics,
             );
+            if created != 1 || session.is_null() {
+                let stage = match diagnostics.stage {
+                    1 => "invalid bridge ABI input",
+                    2 => "NVSDK_NGX_D3D11_Init",
+                    3 => "NVSDK_NGX_D3D11_GetCapabilityParameters",
+                    4 => "NVSDK_NGX_Parameter_GetI(VSR.Available)",
+                    5 => "VSR.Available is false",
+                    6 => "NVSDK_NGX_D3D11_CreateFeature",
+                    _ => "unknown NGX bridge initialization failure",
+                };
+                anyhow::bail!(
+                    "NVIDIA NGX VSR failed at {stage}: status 0x{:08X}, available={}",
+                    diagnostics.sdk_result,
+                    diagnostics.available
+                );
+            }
             Ok(Self {
                 device: device.clone(),
                 _library: library,
