@@ -28,6 +28,14 @@ extern "C" {
         name: *const c_char, value: *mut c_void);
 }
 
+#[repr(C)]
+#[derive(Default)]
+pub struct CreateDiagnostics {
+    stage: u32,
+    sdk_result: u32,
+    available: i32,
+}
+
 pub struct Session {
     device: *mut c_void,
     parameters: *mut c_void,
@@ -47,14 +55,17 @@ impl Drop for Session {
 // All exported functions are private ABI v1 and invoked only after hash verification.
 // The caller owns a D3D10Multithread lock for every entrypoint.
 #[no_mangle]
-pub unsafe extern "C" fn evoparseq_ngx_bridge_abi() -> u32 { 1 }
+pub unsafe extern "C" fn evoparseq_ngx_bridge_abi() -> u32 { 2 }
 
 #[no_mangle]
 pub unsafe extern "C" fn evoparseq_ngx_create(
     device: *mut c_void, context: *mut c_void, directory: *const u16,
-    out: *mut *mut Session
+    out: *mut *mut Session, diagnostics: *mut CreateDiagnostics
 ) -> u32 {
+    if diagnostics.is_null() { return 0; }
+    *diagnostics = CreateDiagnostics::default();
     if device.is_null() || context.is_null() || directory.is_null() || out.is_null() {
+        (*diagnostics).stage = 1; // invalid C ABI input
         return 0;
     }
     *out = null_mut();
@@ -64,13 +75,39 @@ pub unsafe extern "C" fn evoparseq_ngx_create(
         internal: null_mut(),
         logging: Logging { callback: std::ptr::null(), level: 0, other_sinks_disabled: false },
     };
-    if NVSDK_NGX_D3D11_Init(0, directory, device, &common, 0x15) != 1 { return 0; }
+    let result = NVSDK_NGX_D3D11_Init(0, directory, device, &common, 0x15);
+    if result != 1 {
+        (*diagnostics).stage = 2; // NVIDIA NGX initialization
+        (*diagnostics).sdk_result = result;
+        return 0;
+    }
     let mut session = Box::new(Session { device, parameters: null_mut(), feature: null_mut() });
-    if NVSDK_NGX_D3D11_GetCapabilityParameters(&mut session.parameters) != 1 { return 0; }
+    let result = NVSDK_NGX_D3D11_GetCapabilityParameters(&mut session.parameters);
+    if result != 1 {
+        (*diagnostics).stage = 3; // capability parameters
+        (*diagnostics).sdk_result = result;
+        return 0;
+    }
     let mut available = 0i32;
-    if NVSDK_NGX_Parameter_GetI(session.parameters, c"VSR.Available".as_ptr(), &mut available) != 1
-        || available == 0 { return 0; }
-    if NVSDK_NGX_D3D11_CreateFeature(context, 16, session.parameters, &mut session.feature) != 1 {
+    let result = NVSDK_NGX_Parameter_GetI(
+        session.parameters, c"VSR.Available".as_ptr(), &mut available
+    );
+    (*diagnostics).available = available;
+    if result != 1 {
+        (*diagnostics).stage = 4; // capability value query
+        (*diagnostics).sdk_result = result;
+        return 0;
+    }
+    if available == 0 {
+        (*diagnostics).stage = 5; // VSR capability explicitly unavailable
+        return 0;
+    }
+    let result = NVSDK_NGX_D3D11_CreateFeature(
+        context, 16, session.parameters, &mut session.feature
+    );
+    if result != 1 {
+        (*diagnostics).stage = 6; // NVIDIA VSR feature creation
+        (*diagnostics).sdk_result = result;
         return 0;
     }
     *out = Box::into_raw(session);
