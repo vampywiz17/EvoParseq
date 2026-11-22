@@ -25,6 +25,7 @@ getrandom = "0.3"
 bytes = "1"
 zeroize = { version = "1", optional = true }
 base64 = "0.22"
+ring = "0.17" # Signed, authenticated optional NGX adapter metadata.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", features = ["sink"] }
@@ -36,7 +37,6 @@ libopus_sys = { version = "=0.3.3", features = ["bundled", "static"] }
 # Synthetic crypto-policy and loopback TLS regression fixtures.
 [dev-dependencies]
 rcgen = "0.13"
-ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 
