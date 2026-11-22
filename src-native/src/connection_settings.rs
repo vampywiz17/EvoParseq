@@ -66,15 +66,6 @@ impl PresentationMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum VsrRuntimeConsent {
-    #[default]
-    Ask,
-    Allowed,
-    Declined,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GpuPreference {
@@ -135,10 +126,9 @@ pub struct Settings {
     pub phaze_input_mode: InputMode,
     pub prefer_hevc: bool,
     pub presentation_mode: PresentationMode,
-    /// Optional RTX Video quality: 0 off, 1..=4 low through ultra.
+    /// NVIDIA driver VSR preference: 0 off; previous nonzero quality levels mean on.
     pub nvidia_vsr: u8,
     pub intel_ai_vsr: bool,
-    pub vsr_runtime_consent: VsrRuntimeConsent,
     pub experimental_ten_bit: bool,
     pub experimental_chroma_444: bool,
     pub event_logging: bool,
@@ -187,8 +177,8 @@ impl Settings {
         }
     }
     pub fn nvidia_vsr_quality(&self, vendor: Option<u32>) -> u8 {
-        if option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256").is_some() && vendor == Some(0x10de) {
-            self.nvidia_vsr.min(4)
+        if cfg!(windows) && vendor == Some(0x10de) {
+            u8::from(self.nvidia_vsr != 0)
         } else {
             0
         }
@@ -210,7 +200,6 @@ impl Default for Settings {
             presentation_mode: PresentationMode::Automatic,
             nvidia_vsr: 0,
             intel_ai_vsr: false,
-            vsr_runtime_consent: VsrRuntimeConsent::Ask,
             experimental_ten_bit: false,
             experimental_chroma_444: false,
             event_logging: false,
@@ -506,13 +495,6 @@ impl Manager {
         self.update_local(|settings| {
             update(&mut settings.native_core);
             settings.native_core.video.validate()
-        })
-    }
-    /// Local setup consent must be saveable before TURN credentials exist.
-    pub fn update_vsr_consent(&self, consent: VsrRuntimeConsent) -> Result<()> {
-        self.update_local(|settings| {
-            settings.vsr_runtime_consent = consent;
-            Ok(())
         })
     }
     pub(crate) fn update_local(
@@ -1098,34 +1080,6 @@ mod tests {
             br#"{"iceServers":[{"urls":"turns:example.org","username":"fixture"}]}"#
         )
         .is_err());
-    }
-}
-
-#[cfg(test)]
-mod runtime_consent_tests {
-    use super::*;
-    #[test]
-    fn consent_can_be_saved_before_network_configuration_without_losing_profile() {
-        let dir =
-            std::env::temp_dir().join(format!("evoparseq-vsr-consent-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.json");
-        let mut settings = Settings::default();
-        settings.native_core.encrypted_session = "opaque-existing-protected-session".into();
-        std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
-        let manager = Manager::open(path.clone());
-        assert!(manager.view().0.validate().is_err());
-        manager
-            .update_vsr_consent(VsrRuntimeConsent::Allowed)
-            .unwrap();
-        let restored = Manager::open(path).view().0;
-        assert_eq!(restored.vsr_runtime_consent, VsrRuntimeConsent::Allowed);
-        assert_eq!(
-            restored.native_core.encrypted_session,
-            settings.native_core.encrypted_session
-        );
-        std::fs::remove_file(dir.join("settings.json")).unwrap();
-        std::fs::remove_dir(dir).unwrap();
     }
 }
 

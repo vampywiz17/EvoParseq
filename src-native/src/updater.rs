@@ -80,11 +80,7 @@ impl Mode {
         }
     }
 }
-const RTX_CREDIT: &str = if crate::vsr_runtime::bridge_supported() {
-    "Optional NVIDIA RTX Video SDK 1.1.0 / NVIDIA RTX technology. The optional NVIDIA runtime and separately downloaded, statically NVIDIA-linked NGX bridge are proprietary and excluded from the EvoParseq MIT license; see NVIDIA-RTX-VIDEO-LICENSE.pdf in the download package. VSR may increase latency, GPU load and memory use."
-} else {
-    ""
-};
+const RTX_CREDIT: &str = "Optional NVIDIA RTX Video Super Resolution uses the installed graphics driver. Enable Super Resolution and set its quality in NVIDIA App.";
 pub const MIGRATION: &str = "Upgrading from ParsecWebTurn: close the old application and keep settings.json in the same folder. Replace the executable using the transition ZIP, or use EvoParseq.exe from the normal ZIP. Network, video, audio and input settings are retained. Sign in again: the old web-core sign-in cannot be imported. Original files are not deleted automatically.";
 pub struct Content {
     pub version: String,

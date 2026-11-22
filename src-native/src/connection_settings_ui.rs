@@ -3,9 +3,7 @@
 #[path = "settings_controls.rs"]
 pub(crate) mod controls;
 use crate::connection_settings::Manager;
-use crate::settings_model::{
-    AiUpscaler, BinaryChoice, Feature, Form, InputMode, RouteMode, Tab, VideoFormat,
-};
+use crate::settings_model::{BinaryChoice, Feature, Form, InputMode, RouteMode, Tab, VideoFormat};
 use std::{
     ptr::{null, null_mut},
     sync::Arc,
@@ -1403,8 +1401,6 @@ unsafe fn update_enabled(hwnd: HWND) {
 unsafe fn save(hwnd: HWND, page: &mut Page) {
     read_options(hwnd, page);
     let model = &mut page.model;
-    let vsr_available =
-        model.ai_upscaler() == AiUpscaler::Nvidia && model.availability().ai_upscale;
     let s = &mut model.values;
     {
         s.native_core.video.immersive =
@@ -1449,30 +1445,7 @@ unsafe fn save(hwnd: HWND, page: &mut Page) {
     model.token = zeroize::Zeroizing::new(text(hwnd, TOKEN));
     model.forget_password = checked(hwnd, FORGET_PASSWORD);
     model.forget_token = checked(hwnd, FORGET_TOKEN);
-    let needs_vsr = s.nvidia_vsr != 0 && vsr_available && !crate::vsr_runtime::present();
-    if needs_vsr && s.vsr_runtime_consent != crate::connection_settings::VsrRuntimeConsent::Allowed
-    {
-        let accepted = MessageBoxW(hwnd, wide("The optional NVIDIA VSR runtime or EvoParseq NGX adapter is missing. Allow verified downloads from NVIDIA and the matching EvoParseq GitHub release on the next app start? Normal video remains available without them.").as_ptr(), wide("EvoParseq - NVIDIA VSR").as_ptr(), MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES;
-        if accepted {
-            s.vsr_runtime_consent = crate::connection_settings::VsrRuntimeConsent::Allowed;
-        } else {
-            s.nvidia_vsr = 0;
-            PostMessageW(
-                hwnd,
-                WM_COMMAND,
-                AI_UPSCALE | ((CBN_SELCHANGE as usize) << 16),
-                0,
-            );
-            SendMessageW(GetDlgItem(hwnd, AI_UPSCALE as i32), CB_SETCURSEL, 0, 0);
-        }
-    }
     if model.save(&page.manager) {
-        if needs_vsr
-            && model.values.vsr_runtime_consent
-                == crate::connection_settings::VsrRuntimeConsent::Allowed
-        {
-            model.feedback.push_str(crate::vsr_runtime::RESTART_HINT);
-        }
         PostMessageW(
             GetParent(hwnd),
             crate::native_core::session_ui::VISIBILITY,
