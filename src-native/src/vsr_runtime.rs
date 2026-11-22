@@ -312,7 +312,7 @@ mod tests {
 
         std::fs::write(&dll, b"altered fixture").unwrap();
         assert!(verify_bridge_with_hash(&dll, &digest).is_err());
-        std::fs::write(&dll, []).unwrap();
+        std::fs::write(&dll, b"").unwrap();
         assert!(verify_bridge_with_hash(&dll, &digest).is_err());
 
         // A sparse oversized file must fail before its content is hashed.
