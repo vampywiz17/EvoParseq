@@ -672,7 +672,9 @@ mod vsr_tests {
                 );
                 assert_eq!(
                     available.zero_copy,
-                    quality == 0 || vendor != 0x10de || !option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256").is_some()
+                    quality == 0
+                        || vendor != 0x10de
+                        || !option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256").is_some()
                 );
             }
         }
