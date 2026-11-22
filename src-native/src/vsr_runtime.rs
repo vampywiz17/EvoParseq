@@ -27,7 +27,7 @@ const ARCHIVE_HASH: &str = "abf4f34e2b5a618e355b0d5a0365d8ecc3db4396e756e4c850a8
 const ARCHIVE_SIZE: u64 = 63_493_768;
 const DLL_SIZE: u64 = 19_140_144;
 const URL: &str = "https://api.ngc.nvidia.com/v2/models/nvidia/multimedia/dlpp/versions/1.5/files/RTX_Video_SDK_v1.1.0.zip";
-pub const PROMPT: &str = "Enable optional NVIDIA VSR components?\\n\\nDownloads will open only in your default browser, never inside EvoParseq. After downloading, select the ZIP/DLL with the file picker: EvoParseq verifies the exact SDK SHA-256 or signed bridge manifest and installs it automatically in your per-user cache. No manual file copying or administrator rights are needed.\\n\\nVSR requires a compatible RTX GPU/driver, is off by default and may increase latency. Choosing No keeps ordinary GPU video available.";
+pub const PROMPT: &str = "Enable optional NVIDIA VSR components?\n\nDownloads will open only in your default browser, never inside EvoParseq. After downloading, select the ZIP/DLL with the file picker: EvoParseq verifies the exact SDK SHA-256 or signed bridge manifest and installs it automatically in your per-user cache. No manual file copying or administrator rights are needed.\n\nVSR requires a compatible RTX GPU/driver, is off by default and may increase latency. Choosing No keeps ordinary GPU video available.";
 
 const BRIDGE_MAX_SIZE: u64 = 16 * 1024 * 1024;
 // Older builds pin their bootstrapping adapter; signed manifests can update
@@ -75,14 +75,13 @@ fn verify(path: &Path, size: u64, expected: &str) -> Result<()> {
     Ok(())
 }
 
-/// Accept the final HTTPS response body regardless of whether NVIDIA served it
-/// directly or reqwest already followed its redirects. The immutable archive
-/// size and SHA-256 remain mandatory before any extraction.
+/// Accept an explicitly user-selected local SDK ZIP. Its exact immutable
+/// size and SHA-256 are mandatory before any extraction.
 fn save_checked_archive(body: impl Read, path: &Path, size: u64, expected: &str) -> Result<()> {
     let mut file = File::create(path)?;
     let count = std::io::copy(&mut body.take(size + 1), &mut file)?;
     drop(file);
-    ensure!(count == size, "NVIDIA SDK download size mismatch");
+    ensure!(count == size, "NVIDIA SDK ZIP size mismatch");
     verify(path, size, expected)
 }
 
@@ -212,11 +211,10 @@ fn install_sdk_from_browser(root: &Path, archive: &Path) -> Result<()> {
     std::fs::create_dir_all(root)?;
     // Verify the *copied* bytes before extracting fixed offsets, even if
     // another process modified the user's Downloads directory meanwhile.
-    let (stage, mut output) = bridge_update::unique_stage_for_bootstrap(root)?;
-    save_checked_archive(File::open(archive)?, &stage.path, ARCHIVE_SIZE, ARCHIVE_HASH)?;
-    // save_checked_archive owns the stage pathname, so close the reserved
-    // handle before creating the checked copy.
+    let (stage, output) = bridge_update::unique_stage_for_bootstrap(root)?;
+    // Close our exclusive reservation before reopening the same filename.
     drop(output);
+    save_checked_archive(File::open(archive)?, &stage.path, ARCHIVE_SIZE, ARCHIVE_HASH)?;
     let (dll_stage, dll_file) = bridge_update::unique_stage_for_bootstrap(root)?;
     drop(dll_file);
     extract(&stage.path, &dll_stage.path, 37_964_664, 14_455_982, DLL_SIZE)?;
@@ -307,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn pinned_download_accepts_final_response_body_without_location_header() {
+    fn selected_sdk_archive_copy_has_to_match_exact_hash() {
         let path = std::env::temp_dir().join(format!(
             "evoparseq-ngx-direct-body-{}.bin",
             std::process::id()
@@ -326,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn pinned_download_rejects_tampering_and_oversized_body() {
+    fn selected_sdk_archive_rejects_tampering_and_oversized_body() {
         let path = std::env::temp_dir().join(format!(
             "evoparseq-ngx-invalid-body-{}.bin",
             std::process::id()
