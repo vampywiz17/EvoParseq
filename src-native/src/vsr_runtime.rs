@@ -15,7 +15,11 @@ const ARCHIVE_HASH: &str = "abf4f34e2b5a618e355b0d5a0365d8ecc3db4396e756e4c850a8
 const ARCHIVE_SIZE: u64 = 63_493_768;
 const DLL_SIZE: u64 = 19_140_144;
 const URL: &str = "https://api.ngc.nvidia.com/v2/models/nvidia/multimedia/dlpp/versions/1.5/files/RTX_Video_SDK_v1.1.0.zip";
-pub const PROMPT: &str = "Download the optional NVIDIA RTX Video Super Resolution runtime from NVIDIA?\n\nThe download is about 61 MB. The checked NVIDIA DLL (about 19 MB) will be stored under %LOCALAPPDATA%/EvoParseq/vsr/1.1.0 for your Windows user (no administrator rights required). Sign-in opens after setup finishes.\n\nVSR requires a compatible RTX GPU/driver, is off by default and may increase latency. The NVIDIA SDK license is included in the application package. Choosing No keeps ordinary GPU video available.";
+pub const PROMPT: &str = "Download the optional NVIDIA RTX Video Super Resolution runtime from NVIDIA?\n\nThe download is about 61 MB. The checked NVIDIA runtime DLL (about 19 MB) and a version-pinned EvoParseq NGX adapter DLL will be stored under %LOCALAPPDATA%/EvoParseq/vsr/1.1.0 for your Windows user (no administrator rights required). Sign-in opens after setup finishes.\n\nVSR requires a compatible RTX GPU/driver, is off by default and may increase latency. The NVIDIA SDK license is included in the application package. Choosing No keeps ordinary GPU video available.";
+const BRIDGE_NAME: &str = "evoparseq-ngx-bridge.dll";
+const BRIDGE_MAX_SIZE: u64 = 16 * 1024 * 1024;
+// This digest is injected by the release build after compiling the isolated DLL.
+const BRIDGE_HASH: Option<&str> = option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256");
 pub const RESTART_HINT: &str =
     " Restart the app to download the approved NVIDIA VSR runtime before sign-in.";
 
@@ -37,7 +41,9 @@ pub fn directory() -> Result<PathBuf> {
     Ok(directory_under(&local_directory()?))
 }
 pub fn present() -> bool {
-    directory().is_ok_and(|root| root.join("nvngx_vsr.dll").is_file())
+    directory().is_ok_and(|root| {
+        root.join("nvngx_vsr.dll").is_file() && root.join(BRIDGE_NAME).is_file()
+    })
 }
 fn hash(mut file: &File) -> Result<String> {
     let mut digest = Sha256::new();
@@ -56,8 +62,45 @@ pub fn validated_directory() -> Result<PathBuf> {
     let root = directory()?;
     verify(&root.join("nvngx_vsr.dll"), DLL_SIZE, DLL_HASH)
         .context("VSR runtime missing or invalid; approve its download in Settings and restart")?;
+    verify_bridge(&root.join(BRIDGE_NAME))?;
     Ok(std::fs::canonicalize(root)?)
 }
+/// Verify the exact release adapter built for this executable before LoadLibraryExW.
+fn verify_bridge(path: &Path) -> Result<()> {
+    let expected = BRIDGE_HASH.context("This build has no pinned NVIDIA NGX bridge; build through the Windows release CI")?;
+    ensure!(expected.len() == 64 && expected.bytes().all(|c| c.is_ascii_hexdigit()),
+        "Invalid compile-time NGX bridge digest");
+    let file = File::open(path).context("NVIDIA NGX adapter not installed; approve its download in Settings")?;
+    ensure!(file.metadata()?.len() > 0 && file.metadata()?.len() <= BRIDGE_MAX_SIZE,
+        "Invalid NVIDIA NGX adapter size");
+    ensure!(hash(&file)?.eq_ignore_ascii_case(expected),
+        "NVIDIA NGX adapter checksum mismatch");
+    Ok(())
+}
+
+/// Download only the version-pinned GitHub release asset for our own bridge.
+/// The checksum itself is compiled into the EXE, not fetched from a mutable manifest.
+fn install_bridge(root: &Path, client: &reqwest::blocking::Client) -> Result<()> {
+    let expected = BRIDGE_HASH.context("This build has no NVIDIA NGX adapter digest")?;
+    ensure!(expected.len() == 64 && expected.bytes().all(|c| c.is_ascii_hexdigit()),
+        "Invalid NGX adapter digest");
+    let version = env!("CARGO_PKG_VERSION");
+    let url = format!(
+        "https://github.com/vampywiz17/EvoParseq/releases/download/v{version}/EvoParseq-NGX-Bridge.dll"
+    );
+    let response = client.get(url).send()
+        .context("Cannot download the optional NGX adapter from the matching EvoParseq release")?
+        .error_for_status().context("The matching NGX adapter release asset is unavailable")?;
+    let temp = Temporary(root.join("ngx-bridge.tmp"));
+    let mut file = File::create(&temp.0)?;
+    let length = std::io::copy(&mut response.take(BRIDGE_MAX_SIZE + 1), &mut file)?;
+    drop(file);
+    ensure!(length > 0 && length <= BRIDGE_MAX_SIZE, "NGX adapter exceeds size limit");
+    verify_bridge(&temp.0)?;
+    std::fs::rename(&temp.0, root.join(BRIDGE_NAME))?;
+    Ok(())
+}
+
 /// Reuse only our previously pinned runtime, not arbitrary driver/application DLLs.
 pub fn reuse_previous(data: &Path) -> Result<bool> {
     let root = directory()?;
@@ -114,6 +157,8 @@ pub fn install() -> Result<()> {
             }
         }))
         .build()?;
+    // First verify the separately built adapter. Never load an unverified DLL.
+    install_bridge(&root, &client)?;
     let response = client
         .get(URL)
         .send()
