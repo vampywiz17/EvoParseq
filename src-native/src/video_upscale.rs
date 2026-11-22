@@ -7,7 +7,7 @@ use windows::{
 pub enum Effect {
     Nvidia,
     #[cfg(feature = "vendor-video")]
-    Intel(evoparseq_video::intel_vsr::IntelAiVsr),
+    Intel(Box<evoparseq_video::intel_vsr::IntelAiVsr>),
 }
 
 impl Effect {
@@ -20,9 +20,9 @@ impl Effect {
         match vendor {
             0x10de => Ok(Self::Nvidia),
             #[cfg(feature = "vendor-video")]
-            0x8086 => Ok(Self::Intel(evoparseq_video::intel_vsr::IntelAiVsr::new(
-                device,
-            )?)),
+            0x8086 => Ok(Self::Intel(Box::new(
+                evoparseq_video::intel_vsr::IntelAiVsr::new(device)?,
+            ))),
             _ => anyhow::bail!("AI upscaling is unavailable for the selected GPU"),
         }
     }

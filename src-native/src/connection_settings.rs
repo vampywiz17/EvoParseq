@@ -378,6 +378,7 @@ struct Cached {
 }
 
 impl Manager {
+    #[cfg(target_os = "linux")]
     pub fn directory(&self) -> PathBuf {
         self.path
             .parent()
