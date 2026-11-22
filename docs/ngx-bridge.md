@@ -9,11 +9,11 @@ and **no NGX bridge DLL is bundled in the Windows ZIP**.
 1. The Windows CI fetches NVIDIA RTX Video SDK 1.1.0 and builds
    `src-native/ngx-bridge` as a **separate** `evoparseq_ngx_bridge.dll`.
    This is the **only** target linking `nvsdk_ngx_s.lib`.
-2. The CI copies it to `EvoParseq-NGX-Bridge.dll` and computes its SHA-256
-   **before** building the public `EvoParseq.exe`. The hash becomes the
-   compile-time value `EVOPARSEQ_NGX_BRIDGE_SHA256` in the EXE.
+2. The CI copies it to `EvoParseq-NGX-Bridge.dll`, computes its SHA-256,
+   and stages bridge metadata. The compiled digest remains a safe first-run
+   bootstrap fallback; subsequent updates use authenticated signed manifests.
 3. The release operator must attach **EvoParseq-NGX-Bridge.dll** as a
-   separate asset to the *same version* of the EvoParseq GitHub Release,
+   separate asset to the manifest-specified EvoParseq GitHub Release,
    e.g. `v0.9.9-dev.1`. **Do not put this DLL in the normal Windows ZIP.**
    This separately distributed adapter contains proprietary-linked NVIDIA
    code, is not covered by the EvoParseq MIT license, and its redistribution
@@ -21,10 +21,11 @@ and **no NGX bridge DLL is bundled in the Windows ZIP**.
 4. Only after an explicit user opt-in, EvoParseq downloads this release asset
    and NVIDIA's pinned `nvngx_vsr.dll`. The runtime stores both under the
    user's `%LOCALAPPDATA%/EvoParseq/vsr/1.1.0`.
-5. EvoParseq validates the adapter against its **embedded SHA-256** and the
-   NVIDIA runtime against the pinned SDK SHA-256, and stores the bridge with a hash-qualified filename (allowing concurrent
-   EvoParseq versions), then uses an absolute-path
-   `LoadLibraryExW` and resolves the adapter's private ABI v3.
+5. EvoParseq validates the adapter against the **signed manifest SHA-256**
+   (or the old EXE-embedded bootstrap digest) and the NVIDIA runtime against
+   the pinned SDK SHA-256. The adapter uses the stable filename
+   `EvoParseq-NGX-Bridge.dll` under the VSR cache and an absolute-path
+   `LoadLibraryExW` with private ABI v3. Updates occur before DLL loading.
 6. The adapter forwards the same D3D11 texture and VSR quality/viewport data
    to NVIDIA NGX as the earlier static integration. The main program retains
    GPU surface ownership and the D3D10Multithread critical section.
@@ -34,11 +35,13 @@ and **no NGX bridge DLL is bundled in the Windows ZIP**.
 
 ## Release checklist
 
-- Confirm both the main EXE and the bridge were compiled **in the same CI
-  build**, using the exact pinned SHA-256.
+- Confirm the runtime ABI is compatible and the separately signed manifest
+  covers the actual adapter bytes; the main EXE can stay unchanged when ABI 3
+  and the signing public key remain compatible.
 - Upload the separate `EvoParseq-NGX-Bridge.dll` from the
-  `EvoParseq-optional-NGX-bridge` workflow artifact to the matching release
-  tag, alongside the one-EXE Windows ZIP.
+  `EvoParseq-optional-NGX-bridge` workflow artifact to the release tag
+  approved by the operator; only then publish its separately signed channel
+  manifest (details: `docs/ngx-bridge-updates.md`).
 - Include the applicable NVIDIA license and notice with the adapter asset
   as needed by NVIDIA's redistribution terms.
 - The Windows workflow scans the main EXE for `NVSDK_NGX_D3D11_Init`
@@ -50,3 +53,5 @@ and **no NGX bridge DLL is bundled in the Windows ZIP**.
 **Limitation:** the GitHub-hosted adapter must be uploaded to the matching
 release before a fresh user's consent flow can succeed. GitHub Actions
 compile tests are not a substitute for live RTX VSR validation.
+
+Signed dev/stable metadata and offline signing instructions: see [NGX bridge updates](ngx-bridge-updates.md).
