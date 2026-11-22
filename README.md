@@ -190,7 +190,14 @@ See the [Android TV setup, build and compatibility guide](android-tv/README.md).
 | --- | --- |
 | Normal GPU rendering | Keeps decoded frames on the GPU and runs a color conversion pass. Start here for compatibility. |
 | Zero copy | Presents supported original decoder surfaces directly, without a separate conversion or post-processing pass. |
-| AI upscaling | Uses NVIDIA RTX VSR or Intel VPL on compatible hardware. It adds GPU work and an output copy and may increase latency. |
+| AI upscaling | Requests NVIDIA driver RTX VSR or uses Intel VPL on compatible hardware. Both may increase GPU work and latency. Intel VPL adds an output copy. |
+
+For NVIDIA RTX VSR, enable **Super Resolution** in NVIDIA App or NVIDIA Control
+Panel and select its quality there. Turn on AI upscaling in EvoParseq and reconnect
+with an NVIDIA adapter selected. EvoParseq requests VSR during D3D11 scaling of
+NV12 or P010 video. Use the NVIDIA App status indicator to confirm that the driver
+is applying it. The Windows build uses Windows graphics APIs and the installed
+driver, with no NVIDIA SDK or separate bridge download.
 
 The animation shows the order of processing. Check **Connection stats** for
 the active decoder, received chroma and bit depth, application RGB output, and

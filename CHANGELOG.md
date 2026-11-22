@@ -2,28 +2,51 @@
 
 ## Unreleased
 
-## v0.9.9-dev.2 — NVIDIA VSR bridge update and cache preview (2026-11-22)
+## v0.9.9-dev.2 — Driver-based NVIDIA VSR preview (2026-11-22)
 
-This development preview includes the Phaze and Parsec improvements from
-v0.9.9-dev.1 plus the changes merged into dev afterwards.
+This development preview builds on **EvoParseq v0.9.9-dev.1**. It includes
+Windows x64, the distribution-signed Android TV APK and the experimental Linux
+x86_64 Flatpak. All three clients report **0.9.9-dev.2**.
 
-- **NVIDIA NGX bridge cache:** keep `EvoParseq-NGX-Bridge.dll` in
-  immutable per-SHA-256 directories; preserve older EXEs and reuse a verified
-  adapter across restarts without downloading identical content again.
-- **Signed metadata:** support separate Ed25519-verified dev and stable
-  manifests, authenticated ABI 3 and exact release assets. A compiled
-  SHA-256 bootstrap keeps existing installs functional until a signed
-  manifest and separately approved adapter are published.
-- **Safety:** reject invalid hashes, malformed manifests and rollback;
-  isolate concurrent staging files and avoid overriding loaded DLLs.
-- **RTX testing:** Windows RTX 3060 confirmed VSR initializes and works,
-  with cache reuse and compatibility between older/newer EXEs.
-- **Known limitations:** Windows VSR setup can temporarily backlog video
-  frames. Signed-channel updates require a published manifest and a separate
-  NVIDIA-linked DLL asset, subject to its redistribution terms.
-- **Release policy:** the adapter is NOT bundled in the regular Windows ZIP.
-  Publication of the separately staged DLL requires NVIDIA license review.
+**This is a development preview. EvoParseq v0.9.8 remains the stable release.**
 
+### What's new and improved
+
+- **Windows RTX VSR:** request Super Resolution from the installed NVIDIA
+  driver during the existing D3D11 video processor pass. Keep a local on/off
+  preference and use NVIDIA App for quality. When the driver rejects the
+  request, the stream can continue through normal GPU rendering.
+- **Windows build and packaging:** remove the NVIDIA SDK and bridge tooling.
+  The Windows CI build also runs for pull requests targeting dev.
+- **VSR diagnostics:** log when the driver accepts the VSR request. This event
+  records driver acceptance. RTX image enhancement remains unverified.
+
+### Known issues
+
+- **Phaze input:** normal mouse or keyboard events can occasionally be missed,
+  including in the official Phaze client. This has not been observed in USB
+  HID mode.
+
+### Compatibility and validation
+
+The Windows client asks the installed NVIDIA driver for VSR when scaling
+eligible NV12 or P010 video. The RTX 3060 driver accepted the request in a
+synthetic D3D11 test. Actual image enhancement still needs verification on
+an RTX system with Super Resolution enabled in NVIDIA App.
+
+### Updating
+
+Windows: close the client and extract **EvoParseq-v0.9.9-dev.2-win64.zip**.
+The legacy **ParsecWebTurn-v0.9.9-dev.2-win64.zip** contains the same executable
+under its previous name. The ZIPs exclude user settings.
+
+Android TV: install **EvoParseq-TV.apk** or select the prerelease channel in
+Settings > Updates. The APK uses the existing distribution signing identity.
+
+Linux: install **EvoParseq-Linux-v0.9.9-dev.2-x86_64.flatpak**. The application ID
+and settings directory remain the same.
+
+[Driver-based NVIDIA VSR and verification](https://github.com/vampywiz17/EvoParseq/pull/28)
 
 ## v0.9.8 — Multi-display streaming and Linux Flatpak (2026-11-19)
 

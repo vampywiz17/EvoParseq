@@ -51,9 +51,6 @@ jobs:
           Expand-Archive -LiteralPath $archive -DestinationPath $destination
           $destination | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           Install-Module Pester -RequiredVersion 5.7.1 -Repository PSGallery -Scope CurrentUser -Force -AllowClobber
-      - name: Prepare the normal optional vendor SDK
-        shell: pwsh
-        run: ./scripts/fetch-rtx-video-sdk.ps1 -Destination (Join-Path $env:RUNNER_TEMP 'rtx-video-sdk-1.1.0')
       - name: Measure actual Rust test execution
         shell: pwsh
         run: |

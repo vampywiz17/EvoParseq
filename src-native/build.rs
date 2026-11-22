@@ -1,9 +1,6 @@
 use std::{env, fs, path::PathBuf, process::Command};
 fn main() {
-    // NVIDIA's proprietary nvsdk_ngx_s.lib must never be linked into EvoParseq.exe.
-    // Only the independently built optional ngx-bridge DLL links that SDK.
     println!("cargo:rustc-check-cfg=cfg(feature, values(\"desktop-telemetry\"))");
-    println!("cargo:rerun-if-env-changed=EVOPARSEQ_NGX_BRIDGE_SHA256");
     println!("cargo:rerun-if-changed=../assets/evoparseq.ico");
     if !env::var("TARGET")
         .unwrap_or_default()

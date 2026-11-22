@@ -12,21 +12,21 @@ pub enum AiUpscaler {
 impl AiUpscaler {
     pub fn for_vendor(vendor: Option<u32>) -> Self {
         match vendor {
-            Some(0x10de) if crate::vsr_runtime::bridge_supported() => Self::Nvidia,
+            Some(0x10de) if cfg!(windows) => Self::Nvidia,
             Some(0x8086) if cfg!(feature = "vendor-video") => Self::Intel,
             _ => Self::Unavailable,
         }
     }
     pub fn labels(self) -> &'static [&'static str] {
         match self {
-            Self::Nvidia => &["Off", "Low", "Medium", "High", "Ultra"],
+            Self::Nvidia => &["Off", "On"],
             Self::Intel => &["Off", "On"],
             Self::Unavailable => &["Unavailable for selected GPU"],
         }
     }
     pub fn hint(self) -> &'static str {
         match self {
-            Self::Nvidia => "Experimental NVIDIA RTX VSR; normal GPU rendering.\nAdds GPU work/memory and may increase latency.\nActivates when upscaling; reconnect after changing.",
+            Self::Nvidia => "Request RTX VSR from the NVIDIA driver when upscaling.\nEnable Super Resolution and select quality in NVIDIA App.\nGPU processing may increase latency. Reconnect after changing.",
             Self::Intel => "Experimental Intel VPL AI; hardware support unverified.\n8-bit SDR, normal GPU rendering; may increase latency.\nRequires driver support; reconnect after changing.",
             Self::Unavailable => "AI upscaling is unavailable for the selected GPU.\nNVIDIA RTX and supported Intel GPU/driver combinations only.\nNormal GPU rendering remains available.",
         }
@@ -40,7 +40,7 @@ impl AiUpscaler {
     }
     pub fn selection(self, settings: &Settings) -> usize {
         match self {
-            Self::Nvidia => usize::from(settings.nvidia_vsr.min(4)),
+            Self::Nvidia => usize::from(settings.nvidia_vsr != 0),
             Self::Intel => usize::from(settings.intel_ai_vsr),
             Self::Unavailable => 0,
         }
@@ -618,7 +618,7 @@ mod vsr_tests {
             let allowed = vendor == 0x8086 && cfg!(feature = "vendor-video");
             assert_eq!(
                 available.ai_upscale,
-                (crate::vsr_runtime::bridge_supported() && vendor == 0x10de)
+                (cfg!(windows) && vendor == 0x10de)
                     || (cfg!(feature = "vendor-video") && vendor == 0x8086)
             );
             assert_eq!(available.zero_copy, !allowed);
@@ -628,18 +628,19 @@ mod vsr_tests {
             );
         }
         // The rendered backend owns the edit even if the GPU selector has just
-        // changed. Switching providers must not turn NVIDIA Ultra into Intel On.
+        // changed. Switching providers preserves each provider's preferences.
         settings.nvidia_vsr = 4;
-        AiUpscaler::Nvidia.apply(&mut settings, 3);
+        assert_eq!(AiUpscaler::Nvidia.selection(&settings), 1);
+        AiUpscaler::Nvidia.apply(&mut settings, 1);
         assert!(settings.intel_ai_vsr);
         AiUpscaler::Intel.apply(&mut settings, 0);
-        assert_eq!(settings.nvidia_vsr, 3);
+        assert_eq!(settings.nvidia_vsr, 1);
         assert!(!settings.intel_ai_vsr);
         AiUpscaler::Unavailable.apply(&mut settings, 0);
-        assert_eq!(settings.nvidia_vsr, 3);
-        assert_eq!(AiUpscaler::Nvidia.selection(&settings), 3);
+        assert_eq!(settings.nvidia_vsr, 1);
+        assert_eq!(AiUpscaler::Nvidia.selection(&settings), 1);
         assert_eq!(AiUpscaler::Intel.selection(&settings), 0);
-        assert_eq!(AiUpscaler::Nvidia.labels().len(), 5);
+        assert_eq!(AiUpscaler::Nvidia.labels().len(), 2);
         assert_eq!(AiUpscaler::Intel.labels().len(), 2);
         settings.intel_ai_vsr = true;
         for ten_bit in [false, true] {
@@ -652,7 +653,7 @@ mod vsr_tests {
         }
     }
     #[test]
-    fn vsr_defaults_off_retains_quality_and_excludes_original_surface_display() {
+    fn vsr_defaults_off_and_preserves_legacy_enabled_settings() {
         let settings = Settings::default();
         assert_eq!(settings.nvidia_vsr, 0);
         for quality in 0..=4 {
@@ -667,12 +668,12 @@ mod vsr_tests {
                 let available = form.availability();
                 assert_eq!(
                     available.ai_upscale,
-                    (crate::vsr_runtime::bridge_supported() && vendor == 0x10de)
+                    (cfg!(windows) && vendor == 0x10de)
                         || (cfg!(feature = "vendor-video") && vendor == 0x8086)
                 );
                 assert_eq!(
                     available.zero_copy,
-                    quality == 0 || vendor != 0x10de || !crate::vsr_runtime::bridge_supported()
+                    quality == 0 || vendor != 0x10de || !cfg!(windows)
                 );
             }
         }

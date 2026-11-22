@@ -51,9 +51,6 @@ jobs:
             src-native/crates/video
             tools/qos-latency
             src-native/tests/turn-integration
-      - name: Prepare optional RTX Video SDK for vendor code checks
-        shell: pwsh
-        run: ./scripts/fetch-rtx-video-sdk.ps1 -Destination (Join-Path $env:RUNNER_TEMP 'rtx-video-sdk-1.1.0')
       - name: Check application, adapters, tools and test targets
         shell: pwsh
         run: |

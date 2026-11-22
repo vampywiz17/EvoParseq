@@ -769,7 +769,6 @@ dependencies = [
  "evoparseq-phaze",
  "evoparseq-socket-qos",
  "evoparseq-video",
- "flate2",
  "futures-util",
  "getrandom 0.3.4",
  "image",
