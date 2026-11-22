@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use std::{
     fs::File,
     io::Read,
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 pub const DLL_NAME: &str = "EvoParseq-NGX-Bridge.dll";
