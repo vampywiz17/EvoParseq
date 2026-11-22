@@ -180,17 +180,28 @@ mod tests {
     fn bounded_codec_setup_overflow_preserves_the_real_failure_budget() {
         let mut queue = Queue::default();
         queue.optional_setup(true);
+        // First burst fills the real bounded queue and requests one recovery.
+        assert!(queue.submit_codec(vec![1], true, false, 0, Codec::H264));
+        for _ in 0..40 {
+            queue.submit_codec(vec![2], false, false, 0, Codec::H264);
+        }
+        let generation = queue.reset_generation;
+        assert_eq!(queue.report.queue_depth, 0);
+        // Once its reference chain is lost, even later IDRs are dropped until
+        // initialization finishes. They must not cause repeated recoveries.
         for _ in 0..5 {
-            // Each batch starts at a random-access picture. The real bounded
-            // queue is exercised rather than replacing it with a fake buffer.
-            assert!(queue.submit_codec(vec![1], true, false, 0, Codec::H264));
+            assert!(!queue.submit_codec(vec![1], true, false, 0, Codec::H264));
             for _ in 0..40 {
-                queue.submit_codec(vec![2], false, false, 0, Codec::H264);
+                assert!(!queue.submit_codec(vec![2], false, false, 0, Codec::H264));
             }
-            assert!(queue.report.queue_depth <= 32);
+            assert_eq!(queue.reset_generation, generation);
+            assert_eq!(queue.report.queue_depth, 0);
             assert!(queue.report.failure_stage.is_none());
         }
+        assert!(queue.take_keyframe_request(Instant::now()).is_none());
         queue.optional_setup(false);
+        assert!(queue.take_keyframe_request(Instant::now()).is_some());
+        assert!(queue.submit_codec(vec![1], true, false, 0, Codec::H264));
         assert!(queue.recover(Instant::now()));
         assert!(queue.recover(Instant::now()));
         assert!(queue.recover(Instant::now()));
