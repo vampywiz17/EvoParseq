@@ -374,10 +374,19 @@ mod tests {
     #[test]
     fn envelope_requires_signature_matching_exact_payload() {
         let signer = Ed25519KeyPair::from_seed_unchecked(&[9; 32]).unwrap();
-        let payload = br#"{"schema":1,"channel":"dev","sequence":1,"version":"1.2.3","abi":3,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":326144,"url":"https://github.com/vampywiz17/EvoParseq/releases/download/v0.9.9-dev.2/EvoParseq-NGX-Bridge.dll"}"#;
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "schema": 1,
+            "channel": channel(),
+            "sequence": 1,
+            "version": "1.2.3",
+            "abi": 3,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 326144,
+            "url": "https://github.com/vampywiz17/EvoParseq/releases/download/v0.9.9-dev.2/EvoParseq-NGX-Bridge.dll"
+        })).unwrap();
         let encoded = serde_json::json!({
-            "payload":base64::engine::general_purpose::STANDARD.encode(payload),
-            "signature":base64::engine::general_purpose::STANDARD.encode(signer.sign(payload).as_ref())
+            "payload":base64::engine::general_purpose::STANDARD.encode(&payload),
+            "signature":base64::engine::general_purpose::STANDARD.encode(signer.sign(&payload).as_ref())
         });
         let bytes = serde_json::to_vec(&encoded).unwrap();
         let key = signer.public_key().as_ref();
