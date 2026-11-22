@@ -119,11 +119,15 @@ fn run() -> Result<()> {
 
 fn prepare_vsr_runtime(settings: &crate::connection_settings::Manager) {
     use crate::connection_settings::VsrRuntimeConsent;
-    if !option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256").is_some() || settings.view().1.is_some() {
+    if !crate::vsr_runtime::bridge_supported() || settings.view().1.is_some() {
         return;
     }
     let data = settings.directory();
-    if crate::vsr_runtime::reuse_previous(&data).unwrap_or(false) {
+    let reused = crate::vsr_runtime::reuse_previous(&data).unwrap_or(false);
+    // Even when the adapter is installed, a signed manifest may advertise
+    // newer compatible bytes. Offline startup retains the previous verified
+    // DLL and must never block normal video playback.
+    if reused && !crate::vsr_runtime::updates_enabled() {
         return;
     }
     if !crate::gpu_windows::enumerate()
@@ -178,9 +182,9 @@ fn prepare_vsr_runtime(settings: &crate::connection_settings::Manager) {
                 "vsr_runtime_install_failed",
                 serde_json::json!({"reason":error.to_string()}),
             );
-            unsafe {
-                ui::message_box(std::ptr::null_mut(), "The optional NVIDIA VSR runtime could not be downloaded or verified. Normal GPU video remains available. See the event log.");
-            }
+            // Optional adapter updates never produce a blocking modal on
+            // startup. Failure leaves the verified cached bridge in place, if
+            // available, and ordinary GPU video remains usable.
         }
     }
 }
