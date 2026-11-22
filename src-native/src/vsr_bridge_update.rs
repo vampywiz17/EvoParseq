@@ -45,7 +45,7 @@ fn public_key() -> Result<Option<Vec<u8>>> {
     ensure!(key.len() == 32, "Invalid NGX manifest Ed25519 key length");
     Ok(Some(key))
 }
-pub fn enabled() -> bool {
+pub const fn enabled() -> bool {
     option_env!("EVOPARSEQ_NGX_MANIFEST_PUBLIC_KEY_B64").is_some()
 }
 fn channel() -> &'static str {
