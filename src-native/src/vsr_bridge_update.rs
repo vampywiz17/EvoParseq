@@ -1,4 +1,5 @@
-//! Authenticated, optional NGX adapter updates. Never called on the video worker.
+//! Authenticated NGX adapter update metadata and local-file import.
+//! Executable DLL bytes are NEVER requested over the network by EvoParseq.
 //! The DLL has a stable filename; authenticity is established from a signed
 //! manifest and checked bytes, not from the filename or a mutable JSON digest.
 use anyhow::{bail, ensure, Context, Result};
@@ -295,20 +296,102 @@ fn replace(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn download(client: &reqwest::blocking::Client, url: &str, limit: u64) -> Result<Vec<u8>> {
-    let timeout = if limit == MAX_MANIFEST { 5 } else { 30 };
+/// The only network request is for small, signed JSON metadata.
+fn fetch_manifest(client: &reqwest::blocking::Client) -> Result<Vec<u8>> {
     let response = client
-        .get(url)
-        .timeout(Duration::from_secs(timeout))
+        .get(source())
+        .timeout(Duration::from_secs(5))
         .send()?
         .error_for_status()?;
     let mut bytes = Vec::new();
-    response.take(limit + 1).read_to_end(&mut bytes)?;
-    ensure!(
-        bytes.len() as u64 <= limit,
-        "NGX metadata/download too large"
-    );
+    response.take(MAX_MANIFEST + 1).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() as u64 <= MAX_MANIFEST, "NGX metadata too large");
     Ok(bytes)
+}
+
+/// The URL may be opened ONLY by the user's default browser. The application
+/// does not download a DLL, even when a signed manifest advertises an update.
+pub struct UpdateOffer {
+    pub browser_url: String,
+    payload: Payload,
+    envelope: Vec<u8>,
+}
+
+/// Check for an update while preserving all previously verified adapters.
+/// Incomplete or unavailable manifest publication never causes a binary fetch.
+pub fn check_manifest(
+    root: &Path,
+    client: &reqwest::blocking::Client,
+) -> Result<Option<UpdateOffer>> {
+    let Some(key) = public_key()? else {
+        return Ok(None);
+    };
+    let current = cached(root, &key).ok().flatten();
+    let envelope = fetch_manifest(client)?;
+    let payload = validate_manifest(&envelope, &key)?;
+    if current.as_ref().is_some_and(|old| old.sequence > payload.sequence) {
+        bail!("NGX manifest sequence rollback refused");
+    }
+    let target = cache_path(root, &payload.sha256)?;
+    if digest(&target, &payload.sha256, payload.size).is_ok() {
+        // Matching content-addressed DLL is already installed. Commit only
+        // newly authenticated metadata, without opening a download dialog.
+        save_verified_manifest(root, &envelope)?;
+        return Ok(None);
+    }
+    Ok(Some(UpdateOffer {
+        browser_url: payload.url.clone(),
+        payload,
+        envelope,
+    }))
+}
+
+fn save_verified_manifest(root: &Path, bytes: &[u8]) -> Result<()> {
+    std::fs::create_dir_all(root)?;
+    let (stage, mut file) = unique_stage(root, "bridge-manifest")?;
+    file.write_all(bytes)?;
+    drop(file);
+    replace(&stage.path, &manifest_path(root))
+}
+
+/// The selected DLL is treated as untrusted. Install it only after verifying
+/// it against a signed manifest, using an exclusively owned temporary file.
+pub fn import_signed(root: &Path, offer: &UpdateOffer, selected: &Path) -> Result<()> {
+    #[cfg(windows)]
+    let _lock = UpdateLock::acquire()?;
+    let key = public_key()?.context("Signed NGX importer has no public key")?;
+    let signed = validate_manifest(&offer.envelope, &key)?;
+    ensure!(
+        signed.sha256 == offer.payload.sha256
+            && signed.sequence == offer.payload.sequence
+            && signed.size == offer.payload.size,
+        "NGX signed offer was changed"
+    );
+    if let Ok(Some(previous)) = cached(root, &key) {
+        ensure!(previous.sequence <= signed.sequence, "NGX update rollback refused");
+    }
+    digest(selected, &signed.sha256, signed.size)?;
+    let target = cache_path(root, &signed.sha256)?;
+    std::fs::create_dir_all(target.parent().context("NGX cache directory unavailable")?)?;
+    let (stage, mut output) = unique_stage(target.parent().unwrap(), "bridge-import")?;
+    std::io::copy(&mut File::open(selected)?, &mut output)?;
+    drop(output);
+    commit_immutable(&stage.path, &target, &signed.sha256, Some(signed.size))?;
+    save_verified_manifest(root, &offer.envelope)?;
+    Ok(())
+}
+
+pub fn import_pinned(root: &Path, selected: &Path, hash: &str) -> Result<()> {
+    #[cfg(windows)]
+    let _lock = UpdateLock::acquire()?;
+    digest_legacy(selected, hash)?;
+    let target = cache_path(root, hash)?;
+    std::fs::create_dir_all(target.parent().context("NGX cache directory unavailable")?)?;
+    let (stage, mut output) = unique_stage(target.parent().unwrap(), "bridge-import")?;
+    std::io::copy(&mut File::open(selected)?, &mut output)?;
+    drop(output);
+    commit_immutable(&stage.path, &target, hash, None)?;
+    Ok(())
 }
 
 /// Unique, exclusively created staging files cannot be truncated by a second
@@ -368,12 +451,8 @@ fn commit_immutable(stage: &Path, target: &Path, hash: &str, size: Option<u64>) 
     }
     Ok(())
 }
-fn needs_download(path: &Path, manifest: &Payload) -> bool {
-    digest(path, &manifest.sha256, manifest.size).is_err()
-}
-
 /// Use an OS-owned mutex, not a persistent lock-file that a crash could leave
-/// behind. It serializes per-user updates across simultaneous process starts.
+/// behind. It serializes per-user local imports across simultaneous process starts.
 #[cfg(windows)]
 struct UpdateLock(*mut std::ffi::c_void);
 #[cfg(windows)]
@@ -418,64 +497,6 @@ impl Drop for UpdateLock {
     }
 }
 
-/// Fetch a signed manifest, reuse an existing matching digest or place a new
-/// immutable DLL before updating the channel's signed selection metadata.
-pub fn refresh(
-    root: &Path,
-    client: &reqwest::blocking::Client,
-    legacy_hash: Option<&str>,
-) -> Result<()> {
-    #[cfg(windows)]
-    let _lock = UpdateLock::acquire()?;
-    migrate_legacy(root, legacy_hash)?;
-    let Some(key) = public_key()? else {
-        return verified(root, legacy_hash)
-            .context("No NGX signing key configured; using compiled bootstrap digest");
-    };
-    let current = cached(root, &key).ok().flatten();
-    let data = match download(client, source(), MAX_MANIFEST) {
-        Ok(data) => data,
-        Err(error) => return verified(root, legacy_hash).context(error),
-    };
-    let manifest = match validate_manifest(&data, &key) {
-        Ok(manifest) => manifest,
-        Err(error) => return verified(root, legacy_hash).context(error),
-    };
-    if current
-        .as_ref()
-        .is_some_and(|old| old.sequence > manifest.sequence)
-    {
-        return verified(root, legacy_hash);
-    }
-    let target = cache_path(root, &manifest.sha256)?;
-    if needs_download(&target, &manifest) {
-        let bytes = match download(client, &manifest.url, MAX_BRIDGE) {
-            Ok(bytes) => bytes,
-            Err(error) => return verified(root, legacy_hash).context(error),
-        };
-        ensure!(
-            bytes.len() as u64 == manifest.size,
-            "Downloaded NGX bridge size mismatch"
-        );
-        let parent = target.parent().context("Missing NGX bridge cache folder")?;
-        std::fs::create_dir_all(parent)?;
-        let (stage, mut file) = unique_stage(parent, "bridge-download")?;
-        file.write_all(&bytes)?;
-        drop(file);
-        if let Err(error) =
-            commit_immutable(&stage.path, &target, &manifest.sha256, Some(manifest.size))
-        {
-            return verified(root, legacy_hash).context(error);
-        }
-    }
-    digest(&target, &manifest.sha256, manifest.size)?;
-    // Signed metadata is committed only when its DLL is already verified.
-    let (stage, mut file) = unique_stage(root, "bridge-manifest")?;
-    file.write_all(&data)?;
-    drop(file);
-    replace(&stage.path, &manifest_path(root))?;
-    Ok(())
-}
 #[cfg(test)]
 mod tests {
     use super::*;
