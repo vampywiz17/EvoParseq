@@ -201,7 +201,7 @@ mod vsr_runtime_guard_tests {
         // Even an RTX-enabled release must return before GPU enumeration,
         // displaying any consent dialog or starting a vendor download.
         super::prepare_vsr_runtime(&settings);
-        assert_eq!(std::fs::read(&fixture).unwrap(), invalid);
+        assert_eq!(std::fs::read(&fixture).unwrap().as_slice(), &invalid[..]);
         std::fs::remove_file(fixture).unwrap();
     }
 }
