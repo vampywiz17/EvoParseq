@@ -227,11 +227,11 @@ mod sdk {
             if created != 1 || session.is_null() {
                 let stage = match diagnostics.stage {
                     1 => "invalid bridge ABI input",
-                    2 => "NVSDK_NGX_D3D11_Init",
-                    3 => "NVSDK_NGX_D3D11_GetCapabilityParameters",
-                    4 => "NVSDK_NGX_Parameter_GetI(VSR.Available)",
+                    2 => "NGX D3D11 initialization",
+                    3 => "NGX D3D11 capability parameters",
+                    4 => "NGX VSR availability query",
                     5 => "VSR.Available is false",
-                    6 => "NVSDK_NGX_D3D11_CreateFeature",
+                    6 => "NGX VSR feature creation",
                     _ => "unknown NGX bridge initialization failure",
                 };
                 anyhow::bail!(
