@@ -80,8 +80,8 @@ impl Mode {
         }
     }
 }
-const RTX_CREDIT: &str = if cfg!(nvidia_vsr_sdk) {
-    "Optional NVIDIA RTX Video SDK 1.1.0 / NVIDIA RTX technology. The optional NVIDIA runtime and linked SDK library are proprietary and excluded from the EvoParseq MIT license; see NVIDIA-RTX-VIDEO-LICENSE.pdf in the download package. VSR may increase latency, GPU load and memory use."
+const RTX_CREDIT: &str = if option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256").is_some() {
+    "Optional NVIDIA RTX Video SDK 1.1.0 / NVIDIA RTX technology. The optional NVIDIA runtime and separately downloaded, statically NVIDIA-linked NGX bridge are proprietary and excluded from the EvoParseq MIT license; see NVIDIA-RTX-VIDEO-LICENSE.pdf in the download package. VSR may increase latency, GPU load and memory use."
 } else {
     ""
 };
