@@ -10,6 +10,14 @@ use std::{
     time::Duration,
 };
 
+#[path = "vsr_bridge_update.rs"]
+mod bridge_update;
+
+pub fn updates_enabled() -> bool { bridge_update::enabled() }
+pub fn bridge_supported() -> bool {
+    bridge_update::enabled() || option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256").is_some()
+}
+
 pub const DLL_HASH: &str = "c3d88eea5ff7a548edefa66414cf6e77464d0947277c904f324dd23abf58a1ed";
 const ARCHIVE_HASH: &str = "abf4f34e2b5a618e355b0d5a0365d8ecc3db4396e756e4c850a867e1ae2ed69e";
 const ARCHIVE_SIZE: u64 = 63_493_768;
@@ -18,7 +26,8 @@ const URL: &str = "https://api.ngc.nvidia.com/v2/models/nvidia/multimedia/dlpp/v
 pub const PROMPT: &str = "Download the optional NVIDIA VSR runtime from NVIDIA and the EvoParseq NGX adapter from GitHub?\n\nThe download is about 61 MB. The checked NVIDIA runtime DLL (about 19 MB) and a version-pinned EvoParseq NGX adapter DLL will be stored under %LOCALAPPDATA%/EvoParseq/vsr/1.1.0 for your Windows user (no administrator rights required). Sign-in opens after setup finishes.\n\nVSR requires a compatible RTX GPU/driver, is off by default and may increase latency. The NVIDIA SDK license is included in the application package. Choosing No keeps ordinary GPU video available.";
 
 const BRIDGE_MAX_SIZE: u64 = 16 * 1024 * 1024;
-// This digest is injected by the release build after compiling the isolated DLL.
+// Older builds pin their bootstrapping adapter; signed manifests can update
+// independently without recompiling the EXE.
 const BRIDGE_HASH: Option<&str> = option_env!("EVOPARSEQ_NGX_BRIDGE_SHA256");
 pub const RESTART_HINT: &str =
     " Restart the app to download the approved NVIDIA VSR runtime before sign-in.";
@@ -41,12 +50,7 @@ pub fn directory() -> Result<PathBuf> {
     Ok(directory_under(&local_directory()?))
 }
 fn bridge_path(root: &Path) -> PathBuf {
-    // Allow different versions of EvoParseq to run concurrently; DLLs are
-    // immutable by digest and Windows keeps loaded modules locked.
-    root.join(format!(
-        "evoparseq-ngx-bridge-{}.dll",
-        BRIDGE_HASH.unwrap_or("unavailable")
-    ))
+    root.join(bridge_update::DLL_NAME)
 }
 
 pub fn validated_bridge_path() -> Result<PathBuf> {
@@ -109,7 +113,7 @@ pub fn validated_directory() -> Result<PathBuf> {
     let root = directory()?;
     verify(&root.join("nvngx_vsr.dll"), DLL_SIZE, DLL_HASH)
         .context("VSR runtime missing or invalid; approve its download in Settings and restart")?;
-    verify_bridge(&bridge_path(&root))?;
+    bridge_update::verified(&root, BRIDGE_HASH)?;
     Ok(std::fs::canonicalize(root)?)
 }
 /// Verify the exact release adapter built for this executable before LoadLibraryExW.
@@ -169,10 +173,14 @@ fn install_bridge(root: &Path, client: &reqwest::blocking::Client) -> Result<()>
     );
     verify_bridge(&temp.0)?;
     let target = bridge_path(root);
+    // The adapter is installed before the video worker loads it. If another
+    // EvoParseq process has the DLL open, keep that verified version and do
+    // not risk deleting it during an update.
     if target.exists() {
-        std::fs::remove_file(&target)?;
+        bridge_update::legacy_install_replace(&temp.0, &target)?;
+    } else {
+        std::fs::rename(&temp.0, &target)?;
     }
-    std::fs::rename(&temp.0, target)?;
     Ok(())
 }
 
@@ -192,7 +200,10 @@ pub fn reuse_previous(data: &Path) -> Result<bool> {
         ];
         reuse_from(&root, &candidates)?;
     }
-    // The bridge still needs to be fetched by install() when it is missing.
+    // A previously pinned adapter is eligible for one-time migration into
+    // the stable-name path, but the updater will still check for newer signed
+    // metadata at startup.
+    bridge_update::migrate_legacy(&root, BRIDGE_HASH)?;
     Ok(validated_directory().is_ok())
 }
 fn reuse_from(root: &Path, candidates: &[PathBuf]) -> Result<bool> {
@@ -237,9 +248,15 @@ pub fn install() -> Result<()> {
             }
         }))
         .build()?;
-    // First verify the separately built adapter. Never load an unverified DLL.
-    if verify_bridge(&bridge_path(&root)).is_err() {
-        install_bridge(&root, &client)?;
+    // The signed channel manifest controls updates; a compiled digest is a
+    // migration/bootstrap fallback for builds without signing-key setup.
+    if let Err(error) = bridge_update::refresh(&root, &client, BRIDGE_HASH) {
+        if bridge_update::verified(&root, BRIDGE_HASH).is_err() {
+            if bridge_update::enabled() {
+                return Err(error).context("No verified NGX bridge is available");
+            }
+            install_bridge(&root, &client)?;
+        }
     }
     // A previously installed, hash-verified NVIDIA runtime remains usable.
     if verify(&root.join("nvngx_vsr.dll"), DLL_SIZE, DLL_HASH).is_ok() {
@@ -430,14 +447,10 @@ mod tests {
     }
 
     #[test]
-    fn optional_bridge_filename_is_version_isolated_by_digest() {
+    fn optional_bridge_uses_stable_filename_regardless_of_digest() {
         let cache = Path::new("evoparseq-test-cache");
         let adapter = bridge_path(cache);
-        let expected = BRIDGE_HASH.unwrap_or("unavailable");
-        assert_eq!(
-            adapter,
-            cache.join(format!("evoparseq-ngx-bridge-{expected}.dll"))
-        );
+        assert_eq!(adapter, cache.join("EvoParseq-NGX-Bridge.dll"));
         assert!(adapter.starts_with(cache));
     }
 
