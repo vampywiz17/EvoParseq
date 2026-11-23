@@ -319,9 +319,12 @@ fn run_lowlat(
         .enable_all()
         .build()?;
     let (route, mut relays, preferences) = runtime.block_on(async {
-        tokio::time::timeout(Duration::from_secs(15), crate::lowlat_routes::route(settings))
-            .await
-            .context("LOWLAT route resolution timed out")?
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            crate::lowlat_routes::route(settings),
+        )
+        .await
+        .context("LOWLAT route resolution timed out")?
     })?;
     let layout = if preferences.experimental_surround_audio {
         crate::audio_device::default_layout().unwrap_or(crate::audio_layout::Layout::STEREO)
@@ -431,7 +434,11 @@ fn run_lowlat(
                         ended = true;
                     }
                     Event::IoFailure { stage, kind, .. } => {
-                        ensure!(!established, "LOWLAT IO failed: {} ({kind:?})", stage.name());
+                        ensure!(
+                            !established,
+                            "LOWLAT IO failed: {} ({kind:?})",
+                            stage.name()
+                        );
                         ended = true;
                     }
                     _ => {}

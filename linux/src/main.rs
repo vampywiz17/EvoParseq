@@ -16,10 +16,6 @@ mod audio_pipewire;
 mod audio_recovery;
 #[path = "../../src-native/src/audio_stream.rs"]
 pub mod audio_stream;
-#[path = "../../src-native/src/lowlat_ingress.rs"]
-mod lowlat_ingress;
-#[path = "../../src-native/src/lowlat_routes.rs"]
-mod lowlat_routes;
 #[path = "../../src-native/src/codec_initialization.rs"]
 pub mod codec_initialization;
 mod connection;
@@ -32,6 +28,10 @@ mod host_displays;
 #[path = "../../src-native/src/native_core/host_video.rs"]
 mod host_video;
 mod information_linux;
+#[path = "../../src-native/src/lowlat_ingress.rs"]
+mod lowlat_ingress;
+#[path = "../../src-native/src/lowlat_routes.rs"]
+mod lowlat_routes;
 #[path = "../../src-native/src/network_settings.rs"]
 mod network_settings;
 #[path = "../../src-native/src/native_core/profile.rs"]
@@ -86,6 +86,11 @@ mod hid_policy;
 pub mod input_handoff;
 #[path = "../../src-native/src/input_state.rs"]
 mod input_state;
+#[path = "../../src-native/src/interop_client.rs"]
+mod interop_client;
+mod interop_linux;
+#[path = "../../src-native/src/interop_session.rs"]
+pub(crate) mod interop_session;
 mod launcher;
 #[path = "../../src-native/src/media_ingress.rs"]
 pub mod media_ingress;
@@ -95,11 +100,6 @@ mod native_loop;
 pub mod native_wire;
 #[cfg(test)]
 mod network_tests;
-#[path = "../../src-native/src/interop_client.rs"]
-mod interop_client;
-mod interop_linux;
-#[path = "../../src-native/src/interop_session.rs"]
-pub(crate) mod interop_session;
 #[path = "../../src-native/src/native_core/picker.rs"]
 mod picker;
 mod playback;

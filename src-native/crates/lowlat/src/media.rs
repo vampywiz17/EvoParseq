@@ -58,7 +58,10 @@ pub enum Audio<'a> {
 /// The wire's codec tag is authoritative; a RAW permission can still yield Opus.
 pub fn audio(message: &[u8]) -> Result<Audio<'_>> {
     let (audio, channels, mask) = audio_layout(message)?;
-    ensure!(channels == 2 && mask == 3, "unsupported LOWLAT audio layout");
+    ensure!(
+        channels == 2 && mask == 3,
+        "unsupported LOWLAT audio layout"
+    );
     Ok(audio)
 }
 

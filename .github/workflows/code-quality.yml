@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: [main, dev, codex/phaze-protocol]
+    branches: [main, dev]
   workflow_dispatch:
 
 # PR code runs on disposable GitHub-hosted runners, without secrets, persisted

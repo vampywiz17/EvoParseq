@@ -4,12 +4,12 @@ extern crate alloc;
 mod audio_layout;
 #[path = "../../src-native/src/audio_stream.rs"]
 mod audio_stream;
-#[path = "../../src-native/src/lowlat_ingress.rs"]
-mod lowlat_ingress;
 #[path = "../src/display_routes.rs"]
 mod display_routes;
 #[path = "../../src-native/src/display_stream.rs"]
 mod display_stream;
+#[path = "../../src-native/src/lowlat_ingress.rs"]
+mod lowlat_ingress;
 
 #[path = "../../src-native/src/desktop_input.rs"]
 mod desktop_input;

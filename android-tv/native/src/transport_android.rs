@@ -1,7 +1,7 @@
 //! Android transport lifecycle; codecs and host settings stay shared.
 use crate::{
     attempt::{Attempt, Output, StunProvider},
-    audio_stream, lowlat_ingress, control, native_wire,
+    audio_stream, control, lowlat_ingress, native_wire,
     native_wire::SignalingWrite,
     video_android,
 };

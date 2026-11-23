@@ -239,7 +239,10 @@ impl Session {
     }
 
     pub fn offer(&mut self, id: &str, route: Route) -> Result<Credentials> {
-        ensure!(!id.is_empty() && id.len() <= 256, "invalid LOWLAT attempt id");
+        ensure!(
+            !id.is_empty() && id.len() <= 256,
+            "invalid LOWLAT attempt id"
+        );
         ensure!(self.attempt.is_none(), "LOWLAT attempt already active");
         let mut config = route.configure();
         #[cfg(target_os = "linux")]

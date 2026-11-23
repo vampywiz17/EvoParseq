@@ -1,9 +1,6 @@
-name: Phaze ARMv7 benchmark
+name: Host adapter ARMv7 benchmark
 on:
   workflow_dispatch:
-  push:
-    branches: [codex/phaze-protocol]
-    paths: ['ci-tests/host-interop-armv7/**', '.github/workflows/host-interop-armv7-benchmark.yml', 'android-tv/native/patches/**', 'android-tv/native/prepare-purecrypto.sh']
 permissions:
   contents: read
 jobs:
@@ -23,7 +20,7 @@ jobs:
           sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|https://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get -o Acquire::Retries=1 update -qq
           sudo apt-get -o Acquire::Retries=1 install -y --no-install-recommends gcc-arm-linux-gnueabihf libc6-dev-armhf-cross qemu-user
-      - name: Prepare pinned Phaze DTLS dependency
+      - name: Prepare pinned host adapter DTLS dependency
         run: bash android-tv/native/prepare-purecrypto.sh
       - name: Compare DTLS and standards-compatible AES-GCM on emulated Cortex-A7
         env:
