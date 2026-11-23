@@ -1,0 +1,31 @@
+[package]
+name = "evoparseq-host-interop"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots-no-provider", "json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
+lowlat-core = { path = "../lowlat/vendor/lowlat-core" }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", features = ["sink"] }
+sha2 = "0.10"
+getrandom = "0.3"
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-rustcrypto = { path = "vendor/rustls-rustcrypto" }
+purecrypto = { version = "=0.10.4", default-features = false, features = ["std", "dtls", "p256-table"] }
+hmac = "0.12"
+sha1 = "0.10"
+crc32fast = "1"
+socket2 = "0.6"
+if-addrs = "=0.15.0"
+zeroize = { version = "1", features = ["serde"] }
+webpki-roots = "1"
+symphonia-codec-aac = { version = "=0.6.1", default-features = false }
+symphonia-core = { version = "=0.6.1", default-features = false }

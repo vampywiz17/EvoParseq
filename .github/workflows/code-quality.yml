@@ -47,7 +47,7 @@ jobs:
         with:
           workspaces: |
             src-native
-            src-native/crates/bud
+            src-native/crates/lowlat
             src-native/crates/video
             tools/qos-latency
             src-native/tests/turn-integration
@@ -58,7 +58,7 @@ jobs:
           $failed = @()
           foreach ($manifest in @(
             'src-native/Cargo.toml',
-            'src-native/crates/bud/Cargo.toml',
+            'src-native/crates/lowlat/Cargo.toml',
             'src-native/crates/video/Cargo.toml',
             'tools/qos-latency/Cargo.toml',
             'src-native/tests/turn-integration/Cargo.toml'
@@ -90,7 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           failed=0
-          for manifest in src-native/Cargo.toml src-native/crates/bud/Cargo.toml src-native/crates/video/Cargo.toml tools/qos-latency/Cargo.toml src-native/tests/turn-integration/Cargo.toml; do
+          for manifest in src-native/Cargo.toml src-native/crates/lowlat/Cargo.toml src-native/crates/video/Cargo.toml tools/qos-latency/Cargo.toml src-native/tests/turn-integration/Cargo.toml; do
             cargo deny --manifest-path "$manifest" --config deny.toml --locked check || failed=1
           done
           exit "$failed"

@@ -1,0 +1,30 @@
+[package]
+name = "evoparseq-lowlat"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[workspace]
+members = ["vendor/lowlat-client", "vendor/lowlat-net", "vendor/lowlat-core", "vendor/lowlat-crypto"]
+resolver = "2"
+
+[features]
+native-core = ["lowlat-client/cursor-cache"]
+
+# Transport only: no SDK decoder, exporter or GPU probe dependency.
+# Async runtimes belong to the applications; this adapter uses the native driver.
+[dependencies]
+anyhow = "1"
+serde_json = "1.0.154"
+lowlat-client = { path = "vendor/lowlat-client", features = ["external-video", "turn-stream", "usb-hid-input"] }
+lowlat-core = { path = "vendor/lowlat-core" }
+lowlat-crypto = { git = "https://github.com/nomi-san/lowlat", rev = "5f8db5689e55de0d396b0520824caa9fc053dd86" }
+
+[dev-dependencies]
+lowlat-net = { path = "vendor/lowlat-net", features = ["turn-stream"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+
+[patch."https://github.com/nomi-san/lowlat"]
+lowlat-core = { path = "vendor/lowlat-core" }
+lowlat-crypto = { path = "vendor/lowlat-crypto" }

@@ -138,7 +138,7 @@ impl Video {
             values.insert("rotated".into(), n.into());
         }
         // Same owner-video contract used by the existing core and lowlat daemon.
-        // No codec flags here: the BUD adapter preserves its negotiated capability.
+        // No codec flags here: the LOWLAT adapter preserves its negotiated capability.
         crate::control::text(17, 11, &serde_json::json!({"video":[values]}).to_string())
     }
 }

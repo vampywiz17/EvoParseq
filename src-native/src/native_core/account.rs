@@ -1,6 +1,6 @@
 //! Rust adaptation of lowlat scripts/kessel-login.py at e548d48.
 //! Only account authentication: no daemon, installer, host or extra runtime.
-//! MIT attribution: src-native/crates/bud/vendor/lowlat-client/LICENSE.
+//! MIT attribution: src-native/crates/lowlat/vendor/lowlat-client/LICENSE.
 use anyhow::{ensure, Context, Result};
 use serde_json::{json, Value};
 use std::{io::Read, time::Duration};
@@ -91,7 +91,7 @@ impl Session {
         if self.service == Service::Phaze {
             {
                 let result = phaze_runtime(async {
-                    evoparseq_phaze::Session::from_token(self.token())?
+                    evoparseq_host_interop::Session::from_token(self.token())?
                         .revoke()
                         .await
                 });
@@ -202,7 +202,7 @@ pub fn login_service(login: &Login, service: Service) -> Result<Session> {
         return self::login(login);
     }
     {
-        let remote = phaze_runtime(evoparseq_phaze::login(
+        let remote = phaze_runtime(evoparseq_host_interop::login(
             &login.email,
             &login.password,
             &login.tfa,
@@ -337,11 +337,11 @@ impl std::error::Error for ExpiredSession {}
 pub fn hosts(session: &Session) -> Result<Vec<Host>> {
     if session.service() == Service::Phaze {
         {
-            return phaze_runtime(evoparseq_phaze::hosts(
-                &evoparseq_phaze::Session::from_token(session.token())?,
+            return phaze_runtime(evoparseq_host_interop::hosts(
+                &evoparseq_host_interop::Session::from_token(session.token())?,
             ))
             .map_err(|error| {
-                if error.is::<evoparseq_phaze::ExpiredSession>() {
+                if error.is::<evoparseq_host_interop::ExpiredSession>() {
                     ExpiredSession.into()
                 } else {
                     error

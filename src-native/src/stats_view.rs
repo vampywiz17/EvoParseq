@@ -32,7 +32,7 @@ impl Tab {
     fn section(label: &str) -> Self {
         match label {
             crate::app_style::forms::STAT_NETWORK
-            | crate::app_style::forms::STAT_BUD_DELIVERY
+            | crate::app_style::forms::STAT_LOWLAT_DELIVERY
             | crate::app_style::forms::STAT_SECURITY => Self::Network,
             crate::app_style::forms::STAT_VIDEO => Self::Video,
             crate::app_style::forms::STAT_AUDIO => Self::Audio,
@@ -102,7 +102,7 @@ impl<'a> Presentation<'a> {
         Self::with_missing_values(sample, values, usage, memory, timing, false)
     }
     /// A view can retain unavailable metrics without inventing values or
-    /// changing the established compact BUD presentation on other surfaces.
+    /// changing the established compact LOWLAT presentation on other surfaces.
     pub fn with_missing_values(
         sample: &'a Sample,
         values: &Values,
@@ -123,8 +123,8 @@ impl<'a> Presentation<'a> {
             ("Incoming traffic", number(values.incoming, "Mbps")),
             ("Outgoing traffic", number(values.outgoing, "Mbps")),
         ];
-        #[cfg(feature = "bud")]
-        let mut cards: Vec<_> = if sample.bud.is_some() && !keep_missing {
+        #[cfg(feature = "lowlat")]
+        let mut cards: Vec<_> = if sample.lowlat.is_some() && !keep_missing {
             cards
                 .into_iter()
                 .filter(|(_, value)| value != "—")
@@ -132,9 +132,9 @@ impl<'a> Presentation<'a> {
         } else {
             cards.into()
         };
-        #[cfg(not(feature = "bud"))]
+        #[cfg(not(feature = "lowlat"))]
         let mut cards: Vec<_> = cards.into();
-        // Keep the existing policy: BUD hides unavailable cards, then stale
+        // Keep the existing policy: LOWLAT hides unavailable cards, then stale
         // telemetry replaces values in the remaining cards with an em dash.
         if stale {
             for (_, value) in &mut cards {
@@ -167,13 +167,13 @@ impl<'a> Presentation<'a> {
             }
         }
         rows.extend(host_timing_rows(timing));
-        #[cfg(feature = "bud")]
-        let footer = if sample.bud.is_some() {
-            "Traffic counts UDP payload bytes or TURN stream plaintext accepted for send or received, including BUD/crypto/TURN control and retransmissions. Stream framing padding is included; TLS, IP and TCP/UDP headers and account HTTPS/WSS traffic are excluded. RTT is the native transport estimate. Host encode time keeps the last available report. Late fragments indicate reordering or retransmission, not proven packet loss. NACKs request missing fragments. Compressed backlog is before decoding; no GPU timings are inferred."
+        #[cfg(feature = "lowlat")]
+        let footer = if sample.lowlat.is_some() {
+            "Traffic counts UDP payload bytes or TURN stream plaintext accepted for send or received, including LOWLAT/crypto/TURN control and retransmissions. Stream framing padding is included; TLS, IP and TCP/UDP headers and account HTTPS/WSS traffic are excluded. RTT is the native transport estimate. Host encode time keeps the last available report. Late fragments indicate reordering or retransmission, not proven packet loss. NACKs request missing fragments. Compressed backlog is before decoding; no GPU timings are inferred."
         } else {
             WEBRTC_FOOTER
         };
-        #[cfg(not(feature = "bud"))]
+        #[cfg(not(feature = "lowlat"))]
         let footer = WEBRTC_FOOTER;
         let footer = if sample.phaze {
             "Traffic counts received/sent DTLS datagrams, including encrypted control and retransmissions. Initial handshake, TURN encapsulation and IP/TCP/UDP headers are excluded. Audio payload bitrate counts delivered AAC/PCM bytes before decoding, excluding audio headers, transport overhead and duplicate retransmissions. RTT is the latest local command/ACK round trip, including host ACK scheduling; retransmitted commands are excluded and samples expire after 10 seconds. Host encode time remains unknown. Local dropped frames are not network packet loss."
@@ -390,17 +390,20 @@ fn rows_with_missing(
     let recent_fresh = s.at.elapsed() <= crate::stats_recent::WINDOW;
     let mut rows = Vec::new();
     let mut row = |a: &str, b: String| rows.push((a.into(), b));
-    #[cfg(feature = "bud")]
-    if let Some(bud) = &s.bud {
+    #[cfg(feature = "lowlat")]
+    if let Some(lowlat) = &s.lowlat {
         row(crate::app_style::forms::STAT_NETWORK, String::new());
-        row(crate::app_style::forms::STAT_TRANSPORT, "BUD / UDP".into());
-        if bud.connected {
+        row(
+            crate::app_style::forms::STAT_TRANSPORT,
+            "LOWLAT / UDP".into(),
+        );
+        if lowlat.connected {
             row(
                 crate::app_style::forms::STAT_ROUTE,
-                if bud.relay { "TURN relay" } else { "Direct" }.into(),
+                if lowlat.relay { "TURN relay" } else { "Direct" }.into(),
             );
         }
-        if let Some(carrier) = bud.relay_transport.filter(|_| bud.relay) {
+        if let Some(carrier) = lowlat.relay_transport.filter(|_| lowlat.relay) {
             row(
                 crate::app_style::forms::STAT_TURN_TRANSPORT,
                 carrier.to_uppercase(),
@@ -408,18 +411,20 @@ fn rows_with_missing(
         }
         row(
             crate::app_style::forms::STAT_HOST_ENCODE_TIME,
-            bud.encode_ms
+            lowlat
+                .encode_ms
                 .map(|encode| number(Some(encode), "ms"))
                 .unwrap_or_else(|| "Waiting for host".into()),
         );
-        row(crate::app_style::forms::STAT_BUD_DELIVERY, String::new());
-        for (name, channel) in ["Control", "Video", "Audio"].iter().zip(&bud.channels) {
+        row(crate::app_style::forms::STAT_LOWLAT_DELIVERY, String::new());
+        for (name, channel) in ["Control", "Video", "Audio"].iter().zip(&lowlat.channels) {
             row(&format!("{name} late fragments"), channel.late.to_string());
             row(&format!("{name} NACK requests"), channel.nacks.to_string());
         }
         row(
             crate::app_style::forms::STAT_DUPLICATE_FRAGMENTS,
-            bud.channels
+            lowlat
+                .channels
                 .iter()
                 .map(|c| c.duplicates)
                 .sum::<u64>()
@@ -427,7 +432,8 @@ fn rows_with_missing(
         );
         row(
             crate::app_style::forms::STAT_OUTSIDE_RECEIVE_WINDOW,
-            bud.channels
+            lowlat
+                .channels
                 .iter()
                 .map(|c| c.window_drops)
                 .sum::<u64>()
@@ -437,25 +443,25 @@ fn rows_with_missing(
             crate::app_style::forms::STAT_COMPRESSED_VIDEO_BACKLOG,
             format!(
                 "{} messages / {} ms",
-                bud.video_backlog, bud.video_backlog_ms
+                lowlat.video_backlog, lowlat.video_backlog_ms
             ),
         );
         row(
             crate::app_style::forms::STAT_SKIPPED_ENCODED_PICTURES,
-            bud.skipped_video.to_string(),
+            lowlat.skipped_video.to_string(),
         );
         row(
             crate::app_style::forms::STAT_AUDIO_RECEIVE_POOL_DROPS,
-            bud.audio_pool_drops.to_string(),
+            lowlat.audio_pool_drops.to_string(),
         );
         row(
             crate::app_style::forms::STAT_INPUT_QUEUE_DROPS,
-            bud.input_drops.to_string(),
+            lowlat.input_drops.to_string(),
         );
     } else {
         webrtc_network_rows(s, &mut row);
     }
-    #[cfg(not(feature = "bud"))]
+    #[cfg(not(feature = "lowlat"))]
     webrtc_network_rows(s, &mut row);
     row(crate::app_style::forms::STAT_VIDEO, String::new());
     if s.phaze {
@@ -837,9 +843,9 @@ fn rows_with_missing(
             number(Some(ms), "ms"),
         );
     }
-    #[cfg(feature = "bud")]
-    if let Some(bud) = &s.bud {
-        if let Some(cipher) = bud.cipher {
+    #[cfg(feature = "lowlat")]
+    if let Some(lowlat) = &s.lowlat {
+        if let Some(cipher) = lowlat.cipher {
             row(crate::app_style::forms::STAT_SECURITY, String::new());
             row(
                 crate::app_style::forms::STAT_MEDIA_ENCRYPTION,
@@ -849,7 +855,7 @@ fn rows_with_missing(
     } else {
         webrtc_security_rows(s, &mut row);
     }
-    #[cfg(not(feature = "bud"))]
+    #[cfg(not(feature = "lowlat"))]
     webrtc_security_rows(s, &mut row);
     row(crate::app_style::forms::STAT_APP_PERFORMANCE, String::new());
     row(
@@ -860,8 +866,8 @@ fn rows_with_missing(
         crate::app_style::forms::STAT_GPU_BUSIEST_ENGINE,
         number(cpu.1, "%"),
     );
-    #[cfg(feature = "bud")]
-    if s.bud.is_some() && !keep_missing {
+    #[cfg(feature = "lowlat")]
+    if s.lowlat.is_some() && !keep_missing {
         rows.retain(|(_, value)| value != "Not reported" && value != "—");
     }
     rows
@@ -881,7 +887,7 @@ pub fn compact_metrics(
         .filter(|v| v.count > 0)
         .map(|v| v.latest_ms);
     let encode = sample
-        .and_then(|s| s.bud.as_ref())
+        .and_then(|s| s.lowlat.as_ref())
         .and_then(|b| b.encode_ms)
         .or_else(|| sample.and_then(|s| s.host_encode_ms));
     format!(
@@ -1097,14 +1103,14 @@ mod tests {
         assert_eq!(view.status, "Disconnected");
         assert_eq!(view.cards[0].1, "2.5 ms");
     }
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     #[test]
-    fn bud_cards_hide_missing_values_before_blanking_stale_telemetry() {
+    fn lowlat_cards_hide_missing_values_before_blanking_stale_telemetry() {
         let timing = crate::frame_timing::Shared::default().snapshot(0);
         let mut sample = Sample {
             state: "connected".into(),
             rtt_ms: Some(10.0),
-            bud: Some(evoparseq_bud::bud::Snapshot::default()),
+            lowlat: Some(evoparseq_lowlat::lowlat::Snapshot::default()),
             ..Default::default()
         };
         let values = Values {
@@ -1322,10 +1328,10 @@ mod tests {
                 && v == "Unavailable; using normal GPU rendering"));
     }
 
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     #[test]
-    fn bud_statistics_use_native_counters_and_hide_ice_dtls_and_unknowns() {
-        let mut native = evoparseq_bud::bud::Snapshot {
+    fn lowlat_statistics_use_native_counters_and_hide_ice_dtls_and_unknowns() {
+        let mut native = evoparseq_lowlat::lowlat::Snapshot {
             connected: true,
             relay: true,
             relay_transport: Some("tls"),
@@ -1335,7 +1341,7 @@ mod tests {
         native.channels[1].late = 7;
         native.channels[1].nacks = 2;
         let sample = Sample {
-            bud: Some(native),
+            lowlat: Some(native),
             dtls: "connected".into(),
             ..Default::default()
         };
@@ -1358,7 +1364,7 @@ mod tests {
             .unwrap();
         assert_eq!(rows[position].1, "Waiting for host");
         let mut updated = sample.clone();
-        updated.bud.as_mut().unwrap().encode_ms = Some(3.4);
+        updated.lowlat.as_mut().unwrap().encode_ms = Some(3.4);
         let refreshed = super::rows(&updated, &Values::default(), (None, None, None));
         assert_eq!(refreshed.len(), rows.len());
         assert_eq!(

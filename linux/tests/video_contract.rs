@@ -4,8 +4,8 @@ extern crate alloc;
 mod audio_layout;
 #[path = "../../src-native/src/audio_stream.rs"]
 mod audio_stream;
-#[path = "../../src-native/src/bud_ingress.rs"]
-mod bud_ingress;
+#[path = "../../src-native/src/lowlat_ingress.rs"]
+mod lowlat_ingress;
 #[path = "../src/display_routes.rs"]
 mod display_routes;
 #[path = "../../src-native/src/display_stream.rs"]
@@ -444,7 +444,7 @@ fn shared_byte_limit_still_bounds_memory_and_consumption_releases_it() {
 }
 
 #[test]
-fn bud_encoder_rebuild_retires_old_references_and_resumes_with_parameters() {
+fn lowlat_encoder_rebuild_retires_old_references_and_resumes_with_parameters() {
     let playback = playback::Playback::new(eframe::egui::Context::default());
     let fixture = include_bytes!("data/h264-40-frames.bin");
     let size = u32::from_le_bytes(fixture[..4].try_into().unwrap()) as usize;

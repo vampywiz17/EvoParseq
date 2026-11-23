@@ -9,10 +9,10 @@ Windows and Android TV feature availability differs; see the [root README](../RE
 | --- | --- |
 | Desktop | Wayland, egui with a Vulkan renderer; shared Windows application layout and native window decorations |
 | Account | Sign-in, 2FA, computer discovery, manual peer ID and encrypted remembered sessions |
-| Transport | WebRTC and explicitly selected BUD; direct/STUN, custom TURN UDP/TLS/TCP, Cloudflare TURN, direct-only and Force TURN; no silent transport fallback |
+| Transport | WebRTC and explicitly selected lowlat; direct/STUN, custom TURN UDP/TLS/TCP, Cloudflare TURN, direct-only and Force TURN; no silent transport fallback |
 | Video | Vulkan Video; progressive H.264/HEVC Main 8-bit or HEVC Main10, 4:2:0, without frame reordering |
-| Audio | Stereo WebRTC Opus; BUD Opus/raw PCM, stereo or verified default-output 5.1/7.1; PipeWire mute/volume and automatic output reopening |
-| Input | Normal Parsec or opt-in BUD USB HID mouse/keyboard; shared controller lifecycle and rumble; focused text clipboard |
+| Audio | Stereo WebRTC Opus; lowlat Opus/raw PCM, stereo or verified default-output 5.1/7.1; PipeWire mute/volume and automatic output reopening |
+| Input | Normal Parsec or opt-in lowlat USB HID mouse/keyboard; shared controller lifecycle and rumble; focused text clipboard |
 | Session controls | Host display selection, up to three simultaneous displays, per-display resolution, bandwidth, FPS, frame pacing, orientation, immersive mouse/keyboard, fullscreen and Disconnect |
 | Diagnostics | Live overlay, native Connection stats window, shared Rust statistics and host-timing models |
 | Distribution | Flatpak, Freedesktop Platform/SDK 25.08 and matching graphics driver extensions |
@@ -41,7 +41,7 @@ flatpak run io.github.vampywiz17.EvoParseq
 ```
 
 Sign in with the host owner's account, enter a current 2FA code when needed,
-select a computer and connect. Settings > Network selects WebRTC or BUD;
+select a computer and connect. Settings > Network selects WebRTC or lowlat;
 **Save settings** persists that choice for the next connection. The old
 standalone connection/audio test buttons have been removed.
 
@@ -98,7 +98,7 @@ or persistent pointer lock after button-up.
 
 Physical key events preserve ISO/numpad keys and left/right modifiers. The
 host keyboard layout and IME handle them; local IME/text payloads are not sent.
-System/compositor shortcuts stay local. Focused text clipboard synchronization and opt-in BUD HID reuse the shared Rust
+System/compositor shortcuts stay local. Focused text clipboard synchronization and opt-in lowlat HID reuse the shared Rust
 policy. Controller access uses Flatpak's scoped input permission; no broad device
 access is requested.
 
@@ -122,7 +122,7 @@ support.
 Preview **0.1.13** fixes settings/display replies containing the stock host's
 terminal NUL byte. It matches the Windows adapter and prevents valid replies
 from leaving the controls at **Waiting for host**. Framed-response tests cover
-BUD and WebRTC, with/without a terminator and malformed replies.
+lowlat and WebRTC, with/without a terminator and malformed replies.
 
 Connection stats uses the shared Sample/Rates/Presentation models. Its four
 Overview cards are arranged **two per row**. Available measurements include
@@ -148,7 +148,7 @@ available logical CPUs. Audio queue latency excludes unknown device/graph delay.
 ## Video and audio paths
 
 Account, protocol, session preferences, settings, input and diagnostics use the
-existing Rust core. BUD uses the shared Windows/Linux/Android media ingress,
+existing Rust core. lowlat uses the shared Windows/Linux/Android media ingress,
 including video-first bounded batches, borrowed payload parsing, encoder
 changes and keyframe gating. Linux adapters supply native output operations.
 WebRTC retains the shared host-certificate compatibility policy, SDP fingerprint
@@ -240,7 +240,7 @@ capacity and sampleable NV12 output with a supported DPB layout.
 The host may still choose H.264; Connection stats reports the received codec.
 HEVC 10-bit is available after Main10/P010 checks; dormant 4:4:4 preferences stay inactive.
 
-WebRTC/BUD negotiation reuses the common control flags and inspector. Encoded
+WebRTC/lowlat negotiation reuses the common control flags and inspector. Encoded
 queue entries carry the already identified codec into the decoder without a
 second per-picture framing scan. The pinned shared HEVC parser owns picture
 parsing, reference lists and DPB lifecycle. The Vulkan adapter only translates
@@ -266,19 +266,19 @@ and [video coding](https://docs.vulkan.org/spec/latest/chapters/videocoding.html
 ## Network settings (0.1.15)
 
 Settings → Network uses the Windows form and shared Rust validation, URL parsing,
-credential generation/cache and route policy for both WebRTC and BUD. Add one
+credential generation/cache and route policy for both WebRTC and lowlat. Add one
 STUN or TURN URL per line, or select Cloudflare TURN and supply the key ID/token.
 Blank password/token edits keep the saved secret; Forget removes it. Credentials
 are protected with the Linux Secret portal; saving can prompt your desktop
 keyring and never blocks video rendering. Temporary Cloudflare credentials are
 cached in memory only when enabled. Changes apply to the next connection.
 
-Automatic BUD routing first tries direct UDP, then the configured TURN carriers
+Automatic lowlat routing first tries direct UDP, then the configured TURN carriers
 in the Windows order (UDP, TLS, TCP). Each retry has fresh session credentials
 and a fresh signaling attempt ID. Direct-only never provisions TURN; Force TURN
 never falls back to direct. Actual route reporting still uses transport evidence.
 The existing TCP/TLS QoS switch enables Linux outgoing socket marking for
-WebRTC and BUD, on direct UDP and TURN UDP/TCP/TLS: DSCP AF21 (18) and
+WebRTC and lowlat, on direct UDP and TURN UDP/TCP/TLS: DSCP AF21 (18) and
 SO_PRIORITY 6. Off by default; reconnect after saving. Each option is optional:
 refusal does not stop or reroute the connection. No administrator rights,
 capabilities, traffic shaping, per-packet work or additional threads are added.
@@ -294,7 +294,7 @@ References: [RFC 8837](https://www.rfc-editor.org/rfc/rfc8837.html),
 No new media worker, image copy, readback or render pass is introduced.
 
 The offline network fixtures cover protected-secret persistence, failed edits,
-WebRTC relay policy, BUD carrier ordering and direct-only credential isolation.
+WebRTC relay policy, lowlat carrier ordering and direct-only credential isolation.
 Live relay interoperability still needs validation with your TURN provider and
 network; successful offline fixtures do not establish that every firewall route
 is reachable.
@@ -302,10 +302,10 @@ is reachable.
 ## Audio, input and presentation integration (0.1.16)
 
 - Settings → Audio reuses Windows' shared fields, validation and JSON schema.
-  WebRTC remains stereo Opus. BUD may advertise PCM only when explicitly enabled;
+  WebRTC remains stereo Opus. lowlat may advertise PCM only when explicitly enabled;
   the host must also enable RAW (`network_raw_audio=1`). PCM is not compression
   and uses more bandwidth. Actual received codec/channels remain visible in stats.
-- Match output layout probes the default PipeWire sink once before BUD negotiation.
+- Match output layout probes the default PipeWire sink once before lowlat negotiation.
   Only explicit supported 5.1/7.1 positions are advertised. Unknown/unsupported
   layouts use stereo. Channel order is declared explicitly to PipeWire; a stereo
   host fallback fills FL/FR and silence in the other stream channels.
@@ -316,7 +316,7 @@ is reachable.
 - Output/daemon disconnections reopen on the existing PipeWire worker, using the
   common Windows recovery backoff. Old queued PCM is retired. Mute/volume are
   restored after recovery; the video transport is not restarted for audio loss.
-- BUD USB HID reuses native framing, normalization and the shared host-primary
+- lowlat USB HID reuses native framing, normalization and the shared host-primary
   verification gate. The host needs the matching Parsec USB driver. Unavailable
   drivers/unknown primary output do not silently fall back to normal mouse input.
   Releases remain allowed; host display switching is disabled with HID mouse.
@@ -412,7 +412,7 @@ AMD uses the runtime's compatible Vulkan driver (normally Mesa RADV); NVIDIA
 requires a supported host driver and the Flatpak graphics extension matching
 that host driver. Do not bundle or force a different proprietary driver version.
 The Intel-specific `ANV_DEBUG` setting does not select a GPU or enable video on
-AMD/NVIDIA. Test H.264 first, then HEVC Main 8-bit, over BUD and WebRTC; include
+AMD/NVIDIA. Test H.264 first, then HEVC Main 8-bit, over lowlat and WebRTC; include
 window resizing, fullscreen, focus return and reconnect. AMD/NVIDIA physical
 playback has **not** been validated by this change.
 

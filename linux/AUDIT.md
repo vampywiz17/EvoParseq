@@ -52,7 +52,7 @@ not a claim of hardware validation on every platform.
 
 ## Media/platform boundaries
 
-- BUD media parsing, ingress, Opus/PCM buffering, lifecycle and policy remain in
+- lowlat media parsing, ingress, Opus/PCM buffering, lifecycle and policy remain in
   shared Rust. Vulkan Video/PipeWire, D3D11/WASAPI and MediaCodec/AAudio remain
   explicit platform backends. Normal/HID and controller wire policy is shared;
   native event/device/motor access stays platform-specific.
@@ -60,7 +60,7 @@ not a claim of hardware validation on every platform.
   output pass. No decoded-image copy/blit/readback, intermediate RGBA video image,
   additional render pass or cross-GPU transfer was introduced. Shader conversion
   still costs GPU work and is not the application's strict Zero copy mode.
-- No runtime Test WebRTC/BUD/audio preview path remains in the product GUI.
+- No runtime Test WebRTC/lowlat/audio preview path remains in the product GUI.
   Test-only convenience entry points are excluded from production builds.
 - No new background telemetry sampler, input polling worker or media timer was
   added. Update networking/storage/portal work runs only on explicit user action,

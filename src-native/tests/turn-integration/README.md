@@ -21,3 +21,5 @@ than treating a successful TURN allocation as proof of peer connectivity.
 
 These fixtures prove transport interoperability, not that every Parsec host,
 provider or corporate network will accept a session. Test a real host separately.
+
+See the [interoperability and test-data policy](../../../docs/INTEROPERABILITY.md).

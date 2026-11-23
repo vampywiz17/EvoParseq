@@ -55,9 +55,9 @@ try {
     Copy-Item src-native/vendor/webrtc-0.14.0/LOCAL-CHANGES.md (Join-Path $taskPackage 'WEBRTC-LOCAL-CHANGES.md')
     Copy-Item src-native/vendor/webrtc-ice-0.14.0/LOCAL-CHANGES.md (Join-Path $taskPackage 'ICE-LOCAL-CHANGES.md')
     Copy-Item src-native/vendor/turn-0.11.0/LOCAL-CHANGES.md (Join-Path $taskPackage 'TURN-LOCAL-CHANGES.md')
-    Copy-Item src-native/crates/bud/vendor/lowlat-client/LICENSE (Join-Path $taskPackage 'LOWLAT-LICENSE.txt')
-    Copy-Item src-native/crates/bud/vendor/lowlat-client/EVOPARSEQ.md (Join-Path $taskPackage 'BUD-LOCAL-CHANGES.md')
-    Copy-Item src-native/crates/bud/vendor/lowlat-net/EVOPARSEQ.md (Join-Path $taskPackage 'BUD-NET-LOCAL-CHANGES.md')
+    Copy-Item src-native/crates/lowlat/vendor/lowlat-client/LICENSE (Join-Path $taskPackage 'LOWLAT-LICENSE.txt')
+    Copy-Item src-native/crates/lowlat/vendor/lowlat-client/EVOPARSEQ.md (Join-Path $taskPackage 'LOWLAT-LOCAL-CHANGES.md')
+    Copy-Item src-native/crates/lowlat/vendor/lowlat-net/EVOPARSEQ.md (Join-Path $taskPackage 'LOWLAT-NET-LOCAL-CHANGES.md')
     Copy-Item src-native/crates/video/LICENSE-lowlat (Join-Path $taskPackage 'GPU-LOWLAT-LICENSE.txt')
     $taskCargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }
     $taskCell = Get-ChildItem -Path (Join-Path $taskCargoHome 'registry/src/*/self_cell-1.3.0') -Directory | Select-Object -First 1

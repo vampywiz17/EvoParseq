@@ -1,5 +1,5 @@
 //! lowlat examples/client/signaling.cc account URL, using our existing Rust TLS stack.
-//! The BUD adapter still owns offers, candidates, retries and media credentials.
+//! The LOWLAT adapter still owns offers, candidates, retries and media credentials.
 use super::account::Session;
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
@@ -224,7 +224,7 @@ impl Drop for Socket {
 mod tests {
     use super::*;
     #[test]
-    fn phaze_session_is_rejected_before_parsec_network_requests() {
+    fn interop_session_is_rejected_before_parsec_network_requests() {
         let session = Session::from_saved("phaze:offline-fixture").unwrap();
         let error = Socket::open(&session)
             .err()

@@ -212,7 +212,7 @@ pub const AI_UPSCALING_EXPERIMENTAL: SettingRow = SettingRow {
     kind: Kind::Choice,
     control_text: "",
 };
-pub const TRANSPORT:SettingRow=SettingRow{tab:0,group:0,label:"Transport",help:"WebRTC or BUD: direct UDP or TURN over UDP/TLS/TCP.\nUses the TURN URLs above. Reconnect after changing.",y:844,help_height:40,field_height:32,kind:Kind::Choice,control_text:""};
+pub const TRANSPORT:SettingRow=SettingRow{tab:0,group:0,label:"Transport",help:"WebRTC or LOWLAT: direct UDP or TURN over UDP/TLS/TCP.\nUses the TURN URLs above. Reconnect after changing.",y:844,help_height:40,field_height:32,kind:Kind::Choice,control_text:""};
 pub const VIDEO_PRESENTATION: SettingRow = SettingRow {
     tab: 1,
     group: 0,
@@ -248,16 +248,16 @@ pub const PLAYBACK_BUFFER: SettingRow = SettingRow {
 };
 pub const MINIMUM_BUFFER_MS:SettingRow=SettingRow{tab:2,group:0,label:"Minimum buffer (ms)",help:"PCM reserve before starting or refilling playback.\nSmaller values can increase audible gaps.",y:344,help_height:48,field_height:36,kind:Kind::Edit,control_text:""};
 pub const MAXIMUM_BUFFER_MS:SettingRow=SettingRow{tab:2,group:0,label:"Maximum buffer (ms)",help:"Local PCM plus audio queued on the Windows device.\n0 <= minimum <= maximum <= 500; maximum above zero.",y:438,help_height:48,field_height:36,kind:Kind::Edit,control_text:""};
-pub const AUDIO_FORMAT:SettingRow=SettingRow{tab:2,group:0,label:"Audio format",help:"RAW: BUD only; host must also enable RAW.\n48 kHz stereo PCM uses about 1.54 Mbps before overhead.\nThe actual codec is shown in Connection stats.",y:532,help_height:60,field_height:32,kind:Kind::Choice,control_text:""};
-pub const SPEAKER_LAYOUT:SettingRow=SettingRow{tab:2,group:0,label:"Speaker layout",help:"Experimental: match the Windows output's 5.1 or 7.1 layout.\nSynthetic tests only; no live host/client validation.\nBUD only; stereo fallback. Reconnect to apply.",y:630,help_height:68,field_height:32,kind:Kind::Choice,control_text:""};
+pub const AUDIO_FORMAT:SettingRow=SettingRow{tab:2,group:0,label:"Audio format",help:"RAW: LOWLAT only; host must also enable RAW.\n48 kHz stereo PCM uses about 1.54 Mbps before overhead.\nThe actual codec is shown in Connection stats.",y:532,help_height:60,field_height:32,kind:Kind::Choice,control_text:""};
+pub const SPEAKER_LAYOUT:SettingRow=SettingRow{tab:2,group:0,label:"Speaker layout",help:"Experimental: match the Windows output's 5.1 or 7.1 layout.\nSynthetic tests only; no live host/client validation.\nLOWLAT only; stereo fallback. Reconnect to apply.",y:630,help_height:68,field_height:32,kind:Kind::Choice,control_text:""};
 pub const INPUT_MODE: SettingRow = SettingRow {
     tab: 3,
     group: 0,
     label: "Input mode",
     help: if cfg!(target_os = "linux") {
-        "Standard input or experimental USB HID over BUD.\nMouse and keyboard can be selected independently."
+        "Standard input or experimental USB HID over LOWLAT.\nMouse and keyboard can be selected independently."
     } else {
-        "Standard input or USB HID over BUD.\nMouse and keyboard can be selected independently."
+        "Standard input or USB HID over LOWLAT.\nMouse and keyboard can be selected independently."
     },
     y: 242,
     help_height: 48,
@@ -310,7 +310,7 @@ pub const STAT_SECURITY: &str = "SECURITY";
 pub const STAT_DTLS_STATE: &str = "DTLS state";
 pub const STAT_ENCRYPTION: &str = "Encryption";
 pub const STAT_HOST_ENCODE_TIME: &str = "Host encode time";
-pub const STAT_BUD_DELIVERY: &str = "BUD DELIVERY";
+pub const STAT_LOWLAT_DELIVERY: &str = "LOWLAT DELIVERY";
 pub const STAT_DUPLICATE_FRAGMENTS: &str = "Duplicate fragments";
 pub const STAT_OUTSIDE_RECEIVE_WINDOW: &str = "Outside receive window";
 pub const STAT_COMPRESSED_VIDEO_BACKLOG: &str = "Compressed video backlog";

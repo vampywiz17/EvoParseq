@@ -28,3 +28,5 @@ Split Annex-B at access-unit delimiter NALs (type 35), retaining the delimiters
 and all parameter sets; prefix each unit with its byte length. The original
 `hevc-main10-first.bin` remains a rejection test: it declares frame reordering,
 which is still deliberately unsupported in the live low-latency path.
+
+See the [interoperability and test-data policy](../../../docs/INTEROPERABILITY.md).

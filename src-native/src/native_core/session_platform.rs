@@ -82,7 +82,7 @@ impl Runtime for Windows {
         &self,
         id: &str,
         peer: &str,
-        writer: crate::bud_attempt::SignalingWrite,
+        writer: crate::lowlat_attempt::SignalingWrite,
         manager: Arc<Manager>,
         policy: transport::Policy,
     ) -> Result<transport::Attempt> {
@@ -104,7 +104,7 @@ impl Runtime for Windows {
         self.window.events.take_batch(batch);
     }
     fn receive_pointer(&self, pointer: &mut Pointer, frame: &[u8]) -> Result<()> {
-        let parsed = evoparseq_bud::bud::cursor_message(frame)?;
+        let parsed = evoparseq_lowlat::lowlat::cursor_message(frame)?;
         let stream = usize::from(parsed.update.stream);
         self.window.displays.cursor_mode(
             stream,
@@ -160,7 +160,7 @@ mod tests {
         for fail in [false, true] {
             let path = std::env::temp_dir().join(format!(
                 "evoparseq-session-adapter-{}.json",
-                crate::bud_attempt::native_attempt_id().unwrap(),
+                crate::lowlat_attempt::native_attempt_id().unwrap(),
             ));
             assert!(!path.exists());
             let mut observed = None;

@@ -55,11 +55,11 @@ pub struct Window {
 
     pub stop: Arc<crate::lifecycle::StopSignal>,
     relative_mouse: AtomicBool,
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     hid_mouse_active: AtomicBool,
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     hid_keyboard_active: AtomicBool,
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     hid_input_acquired: AtomicBool,
     relative_pending: AtomicUsize,
     relative_requested: AtomicBool,
@@ -187,11 +187,11 @@ impl Window {
 
             stop: Default::default(),
             relative_mouse: AtomicBool::new(false),
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             hid_mouse_active: AtomicBool::new(false),
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             hid_keyboard_active: AtomicBool::new(false),
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             hid_input_acquired: AtomicBool::new(false),
             relative_pending: AtomicUsize::new(0),
             relative_requested: AtomicBool::new(false),
@@ -462,9 +462,9 @@ impl Window {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         *generation = generation.wrapping_add(1);
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         self.hid_mouse_active.store(false, Ordering::Release);
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         self.hid_keyboard_active.store(false, Ordering::Release);
         self.set_video_ready(false);
         *generation
@@ -485,9 +485,9 @@ impl Window {
             .unwrap_or_else(|e| e.into_inner());
         if *generation == expected {
             *generation = generation.wrapping_add(1);
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             self.hid_mouse_active.store(false, Ordering::Release);
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             self.hid_keyboard_active.store(false, Ordering::Release);
             self.set_video_ready(false);
         }
@@ -538,7 +538,7 @@ impl Window {
     }
 
     unsafe fn mouse_button(&self, down: bool, button: i32, x: i32, y: i32) {
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         self.sync_absolute_pointer(x, y, false);
         let bit = 1usize << button;
         if down {
@@ -555,7 +555,7 @@ impl Window {
         }
         self.push(Event::Button(down, button, x, y));
     }
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     unsafe fn sync_absolute_pointer(&self, x: i32, y: i32, screen: bool) {
         if self.hid_mouse_active.load(Ordering::Acquire)
             && !self.relative_mouse.load(Ordering::Acquire)
@@ -852,7 +852,7 @@ impl Window {
     }
     unsafe fn apply_input_capture(&self) {
         let allowed = self.input_allowed();
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         self.apply_hid_capture(allowed);
         self.keyboard_grab
             .lock()
@@ -908,14 +908,14 @@ impl Window {
         }
         false
     }
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     pub fn hid_input_generation(&self) -> u64 {
         *self
             .video_generation
             .lock()
             .unwrap_or_else(|e| e.into_inner())
     }
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     pub fn set_hid_input_active(&self, expected: u64, mouse: bool, keyboard: bool) {
         let generation = self
             .video_generation
@@ -943,7 +943,7 @@ impl Window {
             }
         }
     }
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     unsafe fn apply_hid_capture(&self, allowed: bool) {
         let acquired = allowed
             && (self.hid_mouse_active.load(Ordering::Acquire)
@@ -1361,7 +1361,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
             }
             WM_CLOSE => {
                 s.input_suspended.store(true, Ordering::Release);
-                #[cfg(feature = "bud")]
+                #[cfg(feature = "lowlat")]
                 s.apply_hid_capture(false);
                 s.keyboard_grab
                     .lock()
@@ -1426,7 +1426,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                 s.select_client_cursor();
                 return 1;
             }
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             m if m == crate::hid_input::REFRESH => {
                 s.apply_input_capture();
                 return 0;
@@ -1615,7 +1615,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                 s.input_suspended.store(true, Ordering::Release);
 
                 s.push(Event::HidInputRelease);
-                #[cfg(feature = "bud")]
+                #[cfg(feature = "lowlat")]
                 s.apply_hid_capture(false);
                 s.apply_input_capture();
             }
@@ -1630,7 +1630,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                     .clear();
                 PostMessageW(hwnd, crate::native_core::session_ui::VISIBILITY, 0, 0);
                 s.has_focus.store(false, Ordering::Release);
-                #[cfg(feature = "bud")]
+                #[cfg(feature = "lowlat")]
                 s.apply_hid_capture(false);
                 s.keyboard_grab
                     .lock()
@@ -1677,7 +1677,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
             // Remote typing follows physical key events and the host layout.
             WM_CHAR => return 0,
             WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
-                #[cfg(feature = "bud")]
+                #[cfg(feature = "lowlat")]
                 {
                     let (x, y) = crate::input_windows::position(lp);
                     s.sync_absolute_pointer(x, y, true);
@@ -1771,7 +1771,7 @@ mod tests {
         assert!(button_release < key_release && key_release < focus_loss);
         assert!(window.pressed_keys.lock().unwrap().is_empty());
     }
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     #[test]
     fn hid_input_desktop_edges_and_local_menu_release() {
         struct Restore {
@@ -2303,7 +2303,7 @@ mod tests {
                 wire[26..28].copy_from_slice(&540i16.to_be_bytes());
                 let flags: u16 = if rel { 0x100 } else { 0 } | if hidden { 0x200 } else { 0 };
                 wire[32..34].copy_from_slice(&flags.to_be_bytes());
-                let pointer = evoparseq_bud::bud::cursor_message(&wire).unwrap();
+                let pointer = evoparseq_lowlat::lowlat::cursor_message(&wire).unwrap();
                 window.set_host_cursor(
                     i32::from(pointer.update.x),
                     i32::from(pointer.update.y),
@@ -2363,12 +2363,12 @@ mod tests {
                 }
             }
             window.set_input_state(mode(false, false));
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             let hid_modes = [false, true];
-            #[cfg(not(feature = "bud"))]
+            #[cfg(not(feature = "lowlat"))]
             let hid_modes = [false];
             for hid in hid_modes {
-                #[cfg(feature = "bud")]
+                #[cfg(feature = "lowlat")]
                 window.hid_mouse_active.store(hid, Ordering::Release);
                 // This test intentionally checks real Win32 cursor restoration.
                 // Foreground ownership alone does not imply GetFocus()==HWND,
@@ -2418,7 +2418,7 @@ mod tests {
                     assert_eq!((actual.x, actual.y), (expected.x, expected.y));
                 }
             }
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             window.hid_mouse_active.store(false, Ordering::Release);
             window.set_host_cursor(960, 540, false, true);
             wait(relative);

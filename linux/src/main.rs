@@ -16,10 +16,10 @@ mod audio_pipewire;
 mod audio_recovery;
 #[path = "../../src-native/src/audio_stream.rs"]
 pub mod audio_stream;
-#[path = "../../src-native/src/bud_ingress.rs"]
-mod bud_ingress;
-#[path = "../../src-native/src/bud_routes.rs"]
-mod bud_routes;
+#[path = "../../src-native/src/lowlat_ingress.rs"]
+mod lowlat_ingress;
+#[path = "../../src-native/src/lowlat_routes.rs"]
+mod lowlat_routes;
 #[path = "../../src-native/src/codec_initialization.rs"]
 pub mod codec_initialization;
 mod connection;
@@ -95,11 +95,11 @@ mod native_loop;
 pub mod native_wire;
 #[cfg(test)]
 mod network_tests;
-#[path = "../../src-native/src/phaze_client.rs"]
-mod phaze_client;
-mod phaze_linux;
-#[path = "../../src-native/src/phaze_session.rs"]
-pub(crate) mod phaze_session;
+#[path = "../../src-native/src/interop_client.rs"]
+mod interop_client;
+mod interop_linux;
+#[path = "../../src-native/src/interop_session.rs"]
+pub(crate) mod interop_session;
 #[path = "../../src-native/src/native_core/picker.rs"]
 mod picker;
 mod playback;
@@ -648,8 +648,8 @@ fn main() -> anyhow::Result<()> {
                         tfa: Zeroizing::default(),
                         picker: Default::default(),
                         peer: saved.native_core.last_peer.clone(),
-                        transport: if saved.bud {
-                            connection::Mode::Bud
+                        transport: if saved.lowlat {
+                            connection::Mode::Lowlat
                         } else {
                             connection::Mode::WebRtc
                         },

@@ -78,7 +78,7 @@ impl Tab {
             Self::Network => crate::network_settings::NOTICE,
             Self::Video => "Video options are requests/preferences, not guaranteed results; compatibility fallback may apply.\nCheck Connection stats for the actual stream format, decoder and fallback.\nVideo changes apply to your next connection.",
             Self::Audio => "Audio changes apply on your next connection.",
-            Self::Input => "Enable BUD on the Network tab to use HID input.\nInput changes apply to your next connection.",
+            Self::Input => "Enable LOWLAT on the Network tab to use HID input.\nInput changes apply to your next connection.",
         }
     }
 }
@@ -100,7 +100,7 @@ pub use crate::connection_settings::RouteMode;
 pub use crate::connection_settings::VideoFormat;
 
 pub struct Availability {
-    pub bud: bool,
+    pub lowlat: bool,
     pub audio_limits: bool,
     pub ai_upscale: bool,
     pub chroma_444: bool,
@@ -261,12 +261,12 @@ impl Form {
         }
         let relay = !self.values.stun_only;
         Availability {
-            bud: !self.phaze && {
-                #[cfg(feature = "bud")]
+            lowlat: !self.phaze && {
+                #[cfg(feature = "lowlat")]
                 {
-                    self.values.bud
+                    self.values.lowlat
                 }
-                #[cfg(not(feature = "bud"))]
+                #[cfg(not(feature = "lowlat"))]
                 {
                     false
                 }
@@ -408,7 +408,7 @@ mod tests {
         let mut form = form();
         form.values.allow_raw_audio = true;
         form.values.experimental_surround_audio = true;
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         {
             form.values.hid_mouse = true;
             form.values.hid_keyboard = true;
@@ -428,7 +428,7 @@ mod tests {
                 assert_eq!(enabled.custom_turn, !stun_only && !cloudflare);
                 assert_eq!(enabled.cloudflare_turn, !stun_only && cloudflare);
                 assert!(!enabled.audio_limits);
-                assert!(!enabled.bud);
+                assert!(!enabled.lowlat);
             }
         }
         form.values.custom_audio_buffer = true;
@@ -438,10 +438,10 @@ mod tests {
         assert!(!form.values.force_relay);
         RouteMode::Automatic.apply(&mut form.values);
         assert!(!form.values.force_relay); // No implicit re-enable.
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         {
-            form.values.bud = true;
-            assert!(form.availability().bud);
+            form.values.lowlat = true;
+            assert!(form.availability().lowlat);
             assert!(form.values.hid_mouse);
             assert!(form.values.hid_keyboard);
         }
@@ -588,7 +588,7 @@ mod tests {
             mode.apply(&mut s);
             assert_eq!(VideoFormat::current(&s), mode);
         }
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         for mode in InputMode::ALL {
             let mut s = Settings::default();
             mode.apply(&mut s);
@@ -696,7 +696,7 @@ mod vsr_tests {
             if phaze {
                 assert_eq!(form.audio_format_labels(), ["AAC-LC", "Uncompressed PCM"]);
                 assert!(form.audio_format_help().contains("AAC-LC"));
-                assert!(!form.availability().bud);
+                assert!(!form.availability().lowlat);
                 assert!(!form.video_formats().contains(&VideoFormat::Hevc10));
             } else {
                 assert_eq!(
