@@ -495,7 +495,7 @@ impl Queue {
             return false;
         }
         if idr {
-            // A BUD rebuild already supplied the requested key. Keep the
+            // A LOWLAT rebuild already supplied the requested key. Keep the
             // existing WebRTC recovery/request policy (stream_generation=0).
             if self.stream_generation != 0 {
                 self.request_pending = false;

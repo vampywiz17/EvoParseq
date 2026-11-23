@@ -1,8 +1,8 @@
-//! Shared BUD ingress, extracted from the working Windows media path.
+//! Shared LOWLAT ingress, extracted from the working Windows media path.
 //! Borrows encoded payloads; native decoder/output APIs remain in adapters.
 use anyhow::{ensure, Result};
-use evoparseq_bud::{
-    bud::{MediaSource, Session},
+use evoparseq_lowlat::{
+    lowlat::{MediaSource, Session},
     media::{self, Rotation, Video},
 };
 
@@ -33,7 +33,7 @@ pub fn session(
         "INFO",
         "audio_capabilities_declared",
         serde_json::json!({
-            "transport":"BUD", "raw_pcm_allowed":raw, "channels":layout.channels, "channel_mask":layout.mask
+            "transport":"lowlat", "raw_pcm_allowed":raw, "channels":layout.channels, "channel_mask":layout.mask
         }),
     );
     Ok(session)
@@ -74,19 +74,23 @@ impl VideoState {
         self.inspector = Default::default();
         self.inspector.enable_hevc(self.hevc_available);
         target.encoder_rebuilt();
-        crate::event_log::record("INFO", "bud_video_encoder_rebuilt", serde_json::json!({}));
+        crate::event_log::record(
+            "INFO",
+            "lowlat_video_encoder_rebuilt",
+            serde_json::json!({}),
+        );
     }
 
     pub fn receive(&mut self, message: &[u8], target: &impl VideoTarget) -> Result<bool> {
         let parsed = media::video(message).inspect_err(|_| {
             crate::event_log::record(
                 "ERROR",
-                "bud_media_rejected",
+                "lowlat_media_rejected",
                 serde_json::json!({"stage":"video_framing_or_format"}),
             );
         })?;
         if matches!(&parsed, Video::Metadata(m) if m.chroma_444) && !self.chroma_444_available {
-            anyhow::bail!("BUD host sent unadvertised 4:4:4 video");
+            anyhow::bail!("LOWLAT host sent unadvertised 4:4:4 video");
         }
         let ten_bit = match &parsed {
             Video::Metadata(metadata) => metadata.ten_bit,
@@ -95,10 +99,10 @@ impl VideoState {
         if ten_bit && !self.ten_bit_available {
             crate::event_log::record(
                 "ERROR",
-                "bud_media_rejected",
+                "lowlat_media_rejected",
                 serde_json::json!({"stage":"main10_not_advertised"}),
             );
-            anyhow::bail!("BUD host sent Main 10 without an advertised GPU decoder");
+            anyhow::bail!("LOWLAT host sent Main 10 without an advertised GPU decoder");
         }
         // Validate depth before handing the original payload to the native decoder.
         match parsed {
@@ -126,7 +130,7 @@ impl VideoState {
                 };
                 ensure!(
                     info.codec != crate::video_stream::Codec::Hevc || self.hevc_available,
-                    "BUD host sent HEVC without an available native decoder"
+                    "LOWLAT host sent HEVC without an available native decoder"
                 );
                 if self.waiting_for_keyframe && !info.idr && !info.parameters {
                     return Ok(false);

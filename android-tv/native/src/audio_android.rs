@@ -123,7 +123,7 @@ pub struct Snapshot {
     device_id: i32,
 }
 impl Output {
-    pub fn prepare(settings: Settings, inventory: &Inventory, bud: bool) -> Self {
+    pub fn prepare(settings: Settings, inventory: &Inventory, lowlat: bool) -> Self {
         let mut output = Self {
             stream: ptr::null_mut(),
             callback: Some(Box::new(Callback {
@@ -144,7 +144,7 @@ impl Output {
             output.failed(code);
             return output;
         }
-        if bud && settings.surround && masks().is_some() {
+        if lowlat && settings.surround && masks().is_some() {
             let device = unsafe { ndk::AAudioStream_getDeviceId(output.stream) };
             let layout = inventory.layout(device);
             if layout != Layout::STEREO && output.close() {

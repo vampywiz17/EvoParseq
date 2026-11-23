@@ -561,9 +561,9 @@ impl Pipeline {
         }
         accepted
     }
-    /// Called only at an explicit BUD encoder-generation boundary. The worker
+    /// Called only at an explicit LOWLAT encoder-generation boundary. The worker
     /// owns GPU teardown; the network consumer never touches a decoded frame.
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     pub fn encoder_rebuilt(&self) {
         self.shared
             .0

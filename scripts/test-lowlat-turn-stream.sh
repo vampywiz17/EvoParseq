@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Isolated Linux coturn fixture. Only disposable keys/credentials and a local
-# BUD peer; no account, captured media, host settings or production TURN used.
+# LOWLAT peer; no account, captured media, host settings or production TURN used.
 set -euo pipefail
 task_tmp=$(mktemp -d)
 task_pid=
@@ -61,7 +61,7 @@ export LOWLAT_TEST_TURN_TLS_PORT=53490
 export LOWLAT_TEST_TURN_CA="$task_tmp/ca.der"
 export LOWLAT_TEST_BLOCK_CLIENT_UDP=1
 export LOWLAT_TEST_TURN_SOAK_SECONDS=65
-if ! cargo test --locked --manifest-path src-native/crates/bud/Cargo.toml --target x86_64-unknown-linux-gnu --test turn_stream_bud -- --ignored --nocapture; then
+if ! cargo test --locked --manifest-path src-native/crates/lowlat/Cargo.toml --target x86_64-unknown-linux-gnu --test turn_stream_lowlat -- --ignored --nocapture; then
     tail -n 60 "$task_tmp/stdout.log" "$task_tmp/turn.log" 2>/dev/null || true
     exit 1
 fi

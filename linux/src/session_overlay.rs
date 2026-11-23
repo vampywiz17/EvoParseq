@@ -190,7 +190,7 @@ impl Desktop {
                                         ui.add_enabled_ui(!phaze && !self.metrics.hid_mouse && self.metrics.displays.len()>1,|ui| {
                                             ui.menu_button("Add screen",|ui| {
                                                 if let Some(telemetry)=&self.telemetry {
-                                                    let hid_keyboard=self.transport==crate::connection::Mode::Bud&&self.settings.view().0.hid_keyboard_enabled();
+                                                    let hid_keyboard=self.transport==crate::connection::Mode::Lowlat&&self.settings.view().0.hid_keyboard_enabled();
                                                     for (stream,output) in self.metrics.displays.iter().enumerate().take(crate::display_stream::STREAMS).skip(1) {
                                                         let available=!hid_keyboard&&telemetry.displays.get(stream).is_none()&&self.metrics.current_output.as_deref()!=Some(output.id.as_str());
                                                         if ui.add_enabled(available,egui::Button::new(&output.name)).clicked() {
@@ -271,7 +271,7 @@ impl Desktop {
                                                     if let Some(mut video)=self.badge.draft.clone(){
                                                         video.fullscreen=ctx.input(|i|i.viewport().fullscreen.unwrap_or(false));
                                                         if let Some(telemetry)=&self.telemetry {let size=ctx.input(|i|i.viewport().inner_rect.map(|r|r.size())).unwrap_or_default();let scale=ctx.pixels_per_point();*telemetry.client_size.lock().unwrap_or_else(|e|e.into_inner())=((size.x*scale).round().max(1.)as u32,((size.y-24.).max(1.)*scale).round()as u32);}
-                                                        if phaze { video = crate::phaze_session::supported_video(video); }
+                                                        if phaze { video = crate::interop_session::supported_video(video); }
                                                         playback.push_session(crate::session_controls::Command::Apply(video));self.metrics.pending=true;
                                                     }
                                                 }

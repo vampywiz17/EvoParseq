@@ -1,5 +1,5 @@
 //! Hermetic coturn interoperability: TURN carrier on one side, authenticated
-//! BUD/UDP on the other. No Parsec accounts, desktop or GPU/decoder required.
+//! LOWLAT/UDP on the other. No Parsec accounts, desktop or GPU/decoder required.
 
 use lowlat_core::{
     channel::{RecvRing, SlotMeta},
@@ -124,7 +124,7 @@ impl Arena {
 
 #[test]
 #[ignore = "requires scripts/test-turn-stream.sh isolated coturn fixture"]
-fn turn_stream_bud_coturn_udp_tcp_tls_bidirectional() {
+fn turn_stream_lowlat_coturn_udp_tcp_tls_bidirectional() {
     let server: SocketAddr = std::env::var("LOWLAT_TEST_TURN_ADDR")
         .unwrap()
         .parse()
@@ -201,11 +201,11 @@ fn turn_stream_bud_coturn_udp_tcp_tls_bidirectional() {
         client
             .endpoint()
             .session()
-            .send_message(CHANNEL, b"left:", b"authenticated BUD")
+            .send_message(CHANNEL, b"left:", b"authenticated LOWLAT")
             .unwrap();
         host.endpoint()
             .session()
-            .send_message(CHANNEL, b"right:", b"authenticated BUD")
+            .send_message(CHANNEL, b"right:", b"authenticated LOWLAT")
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut offered = false;
@@ -246,12 +246,12 @@ fn turn_stream_bud_coturn_udp_tcp_tls_bidirectional() {
         );
         assert_eq!(
             left.as_deref(),
-            Some(b"right:authenticated BUD".as_slice()),
+            Some(b"right:authenticated LOWLAT".as_slice()),
             "carrier {mode}"
         );
         assert_eq!(
             right.as_deref(),
-            Some(b"left:authenticated BUD".as_slice()),
+            Some(b"left:authenticated LOWLAT".as_slice()),
             "carrier {mode}"
         );
         assert_eq!(client.endpoint().path(), Some(host_address));

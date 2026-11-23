@@ -7,7 +7,7 @@ use std::{
 
 pub(crate) const MOUSE_ID: u32 = 1;
 pub(crate) const KEYBOARD_ID: u32 = 2;
-// Synthetic identity, following the existing EvoParseq BUD HID convention.
+// Synthetic identity, following the existing EvoParseq LOWLAT HID convention.
 pub(crate) const VID: u16 = 0xffff;
 const MAX_REPORTS: usize = 128;
 const MAX_READS: usize = 64;

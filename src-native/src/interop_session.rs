@@ -5,7 +5,7 @@ use crate::{
     viewport::Viewport,
 };
 use anyhow::{ensure, Result};
-use evoparseq_phaze::{ClientControl, Input, PeerState, VideoConfig};
+use evoparseq_host_interop::{ClientControl, Input, PeerState, VideoConfig};
 
 pub fn supported_video(mut video: Video) -> Video {
     video.resolution = Resolution::Host;
@@ -200,15 +200,15 @@ impl PhazePeers {
 
 /// Try configured relay servers in order. Once allocated, the Phaze session
 /// uses that relay exclusively. The platform supplies its optional TLS roots.
-pub async fn connect_relay<S: evoparseq_phaze::Sink>(
-    remote: &evoparseq_phaze::Session,
+pub async fn connect_relay<S: evoparseq_host_interop::Sink>(
+    remote: &evoparseq_host_interop::Session,
     peer: &str,
     sink: &mut S,
     servers: Vec<webrtc::ice_transport::ice_server::RTCIceServer>,
     native_roots: impl Fn() -> Vec<Vec<u8>>,
     set_carrier: impl Fn(&mut S, &'static str, bool),
 ) -> Result<()> {
-    use evoparseq_phaze::turn::{Carrier, Relay};
+    use evoparseq_host_interop::turn::{Carrier, Relay};
     use webrtc::ice::url::{ProtoType, SchemeType, Url};
     for server in servers {
         for raw in server.urls {
@@ -240,14 +240,14 @@ pub async fn connect_relay<S: evoparseq_phaze::Sink>(
                 Err(error) => {
                     crate::event_log::record(
                         "WARN",
-                        "phaze_turn_allocation_failed",
+                        "interop_turn_allocation_failed",
                         serde_json::json!({"carrier":name,"reason":error.to_string()}),
                     );
                     continue;
                 }
             };
             set_carrier(sink, name, true);
-            let result = evoparseq_phaze::connect_via(remote, peer, sink, &relay).await;
+            let result = evoparseq_host_interop::connect_via(remote, peer, sink, &relay).await;
             relay.close().await;
             return result;
         }

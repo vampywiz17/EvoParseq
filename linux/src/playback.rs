@@ -597,7 +597,7 @@ impl Playback {
     }
 }
 
-impl crate::bud_ingress::VideoTarget for Playback {
+impl crate::lowlat_ingress::VideoTarget for Playback {
     fn encoder_rebuilt(&self) {
         self.encoder_rebuilt();
     }

@@ -1,20 +1,20 @@
-//! Opt-in BUD media handoff to the existing native decoders.
+//! Opt-in LOWLAT media handoff to the existing native decoders.
 //! No alternate decoder, renderer, decoded-frame export or GPU interop path.
 use anyhow::Result;
-use evoparseq_bud::bud::{MediaSource, Session};
+use evoparseq_lowlat::lowlat::{MediaSource, Session};
 use std::sync::Arc;
 
-pub(crate) use crate::bud_ingress::session;
+pub(crate) use crate::lowlat_ingress::session;
 pub struct Media {
     displays: std::sync::Weak<crate::native_core::multi_display::Displays>,
     video: crate::video_windows::Pipeline,
     audio: Arc<crate::audio_stream::Pipeline>,
     audio_sender: crate::audio_stream::Sender,
-    ingress: crate::bud_ingress::VideoState,
+    ingress: crate::lowlat_ingress::VideoState,
 }
 
 impl Media {
-    /// Call only after an explicit BUD selection. Account/UI wiring is separate;
+    /// Call only after an explicit LOWLAT selection. Account/UI wiring is separate;
     /// this does not start any connection or change a WebRTC session.
     pub fn start_verified(
         window: Arc<crate::window::Window>,
@@ -57,17 +57,25 @@ impl Media {
                 video,
                 audio,
                 audio_sender,
-                ingress: crate::bud_ingress::VideoState::new(hevc_available, ten_bit, chroma_444),
+                ingress: crate::lowlat_ingress::VideoState::new(
+                    hevc_available,
+                    ten_bit,
+                    chroma_444,
+                ),
             },
             session,
         ))
     }
 
-    pub fn pump(&mut self, source: &mut MediaSource) -> Result<crate::bud_ingress::Pumped> {
-        let counts =
-            crate::bud_ingress::pump(source, &mut self.ingress, &self.video, &self.audio_sender)?;
+    pub fn pump(&mut self, source: &mut MediaSource) -> Result<crate::lowlat_ingress::Pumped> {
+        let counts = crate::lowlat_ingress::pump(
+            source,
+            &mut self.ingress,
+            &self.video,
+            &self.audio_sender,
+        )?;
         if let Some(displays) = self.displays.upgrade() {
-            displays.pump_bud(source)?;
+            displays.pump_lowlat(source)?;
         }
         Ok(counts)
     }
@@ -100,7 +108,7 @@ impl Media {
     }
 }
 
-impl crate::bud_ingress::VideoTarget for crate::video_windows::Pipeline {
+impl crate::lowlat_ingress::VideoTarget for crate::video_windows::Pipeline {
     fn encoder_rebuilt(&self) {
         self.encoder_rebuilt();
     }

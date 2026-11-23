@@ -7,8 +7,9 @@ mod display_windows;
 pub(crate) mod host_displays;
 mod host_video;
 mod input;
+#[path = "phaze.rs"]
+mod interop;
 pub(crate) mod multi_display;
-mod phaze;
 mod picker;
 mod pointer;
 pub(crate) mod profile;
@@ -40,7 +41,7 @@ fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args == ["--version"] {
         println!(
-            "EvoParseq {} / native Rust core (BUD/WebRTC)",
+            "EvoParseq {} / native Rust core (LOWLAT/WebRTC)",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -72,7 +73,7 @@ fn run() -> Result<()> {
     crate::event_log::record(
         "INFO",
         "native_core_started",
-        serde_json::json!({"transport":if settings.view().0.bud {"BUD"} else {"WebRTC"}}),
+        serde_json::json!({"transport":if settings.view().0.lowlat {"lowlat"} else {"WebRTC"}}),
     );
     let mut session = None;
     loop {
@@ -82,11 +83,11 @@ fn run() -> Result<()> {
         let preferences = settings.view().0;
         let requested_main10 = preferences.prefer_hevc && preferences.experimental_ten_bit;
         let policy = transport::Policy {
-            bud: preferences.bud,
+            lowlat: preferences.lowlat,
         };
         let result = (|| {
             if selection.session.service() == account::Service::Phaze {
-                return phaze::run(&selection.session, &selection.peer, settings.clone());
+                return interop::run(&selection.session, &selection.peer, settings.clone());
             }
             let socket = signaling::Socket::open(&selection.session)?;
             let platform = session_platform::Windows::create(settings.clone())?;

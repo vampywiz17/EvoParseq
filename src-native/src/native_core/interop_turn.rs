@@ -1,5 +1,5 @@
 //! Isolated proof of the production Rust TURN carrier; no user credentials.
-use evoparseq_phaze::{
+use evoparseq_host_interop::{
     turn::{Carrier, Relay},
     Datagram,
 };
@@ -153,7 +153,8 @@ async fn roundtrip(relay: &Relay) -> anyhow::Result<()> {
     Ok(())
 }
 #[tokio::test]
-async fn production_phaze_turn_udp_tcp_tls_are_opaque_and_tls_is_verified() -> anyhow::Result<()> {
+async fn production_interop_turn_udp_tcp_tls_are_opaque_and_tls_is_verified() -> anyhow::Result<()>
+{
     tokio::time::timeout(Duration::from_secs(30), async {
         let (server, address) = server().await?;
         let udp = Relay::allocate(
@@ -200,7 +201,7 @@ async fn production_phaze_turn_udp_tcp_tls_are_opaque_and_tls_is_verified() -> a
     Ok(())
 }
 #[tokio::test]
-async fn production_phaze_turn_renews_allocation_and_peer_permissions() -> anyhow::Result<()> {
+async fn production_interop_turn_renews_allocation_and_peer_permissions() -> anyhow::Result<()> {
     tokio::time::timeout(Duration::from_secs(150),async {
         let(server,target)=server().await?;
         let listener=UdpSocket::bind("127.0.0.1:0").await?;let address=listener.local_addr()?;

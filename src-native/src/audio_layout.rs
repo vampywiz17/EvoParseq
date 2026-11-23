@@ -1,4 +1,4 @@
-//! Validated Windows speaker layouts used by the native BUD audio bridge.
+//! Validated Windows speaker layouts used by the native LOWLAT audio bridge.
 use anyhow::{bail, Result};
 use serde::Serialize;
 

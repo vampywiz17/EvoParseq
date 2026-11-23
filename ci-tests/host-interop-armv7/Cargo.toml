@@ -1,5 +1,5 @@
 [package]
-name = "evoparseq-phaze-armv7"
+name = "evoparseq-host-interop-armv7"
 version = "0.1.0"
 edition = "2021"
 publish = false

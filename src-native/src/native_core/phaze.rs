@@ -1,12 +1,12 @@
 //! Windows adapter only: independent Rust protocol -> existing media and input backends.
 use super::account::{phaze_runtime as block_on, Session};
 #[cfg(test)]
-#[path = "phaze_turn.rs"]
+#[path = "interop_turn.rs"]
 mod turn_research;
 use crate::platform::Desktop as _;
 use crate::{
     connection_settings::Manager,
-    phaze_session::{self, normalized, Stream},
+    interop_session::{self, normalized, Stream},
     window::{Event, Window},
 };
 use anyhow::Result;
@@ -26,21 +26,21 @@ struct View {
     audio_bytes: u64,
     raw_audio: bool,
     hid_devices: (bool, bool),
-    audio_codec: Option<evoparseq_phaze::AudioCodec>,
+    audio_codec: Option<evoparseq_host_interop::AudioCodec>,
     authenticated: bool,
     last_clipboard: String,
     pending_clipboard: Option<crate::clipboard_sync::Pending>,
     video: crate::video_windows::Pipeline,
     generation: u64,
     audio: Option<Arc<crate::audio_windows::Playback>>,
-    keys: evoparseq_phaze::Keyboard,
+    keys: evoparseq_host_interop::Keyboard,
     events: VecDeque<Event>,
     input_logged: [Option<&'static str>; 4],
     needs_initial_position: bool,
     interval_motion: u32,
     interval_buttons: [u32; 2],
     interval_keys: [u32; 2],
-    last_input_delivery: evoparseq_phaze::InputDelivery,
+    last_input_delivery: evoparseq_host_interop::InputDelivery,
     interval_pictures: u32,
     route: &'static str,
     carrier: &'static str,
@@ -111,7 +111,7 @@ impl View {
         );
     }
 }
-impl evoparseq_phaze::Sink for View {
+impl evoparseq_host_interop::Sink for View {
     fn usb_hid_devices(&self) -> (bool, bool) {
         self.hid_devices
     }
@@ -128,7 +128,7 @@ impl evoparseq_phaze::Sink for View {
         );
     }
 
-    fn peer_state(&mut self, local_id: u32, state: evoparseq_phaze::PeerState) {
+    fn peer_state(&mut self, local_id: u32, state: evoparseq_host_interop::PeerState) {
         let mut peers = self
             .window
             .session
@@ -172,9 +172,9 @@ impl evoparseq_phaze::Sink for View {
             |value| desktop.write_text(value),
         );
     }
-    fn control_sent(&mut self, control: &evoparseq_phaze::ClientControl, sent: bool) {
+    fn control_sent(&mut self, control: &evoparseq_host_interop::ClientControl, sent: bool) {
         use super::session_model::{Notification, Status, View as _};
-        use evoparseq_phaze::ClientControl;
+        use evoparseq_host_interop::ClientControl;
         match control {
             ClientControl::Clipboard(text) => {
                 if sent {
@@ -196,10 +196,10 @@ impl evoparseq_phaze::Sink for View {
     fn raw_audio(&self) -> bool {
         self.raw_audio
     }
-    fn video_config(&self) -> evoparseq_phaze::VideoConfig {
+    fn video_config(&self) -> evoparseq_host_interop::VideoConfig {
         self.stream.config()
     }
-    fn stream_request(&mut self) -> Option<(u32, evoparseq_phaze::VideoConfig)> {
+    fn stream_request(&mut self) -> Option<(u32, evoparseq_host_interop::VideoConfig)> {
         self.stream.take_request()
     }
     fn take_video_recovery(&mut self) -> bool {
@@ -228,7 +228,7 @@ impl evoparseq_phaze::Sink for View {
     fn rtt(&mut self, elapsed: Option<Duration>) {
         self.rtt = elapsed;
     }
-    fn input_delivery(&mut self, delivery: evoparseq_phaze::InputDelivery) {
+    fn input_delivery(&mut self, delivery: evoparseq_host_interop::InputDelivery) {
         if !crate::event_log::enabled() || delivery == self.last_input_delivery {
             return;
         }
@@ -246,7 +246,7 @@ impl evoparseq_phaze::Sink for View {
         );
     }
     fn bandwidth_feedback_started(&mut self, lower_rate: f64, upper_rate: f64) {
-        crate::phaze_session::log_bandwidth_feedback(lower_rate, upper_rate);
+        crate::interop_session::log_bandwidth_feedback(lower_rate, upper_rate);
     }
     fn cursor_mode(&mut self, relative: bool, visible: bool) {
         self.window.set_host_relative_mouse(relative);
@@ -258,9 +258,9 @@ impl evoparseq_phaze::Sink for View {
             serde_json::json!({"visible": visible, "relative": relative}),
         );
     }
-    fn cursor_image(&mut self, image: evoparseq_phaze::CursorImage<'_>) {
+    fn cursor_image(&mut self, image: evoparseq_host_interop::CursorImage<'_>) {
         use crate::cursor::{Frame, Request};
-        use evoparseq_phaze::CursorFormat;
+        use evoparseq_host_interop::CursorFormat;
         let (width, height) = image.size;
         let (x, y) = image.hotspot;
         let frame = match image.format {
@@ -281,7 +281,7 @@ impl evoparseq_phaze::Sink for View {
             ),
         }
     }
-    fn stream_request_sent(&mut self, output: u32, config: evoparseq_phaze::VideoConfig) {
+    fn stream_request_sent(&mut self, output: u32, config: evoparseq_host_interop::VideoConfig) {
         use super::session_model::{Notification, Status, View as _};
         self.stream.request_sent(output, config);
         self.window
@@ -310,7 +310,7 @@ impl evoparseq_phaze::Sink for View {
         );
         self.publish(&format!("Phaze: {stage}"));
     }
-    fn outputs(&mut self, outputs: &[evoparseq_phaze::Output]) {
+    fn outputs(&mut self, outputs: &[evoparseq_host_interop::Output]) {
         use super::session_model::{Notification, View as _};
         {
             let mut displays = self
@@ -351,7 +351,7 @@ impl evoparseq_phaze::Sink for View {
     fn audio(
         &mut self,
         pcm: &[i16],
-        codec: evoparseq_phaze::AudioCodec,
+        codec: evoparseq_host_interop::AudioCodec,
         payload_bytes: usize,
     ) -> Result<()> {
         self.audio_bytes = self.audio_bytes.saturating_add(payload_bytes as u64);
@@ -379,11 +379,11 @@ impl evoparseq_phaze::Sink for View {
     fn poll(
         &mut self,
         output: Option<u32>,
-        commands: &mut Vec<evoparseq_phaze::Input>,
-        controls: &mut Vec<evoparseq_phaze::ClientControl>,
+        commands: &mut Vec<evoparseq_host_interop::Input>,
+        controls: &mut Vec<evoparseq_host_interop::ClientControl>,
     ) -> Result<bool> {
         use super::session_model::{Command, Notification, Status, View as _};
-        use evoparseq_phaze::{ClientControl, Input, MAX_CLIPBOARD_BYTES};
+        use evoparseq_host_interop::{ClientControl, Input, MAX_CLIPBOARD_BYTES};
         if self.window.closing.load(Ordering::Acquire) || self.window.stop.stopped() {
             return Ok(false);
         }
@@ -641,7 +641,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
     let mut view = View {
         window: window.clone(),
         manager: manager.clone(),
-        stream: Stream::new(evoparseq_phaze::VideoConfig {
+        stream: Stream::new(evoparseq_host_interop::VideoConfig {
             hevc: saved.prefer_hevc,
             chroma_444: saved.prefer_hevc && saved.experimental_chroma_444,
             mbps: saved.native_core.video.bandwidth_mbps.unwrap_or(10),
@@ -672,7 +672,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         route: "Direct",
         carrier: "direct UDP",
     };
-    let remote = evoparseq_phaze::Session::from_token(session.token())?;
+    let remote = evoparseq_host_interop::Session::from_token(session.token())?;
     let result = block_on(async {
         let local = async {
             let mut tick = tokio::time::interval(Duration::from_millis(50));
@@ -691,7 +691,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
     if let Err(error) = &result {
         crate::event_log::record(
             "ERROR",
-            "phaze_session_failed",
+            "interop_session_failed",
             serde_json::json!({"reason":error.to_string()}),
         );
     }
@@ -699,15 +699,15 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
 }
 
 async fn connect(
-    remote: &evoparseq_phaze::Session,
+    remote: &evoparseq_host_interop::Session,
     peer: &str,
     manager: &Manager,
     view: &mut View,
 ) -> Result<()> {
     if !manager.view().0.force_relay {
-        return evoparseq_phaze::connect(remote, peer, view).await;
+        return evoparseq_host_interop::connect(remote, peer, view).await;
     }
-    phaze_session::connect_relay(
+    interop_session::connect_relay(
         remote,
         peer,
         view,
@@ -733,10 +733,10 @@ fn align_initial_pointer(
     pending: &mut bool,
     relative: bool,
     viewport: Option<crate::viewport::Viewport>,
-    commands: &mut Vec<evoparseq_phaze::Input>,
+    commands: &mut Vec<evoparseq_host_interop::Input>,
     first: usize,
 ) {
-    use evoparseq_phaze::Input;
+    use evoparseq_host_interop::Input;
     match commands[first] {
         Input::Motion {
             relative: false, ..
@@ -762,12 +762,12 @@ fn align_initial_pointer(
 
 fn translate(
     event: Event,
-    keys: &mut evoparseq_phaze::Keyboard,
+    keys: &mut evoparseq_host_interop::Keyboard,
     viewport: Option<crate::viewport::Viewport>,
     allowed: bool,
-    commands: &mut Vec<evoparseq_phaze::Input>,
+    commands: &mut Vec<evoparseq_host_interop::Input>,
 ) -> Result<()> {
-    use evoparseq_phaze::Input;
+    use evoparseq_host_interop::Input;
     match event {
         Event::Focus(false) | Event::HidInputRelease => {
             keys.reset();
@@ -797,7 +797,7 @@ fn translate(
             relative: true,
         }),
         Event::Button(down, button, x, y) => {
-            commands.extend(phaze_session::button(viewport, down, button, x, y));
+            commands.extend(interop_session::button(viewport, down, button, x, y));
         }
         Event::Scroll(x, y) => commands.push(Input::Scroll {
             x,
@@ -812,14 +812,14 @@ fn translate(
 mod tests {
     use super::*;
     use anyhow::Context;
-    use evoparseq_phaze::{Input, Keyboard};
+    use evoparseq_host_interop::{Input, Keyboard};
     #[test]
     fn offline_session_controls_reuse_preferences_and_validate_advertised_outputs() -> Result<()> {
         use super::super::session_model::Command;
-        use evoparseq_phaze::Sink as _;
+        use evoparseq_host_interop::Sink as _;
         let directory = std::env::temp_dir().join(format!(
-            "evoparseq-phaze-controls-{}",
-            crate::bud_attempt::native_attempt_id()?
+            "evoparseq-host-interop-controls-{}",
+            crate::lowlat_attempt::native_attempt_id()?
         ));
         std::fs::create_dir(&directory)?;
         let manager = Manager::open(directory.join("settings.json"));
@@ -860,7 +860,7 @@ mod tests {
                 route: "Direct",
                 carrier: "direct UDP",
             };
-            let output = |id| evoparseq_phaze::Output {
+            let output = |id| evoparseq_host_interop::Output {
                 id,
                 name: format!("Fixture {id}"),
                 width: 1920,
@@ -935,7 +935,7 @@ mod tests {
             assert!(!view.raw_audio());
             view.raw_audio = true;
             assert!(view.raw_audio());
-            view.audio_codec = Some(evoparseq_phaze::AudioCodec::Aac);
+            view.audio_codec = Some(evoparseq_host_interop::AudioCodec::Aac);
             view.rtt(Some(Duration::from_micros(12500)));
             view.traffic(127048, 63524);
             let measured = window.stats.read().context("Missing RTT sample")?;
@@ -1014,7 +1014,7 @@ mod tests {
             assert!(view.stream_request().is_none());
             assert_eq!(manager.view().0.native_core.video, video);
 
-            use evoparseq_phaze::{ClientControl, CursorFormat, CursorImage};
+            use evoparseq_host_interop::{ClientControl, CursorFormat, CursorImage};
             view.host_flags(16);
             view.bandwidth_feedback_started(750_000.0, 875_000.0);
             view.video_recovery_sent(8);
@@ -1104,7 +1104,7 @@ mod tests {
             // requires 4:2:0 updates both a reopen and a concurrent user request.
             assert!(!view.take_video_recovery());
             view.stream.apply(
-                evoparseq_phaze::VideoConfig {
+                evoparseq_host_interop::VideoConfig {
                     hevc: true,
                     chroma_444: true,
                     ..view.stream.config()
@@ -1131,7 +1131,7 @@ mod tests {
                 settings.turn_urls = vec![format!("turn:{address}?transport=tcp")];
                 settings.custom_username = "fixture".into();
                 manager.save(settings, "fixture-password", "", false, false)?;
-                let remote = evoparseq_phaze::Session::from_token("offline-fixture")?;
+                let remote = evoparseq_host_interop::Session::from_token("offline-fixture")?;
                 let close_connection = async {
                     let (socket, _) = server.accept().await?;
                     drop(socket);
@@ -1158,7 +1158,7 @@ mod tests {
     }
     #[test]
     fn first_click_aligns_only_an_unpositioned_absolute_pointer() {
-        use evoparseq_phaze::Input;
+        use evoparseq_host_interop::Input;
         let viewport = Some(crate::viewport::Viewport {
             source: (101, 101),
             client: (101, 101),

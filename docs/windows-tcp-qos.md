@@ -26,7 +26,7 @@ an improvement over a real TURN connection. Load direction/bandwidth varied.
 
 Settings > Network > TCP/TLS QoS offers **Off (default)** and experimental
 Audio/video QoS. It applies to outgoing Windows TURN TCP/TLS sockets in both
-BUD and WebRTC, once after connect and before TLS setup. A tiny shared Rust
+lowlat and WebRTC, once after connect and before TLS setup. A tiny shared Rust
 crate owns the flow; platform-specific FFI is isolated behind the same API.
 Other targets are no-ops, preserving their existing socket policies.
 No extra runtime dependency, thread, queue, timer or per-packet/frame work is
@@ -41,12 +41,12 @@ congestion before interpreting the synthetic results as a streaming benefit.
 
 ## Fit with the current client
 
-- BUD already has a dynamically loaded qWAVE helper for its UDP paths. Its UDP
+- lowlat already has a dynamically loaded qWAVE helper for its UDP paths. Its UDP
   connect/mark/disconnect sequence must **not** be reused on established TCP.
-- BUD TCP/TLS shares one overlapped TCP socket. The stream adapter marks once after
+- lowlat TCP/TLS shares one overlapped TCP socket. The stream adapter marks once after
   successful connect, without
   modifying the read/write buffers, completion port, TLS records, or media path.
-- WebRTC TURN TCP/TLS has separate Tokio/socket ownership. The BUD helper cannot
+- WebRTC TURN TCP/TLS has separate Tokio/socket ownership. The lowlat helper cannot
   automatically cover it; its socket lifetime needs its own explicit adapter.
 - A client marks its **outgoing** traffic only: input, control and TCP ACKs may
   benefit under a local upstream bottleneck. The host/relay's incoming video is

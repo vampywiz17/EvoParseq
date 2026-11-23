@@ -1,7 +1,7 @@
 //! Wayland/Vulkan/PipeWire binding for the shared Phaze session.
-use crate::{account, connection_settings::Manager, phaze_client, playback::Playback, telemetry};
+use crate::{account, connection_settings::Manager, interop_client, playback::Playback, telemetry};
 use anyhow::Result;
-use evoparseq_phaze::{ClientControl, Input, VideoConfig};
+use evoparseq_host_interop::{ClientControl, Input, VideoConfig};
 use std::{
     collections::VecDeque,
     sync::atomic::Ordering,
@@ -25,7 +25,7 @@ pub fn run(
     let receiver = pcm.receiver();
     let _output = crate::audio_pipewire::Output::start(&receiver, telemetry.output.clone(), audio)?;
     telemetry.set_audio(receiver);
-    let mut client = phaze_client::Client::new(
+    let mut client = interop_client::Client::new(
         Adapter {
             playback,
             telemetry,
@@ -79,17 +79,17 @@ struct Adapter<'a> {
     playback: &'a Playback,
     telemetry: &'a telemetry::Session,
     manager: &'a Manager,
-    desktop: phaze_client::DesktopInput,
+    desktop: interop_client::DesktopInput,
     events: VecDeque<crate::input_handoff::Event>,
     clipboard: crate::clipboard_sync::State,
-    peers: crate::phaze_session::PhazePeers,
+    peers: crate::interop_session::PhazePeers,
     next: Instant,
     authenticated: bool,
     paste_after_send: bool,
     paste_ready: bool,
 }
 
-impl phaze_client::Platform for Adapter<'_> {
+impl interop_client::Platform for Adapter<'_> {
     fn cursor_mode(&mut self, relative: bool, visible: bool) {
         self.desktop.cursor_mode(relative, visible);
         self.playback.set_phaze_cursor_mode(relative, visible);
@@ -104,7 +104,7 @@ impl phaze_client::Platform for Adapter<'_> {
         );
     }
 
-    fn outputs(&mut self, outputs: &[evoparseq_phaze::Output]) {
+    fn outputs(&mut self, outputs: &[evoparseq_host_interop::Output]) {
         let mut host = self
             .telemetry
             .host
@@ -150,7 +150,7 @@ impl phaze_client::Platform for Adapter<'_> {
             .is_ok_and(|request| request.is_some())
     }
 
-    fn peer_state(&mut self, local_id: u32, state: evoparseq_phaze::PeerState) {
+    fn peer_state(&mut self, local_id: u32, state: evoparseq_host_interop::PeerState) {
         self.peers.local_id = Some(local_id);
         self.peers.state = state;
         self.telemetry
@@ -177,7 +177,7 @@ impl phaze_client::Platform for Adapter<'_> {
 
     fn poll(
         &mut self,
-        session: &mut phaze_client::State,
+        session: &mut interop_client::State,
         output: Option<u32>,
         input: &mut Vec<Input>,
         controls: &mut Vec<ClientControl>,
@@ -213,7 +213,7 @@ impl phaze_client::Platform for Adapter<'_> {
                 Event::Session(Command::Clipboard { text, paste }) if output.is_some() => {
                     let allowed = self.playback.clipboard_allowed.load(Ordering::Acquire);
                     if allowed {
-                        if text.len() <= evoparseq_phaze::MAX_CLIPBOARD_BYTES
+                        if text.len() <= evoparseq_host_interop::MAX_CLIPBOARD_BYTES
                             && !text.contains('\0')
                             && self.clipboard.local_changed(&text)
                         {

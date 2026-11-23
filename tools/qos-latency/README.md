@@ -55,9 +55,9 @@ mérőszámok. Hibás / fel nem állt terhelésű próbából nem vonható le Qo
   származó p99 bizonytalan; 100 alatti mintaszámnál különösen óvatosan értékelendő.
 - A terhelés CPU- vagy VPN-korlátba is ütközhet. A CPU-terhelést és a tényleges
   hálózati kihasználtságot is érdemes figyelni a két gépen.
-- A bulk terhelés külön socketeken fut. Ez nem modellezi az egy BUD TLS-streamen
+- A bulk terhelés külön socketeken fut. Ez nem modellezi az egy lowlat TLS-streamen
   belüli videó/vezérlés multiplexálás sorbanállását; a hálózati QoS lehetőségét
-  méri, nem a teljes BUD implementációt.
+  méri, nem a teljes lowlat implementációt.
 - Ez hálózati válaszkészség, **nem** capture-to-display vagy Parsec end-to-end
   késleltetés. A LAN/VPN-eredmény a TURN TCP/TLS-útvonalra nem általánosítható.
 

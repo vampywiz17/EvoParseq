@@ -1,5 +1,5 @@
-//! Native BUD account signaling, isolated from WebRTC SDP.
-use crate::bud::Session;
+//! Native LOWLAT account signaling, isolated from WebRTC SDP.
+use crate::lowlat::Session;
 use anyhow::{Result, anyhow, ensure};
 use lowlat_client::{Event, Peer};
 use lowlat_core::conn::Kind;
@@ -95,7 +95,7 @@ impl Signaling {
             Some("answer_relay") => {
                 ensure!(
                     payload["approved"] == true,
-                    "host declined native BUD offer"
+                    "host declined native LOWLAT offer"
                 );
                 ensure!(
                     data.get("mode").is_none_or(|mode| mode == 1),
@@ -150,9 +150,9 @@ impl Signaling {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bud::Route;
+    use crate::lowlat::Route;
     #[test]
-    fn native_offer_has_bud_mode_and_media_key() {
+    fn native_offer_has_lowlat_mode_and_media_key() {
         let mut session = Session::external_video(false).unwrap();
         let ours = session
             .offer("test", Route::Direct { stun: vec![] })

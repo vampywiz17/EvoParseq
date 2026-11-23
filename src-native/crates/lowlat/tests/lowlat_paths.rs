@@ -1,7 +1,7 @@
 //! Real UDP connectivity gates. Two native clients are connectivity peers,
 //! not a stock host/media fixture: this proves the adapter's route and lifecycle
 //! only. The separately configured coturn test must not use real credentials.
-use evoparseq_bud::bud::{RelayTransport, Route, Session};
+use evoparseq_lowlat::lowlat::{RelayTransport, Route, Session};
 use lowlat_client::{Event, Peer};
 use lowlat_core::conn::Kind;
 use std::time::{Duration, Instant};
@@ -68,7 +68,7 @@ fn connect(route: Route, relay_expected: bool) {
                     }
                     Event::Ready => target.ready(target_id).unwrap(),
                     Event::Established { .. } => *established = true,
-                    Event::Ended { outcome } => panic!("BUD path ended: {outcome:?}"),
+                    Event::Ended { outcome } => panic!("LOWLAT path ended: {outcome:?}"),
                     _ => {}
                 }
             }

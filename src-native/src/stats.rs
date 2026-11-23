@@ -18,8 +18,8 @@ pub struct MemoryUsage {
 #[derive(Clone)]
 pub struct Sample {
     pub phaze: bool,
-    #[cfg(feature = "bud")]
-    pub bud: Option<evoparseq_bud::bud::Snapshot>,
+    #[cfg(feature = "lowlat")]
+    pub lowlat: Option<evoparseq_lowlat::lowlat::Snapshot>,
     pub at: Instant,
     pub generation: u64,
     pub state: String,
@@ -55,8 +55,8 @@ impl Default for Sample {
     fn default() -> Self {
         Self {
             phaze: false,
-            #[cfg(feature = "bud")]
-            bud: None,
+            #[cfg(feature = "lowlat")]
+            lowlat: None,
             at: Instant::now(),
             generation: 0,
             state: "Waiting for a connection".into(),
@@ -313,9 +313,9 @@ pub async fn network(peer: &RTCPeerConnection) -> Sample {
 }
 impl Sample {
     fn connected(&self) -> bool {
-        #[cfg(feature = "bud")]
-        if let Some(bud) = &self.bud {
-            return bud.connected;
+        #[cfg(feature = "lowlat")]
+        if let Some(lowlat) = &self.lowlat {
+            return lowlat.connected;
         }
         self.state == "connected"
     }
@@ -473,14 +473,14 @@ mod tests {
         s.received = Some(1000);
         assert!(rates.update(&s).incoming.is_none());
     }
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     #[test]
-    fn bud_rates_use_native_connection_state_and_existing_decoder_counters() {
+    fn lowlat_rates_use_native_connection_state_and_existing_decoder_counters() {
         let mut rates = Rates::default();
         let mut sample = Sample {
             generation: 1,
-            state: "Connected (BUD)".into(),
-            bud: Some(evoparseq_bud::bud::Snapshot {
+            state: "Connected (LOWLAT)".into(),
+            lowlat: Some(evoparseq_lowlat::lowlat::Snapshot {
                 connected: true,
                 ..Default::default()
             }),
@@ -506,7 +506,7 @@ mod tests {
         assert_eq!(values.audio, Some(128.0));
         assert!((values.outgoing.unwrap() - 0.1).abs() < 1e-12);
         sample.at += std::time::Duration::from_secs(1);
-        sample.bud.as_mut().unwrap().connected = false;
+        sample.lowlat.as_mut().unwrap().connected = false;
         let stopped = rates.update(&sample);
         assert!(stopped.fps.is_none() && stopped.incoming.is_none());
     }

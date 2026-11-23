@@ -370,7 +370,7 @@ fn client(host: &str, seconds: u32) -> Result<()> {
         seconds_per_trial: seconds,
         notes: vec![
             "Synthetic echo RTT, not capture-to-display or Parsec end-to-end latency.",
-            "Bulk load uses separate sockets; this does not model multiplexed video/control head-of-line blocking inside one BUD TLS stream.",
+            "Bulk load uses separate sockets; this does not model multiplexed video/control head-of-line blocking inside one LOWLAT TLS stream.",
             "Only client probe sockets are marked. Load and receiver sockets remain unmarked.",
             "Priority query is configured OS policy, not proof of DSCP on the wire or router scheduling.",
             "Two unmarked bulk sockets per direction. Upload bytes count submitted writes; download bytes count received data.",

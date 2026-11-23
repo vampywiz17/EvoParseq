@@ -816,7 +816,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "evoparseq-bud"
+name = "evoparseq-lowlat"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -827,7 +827,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "evoparseq-phaze"
+name = "evoparseq-host-interop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -869,8 +869,8 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytes",
- "evoparseq-bud",
- "evoparseq-phaze",
+ "evoparseq-lowlat",
+ "evoparseq-host-interop",
  "futures-util",
  "httparse",
  "jni",

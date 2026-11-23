@@ -1,11 +1,11 @@
-# Experimental Phaze media/input and TURN investigation
+# Experimental compatibility with Phaze hosts
 
-Windows, Linux Flatpak and
-Android TV expose Phaze through the shared Rust protocol and session code.
-The protocol source is original Rust, derived from wire-format observations
-under authorized interoperability testing. No proprietary Phaze implementation
-body, SDK or binary is included. Public physical-key/button constants are described
-in [libmatoya's header](https://github.com/snowcone-ltd/libmatoya/blob/master/src/matoya.h).
+Windows, Linux Flatpak and Android TV share EvoParseq's independently written
+Rust transport and session code. Wire behavior was observed on
+maintainer-controlled test systems. Public physical-key and button constants
+are described in [libmatoya's header](https://github.com/snowcone-ltd/libmatoya/blob/master/src/matoya.h).
+See [interoperability and source provenance](INTEROPERABILITY.md) for the
+research methods and test-data policy.
 
 ## Audio and input
 
@@ -98,7 +98,8 @@ sound, keyboard layout behavior or host permissions.
 
 A standard TURN server relays opaque UDP application datagrams. It does not need
 to understand Phaze's STUN flavor, DTLS Connection ID or reliable media envelopes.
-This is the same transport principle used by EvoParseq's Parsec BUD relay path.
+The same transport principle is used by EvoParseq's lowlat-based,
+compatible relay path for Parsec hosts.
 The Phaze signaling candidate contains an address, port and short_ttl flag;
 there is no SDP/WebRTC-only candidate type needed to describe an allocation.
 A TURN allocation address can therefore be advertised in that candidate shape.
@@ -294,7 +295,7 @@ and UI do not establish live HEVC, full chroma or display-switching success.
 
 The protocol crate owns sign-in, discovery, DTLS, direct UDP and TURN carriers,
 reliable framing, AAC-LC/PCM decoding, and input and cursor messages. The common
-`phaze_session.rs` uses the existing Rust video inspector and owns stream
+`interop_session.rs` uses the existing Rust video inspector and owns stream
 preferences, request and recovery state, received payload counts, pointer
 coordinates, guest permissions, and TURN server selection. Linux and Android
 share the Phaze sink, decoded PCM entry point and desktop input mapping.

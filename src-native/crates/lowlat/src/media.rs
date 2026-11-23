@@ -1,4 +1,4 @@
-//! Remove native BUD media headers, leaving borrowed original codec payloads.
+//! Remove native LOWLAT media headers, leaving borrowed original codec payloads.
 //! No decoder, resampler, pixel conversion, render resource or media copy.
 use anyhow::{Result, ensure};
 pub use lowlat_core::video::Rotation;
@@ -21,16 +21,16 @@ pub fn video(message: &[u8]) -> Result<Video<'_>> {
         #[cfg(not(feature = "native-core"))]
         ensure!(
             !metadata.chroma_444,
-            "BUD 4:4:4 video is not supported by this client"
+            "LOWLAT 4:4:4 video is not supported by this client"
         );
         return Ok(Video::Metadata(metadata));
     }
     ensure!(
         header.width != 0 && header.height != 0,
-        "empty BUD video dimensions"
+        "empty LOWLAT video dimensions"
     );
     let annex_b = message.get(video::VIDEO_HEADER_LEN..).unwrap_or_default();
-    ensure!(!annex_b.is_empty(), "empty BUD access unit");
+    ensure!(!annex_b.is_empty(), "empty LOWLAT access unit");
     Ok(Video::AccessUnit { header, annex_b })
 }
 
@@ -39,14 +39,14 @@ pub fn opus(message: &[u8]) -> Result<&[u8]> {
         audio::parse(message).map_err(|e| anyhow::anyhow!("native audio header: {e:?}"))?;
     ensure!(
         header.codec == audio::Codec::Opus,
-        "uncompressed BUD audio is not enabled"
+        "uncompressed LOWLAT audio is not enabled"
     );
     ensure!(
         header.rate == 48_000 && header.channels == 2 && header.mask == 3,
-        "unsupported BUD audio layout"
+        "unsupported LOWLAT audio layout"
     );
     let opus = message.get(audio::AUDIO_HEADER_LEN..).unwrap_or_default();
-    ensure!(!opus.is_empty(), "empty BUD Opus packet");
+    ensure!(!opus.is_empty(), "empty LOWLAT Opus packet");
     Ok(opus)
 }
 
@@ -58,7 +58,10 @@ pub enum Audio<'a> {
 /// The wire's codec tag is authoritative; a RAW permission can still yield Opus.
 pub fn audio(message: &[u8]) -> Result<Audio<'_>> {
     let (audio, channels, mask) = audio_layout(message)?;
-    ensure!(channels == 2 && mask == 3, "unsupported BUD audio layout");
+    ensure!(
+        channels == 2 && mask == 3,
+        "unsupported LOWLAT audio layout"
+    );
     Ok(audio)
 }
 
@@ -72,10 +75,10 @@ pub fn audio_layout(message: &[u8]) -> Result<(Audio<'_>, u8, u32)> {
                 (header.channels, header.mask),
                 (2, 0 | 3) | (6, 0x3f | 0x60f) | (8, 0x63f)
             ),
-        "unsupported BUD audio layout"
+        "unsupported LOWLAT audio layout"
     );
     let payload = message.get(audio::AUDIO_HEADER_LEN..).unwrap_or_default();
-    ensure!(!payload.is_empty(), "empty BUD audio packet");
+    ensure!(!payload.is_empty(), "empty LOWLAT audio packet");
     if header.codec == audio::Codec::Opus {
         Ok((Audio::Opus(payload), header.channels, header.mask))
     } else {

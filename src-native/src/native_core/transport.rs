@@ -1,5 +1,5 @@
 //! Session-facing transport selection. Both paths reuse the existing native
-//! decoders and renderer; WebRTC owns ICE/DTLS/SCTP, BUD keeps its HID adapter.
+//! decoders and renderer; WebRTC owns ICE/DTLS/SCTP, LOWLAT keeps its HID adapter.
 use crate::{connection_settings::Manager, window::Window};
 use anyhow::{ensure, Result};
 use serde_json::Value;
@@ -10,7 +10,7 @@ use std::sync::{
 
 #[derive(Clone, Copy)]
 pub(super) struct Policy {
-    pub bud: bool,
+    pub lowlat: bool,
 }
 #[derive(Debug)]
 pub(super) struct HostStatus {
@@ -42,14 +42,14 @@ impl HostStatus {
 }
 
 pub(super) enum Attempt {
-    Bud(crate::bud_attempt::Attempt),
+    Lowlat(crate::lowlat_attempt::Attempt),
     Web(WebRtc),
 }
 pub(super) struct WebRtc {
     transport: crate::attempt::Attempt,
     id: String,
     peer: String,
-    writer: crate::bud_attempt::SignalingWrite,
+    writer: crate::lowlat_attempt::SignalingWrite,
     failed: AtomicBool,
 }
 use crate::native_wire::{envelope, offer};
@@ -73,7 +73,7 @@ impl Attempt {
     pub fn spawn_native(
         id: &str,
         peer: &str,
-        writer: crate::bud_attempt::SignalingWrite,
+        writer: crate::lowlat_attempt::SignalingWrite,
         window: Arc<Window>,
         manager: Arc<Manager>,
         policy: Policy,
@@ -82,9 +82,9 @@ impl Attempt {
             !peer.is_empty() && peer.len() <= 256 && !peer.chars().any(char::is_control),
             "Invalid host peer ID"
         );
-        if policy.bud {
-            return crate::bud_attempt::Attempt::spawn_native(id, peer, writer, window, manager)
-                .map(Self::Bud);
+        if policy.lowlat {
+            return crate::lowlat_attempt::Attempt::spawn_native(id, peer, writer, window, manager)
+                .map(Self::Lowlat);
         }
         let settings = manager.view().0;
         let (target, attempt_id, publish) = (peer.to_owned(), id.to_owned(), writer.clone());
@@ -122,14 +122,14 @@ impl Attempt {
     }
     pub fn name(&self) -> &'static str {
         match self {
-            Self::Bud(_) => "BUD",
+            Self::Lowlat(_) => "lowlat",
             Self::Web(_) => "WebRTC",
         }
     }
     pub fn incoming(&self, text: &str) -> Result<()> {
         let Self::Web(web) = self else {
-            if let Self::Bud(bud) = self {
-                bud.incoming(text)?;
+            if let Self::Lowlat(lowlat) = self {
+                lowlat.incoming(text)?;
             }
             return Ok(());
         };
@@ -140,7 +140,7 @@ impl Attempt {
     }
     pub fn pop_event(&self) -> Option<Value> {
         match self {
-            Self::Bud(bud) => bud.pop_event(),
+            Self::Lowlat(lowlat) => lowlat.pop_event(),
             Self::Web(web) => {
                 for _ in 0..64 {
                     let event = web.transport.pop_event()?;
@@ -158,13 +158,13 @@ impl Attempt {
     }
     pub fn native_connected(&self) -> bool {
         match self {
-            Self::Bud(bud) => bud.native_connected(),
+            Self::Lowlat(lowlat) => lowlat.native_connected(),
             Self::Web(web) => web.transport.control_ready(),
         }
     }
     pub fn failure(&self) -> Option<&'static str> {
         match self {
-            Self::Bud(bud) => bud.failure(),
+            Self::Lowlat(lowlat) => lowlat.failure(),
             Self::Web(web) => web.transport.native_video_failure().or_else(|| {
                 (web.failed.load(Ordering::Acquire) || web.transport.failure_stage().is_some())
                     .then_some("WebRTC connection failed")
@@ -173,13 +173,13 @@ impl Attempt {
     }
     pub fn host_status(&self) -> Option<i32> {
         match self {
-            Self::Bud(bud) => bud.host_status(),
+            Self::Lowlat(lowlat) => lowlat.host_status(),
             Self::Web(web) => web.transport.host_status(),
         }
     }
     pub fn send(&self, bytes: &[u8]) -> Result<()> {
         match self {
-            Self::Bud(bud) => bud.send(bytes),
+            Self::Lowlat(lowlat) => lowlat.send(bytes),
             Self::Web(web) => web
                 .transport
                 .send_binary(0, bytes::Bytes::copy_from_slice(bytes)),
@@ -187,18 +187,18 @@ impl Attempt {
     }
     pub fn pop_control(&self) -> Option<bytes::Bytes> {
         match self {
-            Self::Bud(bud) => bud.pop_control(),
+            Self::Lowlat(lowlat) => lowlat.pop_control(),
             Self::Web(web) => web.transport.pop_binary().map(|(_, _, bytes)| bytes),
         }
     }
     pub fn audio_pipeline(&self) -> Option<crate::audio_stream::NativeReceiver> {
         match self {
-            Self::Bud(bud) => bud.audio_pipeline().map(|audio| audio.native_receiver()),
+            Self::Lowlat(lowlat) => lowlat.audio_pipeline().map(|audio| audio.native_receiver()),
             Self::Web(web) => web.transport.audio_receiver(),
         }
     }
     pub fn hid_mouse_enabled(&self) -> bool {
-        matches!(self, Self::Bud(bud) if bud.hid_mouse_enabled())
+        matches!(self, Self::Lowlat(lowlat) if lowlat.hid_mouse_enabled())
     }
     pub fn native_input(
         &self,
@@ -206,7 +206,7 @@ impl Attempt {
         viewport: Option<crate::viewport::Viewport>,
     ) -> Result<()> {
         match self {
-            Self::Bud(bud) => bud.native_input(packet, viewport),
+            Self::Lowlat(lowlat) => lowlat.native_input(packet, viewport),
             Self::Web(_) => self.send(packet),
         }
     }

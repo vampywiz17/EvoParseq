@@ -173,7 +173,7 @@ impl Drop for Connection {
 }
 fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result<()> {
     if request.session.service() == crate::account::Service::Phaze {
-        return crate::phaze_android::run(request, stop, status);
+        return crate::interop_android::run(request, stop, status);
     }
     let Request {
         session,
@@ -191,7 +191,7 @@ fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result<()>
     crate::event_log::record(
         "INFO",
         "android_stream_start",
-        json!({"bud":prefs.transport==1,"video_request":prefs.video,"pcm_requested":prefs.audio.pcm,"surround_requested":prefs.audio.surround,"buffer_max_ms":prefs.audio.maximum()}),
+        json!({"lowlat":prefs.transport==1,"video_request":prefs.video,"pcm_requested":prefs.audio.pcm,"surround_requested":prefs.audio.surround,"buffer_max_ms":prefs.audio.maximum()}),
     );
     let socket = Socket::open(&session)?;
     if stop.load(Ordering::Acquire) {

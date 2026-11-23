@@ -1,4 +1,4 @@
-//! BUD lifecycle below native account signaling.
+//! LOWLAT lifecycle below native account signaling.
 use std::net::SocketAddr;
 
 use anyhow::{Result, anyhow, ensure};
@@ -130,7 +130,7 @@ impl Session {
             },
             Port::Any,
         )
-        .map_err(|e| anyhow!("BUD external video: {e:?}"))?;
+        .map_err(|e| anyhow!("LOWLAT external video: {e:?}"))?;
         let units = client.units();
         Ok(Self {
             client,
@@ -175,7 +175,7 @@ impl Session {
     pub fn set_audio_layout(&mut self, channels: u8, mask: u32) -> Result<()> {
         ensure!(
             matches!((channels, mask), (2, 3) | (6, 0x3f | 0x60f) | (8, 0x63f)),
-            "unsupported BUD playback layout"
+            "unsupported LOWLAT playback layout"
         );
         self.audio_layout = Some((channels, mask));
         Ok(())
@@ -185,11 +185,11 @@ impl Session {
         let units = self
             .external_units
             .take()
-            .ok_or_else(|| anyhow!("BUD video consumer already taken"))?;
+            .ok_or_else(|| anyhow!("LOWLAT video consumer already taken"))?;
         let audio = self
             .client
             .take_external_audio_source()
-            .map_err(|_| anyhow!("BUD audio consumer already taken"))?;
+            .map_err(|_| anyhow!("LOWLAT audio consumer already taken"))?;
         Ok(MediaSource { units, audio })
     }
 
@@ -200,29 +200,29 @@ impl Session {
     pub fn send_control(&mut self, bytes: &[u8]) -> Result<()> {
         ensure!(
             self.client.send_external_control(bytes),
-            "BUD control refused"
+            "LOWLAT control refused"
         );
         Ok(())
     }
 
-    /// Route application text through BUD's variable-size user-data queue,
+    /// Route application text through LOWLAT's variable-size user-data queue,
     /// preserving the short input/control queue and its existing size limit.
     pub fn send_frame(&mut self, bytes: &[u8]) -> Result<()> {
         use lowlat_core::control::{self, op};
         if bytes.get(12) == Some(&op::USER_DATA) {
             let message =
-                control::parse(bytes).map_err(|_| anyhow!("Invalid BUD control frame"))?;
+                control::parse(bytes).map_err(|_| anyhow!("Invalid LOWLAT control frame"))?;
             ensure!(
                 message.body.len() <= control::USER_DATA_MAX,
-                "BUD user data exceeds limit"
+                "LOWLAT user data exceeds limit"
             );
             let body = message
                 .body
                 .strip_suffix(&[0])
-                .ok_or_else(|| anyhow!("BUD user data lacks terminator"))?;
+                .ok_or_else(|| anyhow!("LOWLAT user data lacks terminator"))?;
             ensure!(
                 self.send_user_data(message.a1, body),
-                "BUD user data refused"
+                "LOWLAT user data refused"
             );
             return Ok(());
         }
@@ -239,8 +239,11 @@ impl Session {
     }
 
     pub fn offer(&mut self, id: &str, route: Route) -> Result<Credentials> {
-        ensure!(!id.is_empty() && id.len() <= 256, "invalid BUD attempt id");
-        ensure!(self.attempt.is_none(), "BUD attempt already active");
+        ensure!(
+            !id.is_empty() && id.len() <= 256,
+            "invalid LOWLAT attempt id"
+        );
+        ensure!(self.attempt.is_none(), "LOWLAT attempt already active");
         let mut config = route.configure();
         #[cfg(target_os = "linux")]
         {
@@ -260,13 +263,13 @@ impl Session {
         let ours = self
             .client
             .new_attempt(id, config, Transport::Bud)
-            .map_err(|e| anyhow!("BUD offer: {e:?}"))?;
+            .map_err(|e| anyhow!("LOWLAT offer: {e:?}"))?;
         self.attempt = Some(id.to_owned());
         Ok(ours)
     }
 
     fn matches(&self, id: &str) -> Result<()> {
-        ensure!(self.attempt.as_deref() == Some(id), "stale BUD attempt");
+        ensure!(self.attempt.as_deref() == Some(id), "stale LOWLAT attempt");
         Ok(())
     }
 
@@ -286,7 +289,7 @@ impl Session {
         self.matches(id)?;
         ensure!(
             addr.port() != 0 && !addr.ip().is_unspecified(),
-            "invalid BUD candidate"
+            "invalid LOWLAT candidate"
         );
         self.client.add_candidate(id, addr, false, kind);
         Ok(())
@@ -305,7 +308,7 @@ impl Session {
         };
         ensure!(
             received.dropped == 0,
-            "BUD signaling events lost; end attempt"
+            "LOWLAT signaling events lost; end attempt"
         );
         Ok(Some(received.event))
     }

@@ -1,7 +1,7 @@
 //! MediaCodec/AAudio/D-pad platform binding for the shared Phaze session.
-use crate::{account, audio_android, phaze_client, stream::Request};
+use crate::{account, audio_android, interop_client, stream::Request};
 use anyhow::Result;
-use evoparseq_phaze::{ClientControl, Input};
+use evoparseq_host_interop::{ClientControl, Input};
 use serde_json::{json, Value};
 use std::{
     collections::VecDeque,
@@ -29,7 +29,7 @@ pub fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result
     let receiver = pcm.receiver();
     audio.attach(receiver.clone())?;
     let config = prefs.phaze_video_config()?;
-    let mut client = phaze_client::Client::new(
+    let mut client = interop_client::Client::new(
         Adapter {
             stop,
             status,
@@ -82,7 +82,7 @@ struct Adapter<'a> {
     audio: audio_android::Output,
     receiver: crate::audio_stream::NativeReceiver,
     inbox: &'a crate::input_handoff::Inbox,
-    desktop: phaze_client::DesktopInput,
+    desktop: interop_client::DesktopInput,
     events: VecDeque<crate::input_handoff::Event>,
     cursor: crate::gamepad_android::Output,
     last_pointer: u64,
@@ -93,7 +93,7 @@ struct Adapter<'a> {
     frames: u64,
 }
 
-impl phaze_client::Platform for Adapter<'_> {
+impl interop_client::Platform for Adapter<'_> {
     fn cursor_mode(&mut self, relative: bool, visible: bool) {
         self.desktop.cursor_mode(relative, visible);
     }
@@ -111,7 +111,7 @@ impl phaze_client::Platform for Adapter<'_> {
 
     fn poll(
         &mut self,
-        state: &mut phaze_client::State,
+        state: &mut interop_client::State,
         _: Option<u32>,
         input: &mut Vec<Input>,
         _: &mut Vec<ClientControl>,

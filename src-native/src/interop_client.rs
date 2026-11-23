@@ -2,11 +2,11 @@
 use crate::{
     audio_stream::DecodedPcm,
     desktop_input::{Action, Engine, Event},
-    phaze_session::{self, Stream},
+    interop_session::{self, Stream},
     video_stream::PacketInfo,
 };
 use anyhow::Result;
-use evoparseq_phaze::{AudioCodec, ClientControl, Input, Keyboard, Output, Sink, VideoConfig};
+use evoparseq_host_interop::{AudioCodec, ClientControl, Input, Keyboard, Output, Sink, VideoConfig};
 use std::time::{Duration, Instant};
 
 pub trait Platform {
@@ -26,7 +26,7 @@ pub trait Platform {
     fn cursor_mode(&mut self, relative: bool, visible: bool);
     fn clipboard(&mut self, _text: &str) {}
     fn control_sent(&mut self, _control: &ClientControl, _sent: bool) {}
-    fn peer_state(&mut self, _local_id: u32, _state: evoparseq_phaze::PeerState) {}
+    fn peer_state(&mut self, _local_id: u32, _state: evoparseq_host_interop::PeerState) {}
 }
 
 pub struct State {
@@ -37,7 +37,7 @@ pub struct State {
     pub audio_bytes: u64,
     pub route: &'static str,
     pub carrier: &'static str,
-    /// Selected virtual USB devices, independent of the normal Parsec BUD profile.
+    /// Selected virtual USB devices, independent of the normal Parsec LOWLAT profile.
     pub hid_devices: (bool, bool),
 }
 
@@ -80,9 +80,9 @@ impl<P: Platform> Client<P> {
         servers: Option<Vec<webrtc::ice_transport::ice_server::RTCIceServer>>,
         roots: impl Fn() -> Vec<Vec<u8>>,
     ) -> Result<()> {
-        let remote = evoparseq_phaze::Session::from_token(token)?;
+        let remote = evoparseq_host_interop::Session::from_token(token)?;
         if let Some(servers) = servers {
-            phaze_session::connect_relay(
+            interop_session::connect_relay(
                 &remote,
                 peer,
                 self,
@@ -97,7 +97,7 @@ impl<P: Platform> Client<P> {
             )
             .await
         } else {
-            evoparseq_phaze::connect(&remote, peer, self).await
+            evoparseq_host_interop::connect(&remote, peer, self).await
         }
     }
 }
@@ -124,7 +124,7 @@ impl<P: Platform> Sink for Client<P> {
         self.platform.stream_request_sent(output, config);
     }
     fn bandwidth_feedback_started(&mut self, lower_rate: f64, upper_rate: f64) {
-        phaze_session::log_bandwidth_feedback(lower_rate, upper_rate);
+        interop_session::log_bandwidth_feedback(lower_rate, upper_rate);
     }
     fn stage(&mut self, stage: &'static str) {
         self.platform.stage(stage);
@@ -170,7 +170,7 @@ impl<P: Platform> Sink for Client<P> {
     fn control_sent(&mut self, control: &ClientControl, sent: bool) {
         self.platform.control_sent(control, sent);
     }
-    fn peer_state(&mut self, local_id: u32, state: evoparseq_phaze::PeerState) {
+    fn peer_state(&mut self, local_id: u32, state: evoparseq_host_interop::PeerState) {
         self.platform.peer_state(local_id, state);
     }
 }
@@ -214,8 +214,8 @@ fn translate(action: Action, keys: &mut Keyboard, size: (u32, u32), commands: &m
             relative: true,
         }),
         Action::Motion(x, y, false) => commands.push(Input::Motion {
-            x: phaze_session::normalized_axis(i64::from(x), size.0),
-            y: phaze_session::normalized_axis(i64::from(y), size.1),
+            x: interop_session::normalized_axis(i64::from(x), size.0),
+            y: interop_session::normalized_axis(i64::from(y), size.1),
             relative: false,
         }),
         Action::Button(button, down, x, y) => commands.push(Input::Button {

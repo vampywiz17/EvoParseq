@@ -1,6 +1,6 @@
 //! lowlat's cache/forget/unchanged rules with our existing Win32 cursor owner.
 use anyhow::{ensure, Result};
-use evoparseq_bud::bud::{cursor_message, CursorCache, CursorFlags, CursorShape};
+use evoparseq_lowlat::lowlat::{cursor_message, CursorCache, CursorFlags, CursorShape};
 #[derive(Default)]
 pub struct Pointer {
     cache: CursorCache,

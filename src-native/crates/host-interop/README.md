@@ -1,10 +1,10 @@
-# Independent experimental Phaze protocol adapter
+# Independent experimental adapter for Phaze compatibility
 
-This crate is original EvoParseq Rust source implementing observed wire behavior
-from authorized interoperability tests with a Phaze 0.13.2 host.
-It contains no copied Phaze native source, binary extracts, SDK bindings,
-or calls to the installed Phaze runtime.
-Constants and message layouts express protocol compatibility, not shared native code.
+This crate is EvoParseq's independent Rust implementation of the wire behavior
+needed to interoperate with compatible Phaze hosts. Initial observations used a
+Phaze 0.13.2 host in a maintainer-controlled test environment. The implementation
+uses original EvoParseq source and open-source Rust libraries.
+[Research and test-data provenance](../../../docs/INTEROPERABILITY.md)
 
 The adapter uses open-source Rust libraries: purecrypto (MIT) for DTLS 1.2/CID,
 rustls-rustcrypto (MIT OR Apache-2.0) with rustls for service HTTPS/WebSocket TLS,

@@ -1131,7 +1131,7 @@ mod tests {
     fn launcher_can_render_without_credentials_or_external_requests() {
         let path = std::env::temp_dir().join(format!(
             "evoparseq-launcher-fixture-{}.json",
-            crate::bud_attempt::native_attempt_id().unwrap()
+            crate::lowlat_attempt::native_attempt_id().unwrap()
         ));
         let manager = crate::connection_settings::Manager::open(path);
         UI_FIXTURE.with(|f| f.set(true));
