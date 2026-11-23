@@ -53,12 +53,15 @@ mod interop_session;
 mod keyboard_grab;
 mod lifecycle;
 #[cfg(all(windows, feature = "lowlat"))]
+#[path = "bud_attempt.rs"]
 mod lowlat_attempt;
 #[cfg(all(windows, feature = "lowlat"))]
 mod lowlat_ingress;
 #[cfg(all(windows, feature = "lowlat"))]
+#[path = "bud_media.rs"]
 mod lowlat_media;
 #[cfg(feature = "lowlat")]
+#[path = "bud_routes.rs"]
 mod lowlat_routes;
 mod media_ingress;
 #[cfg(windows)]

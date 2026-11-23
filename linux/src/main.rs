@@ -30,7 +30,7 @@ mod host_video;
 mod information_linux;
 #[path = "../../src-native/src/lowlat_ingress.rs"]
 mod lowlat_ingress;
-#[path = "../../src-native/src/lowlat_routes.rs"]
+#[path = "../../src-native/src/bud_routes.rs"]
 mod lowlat_routes;
 #[path = "../../src-native/src/network_settings.rs"]
 mod network_settings;

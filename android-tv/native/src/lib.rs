@@ -72,7 +72,7 @@ mod android;
 
 pub mod local_setup;
 #[cfg(target_os = "android")]
-#[path = "../../../src-native/src/lowlat_routes.rs"]
+#[path = "../../../src-native/src/bud_routes.rs"]
 mod lowlat_routes;
 pub mod network;
 pub mod overlay;

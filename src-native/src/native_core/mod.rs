@@ -7,6 +7,7 @@ mod display_windows;
 pub(crate) mod host_displays;
 mod host_video;
 mod input;
+#[path = "phaze.rs"]
 mod interop;
 pub(crate) mod multi_display;
 mod picker;
