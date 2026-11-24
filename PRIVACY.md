@@ -22,9 +22,12 @@ The client exchanges connection information, such as network addresses and
 session identifiers, with the selected service, host and the connection
 servers used by your configuration. STUN helps determine how endpoints can
 reach each other. The default Parsec STUN endpoint is operated by Parsec.
-If a relay is used, it carries session traffic and its
-operator can see connection metadata such as IP addresses and traffic
-volumes.
+With the Cloudflare provider in STUN-only mode, the client can contact
+Cloudflare's STUN server without a TURN key. If you configure custom STUN
+servers, the client sends requests to those servers. The operator of a STUN
+server can see the source IP address of the request. If a relay is used, it
+carries session traffic and its operator can see connection metadata such as
+IP addresses and traffic volumes.
 
 A session carries video and audio from the host and sends your input to the
 host. Clipboard or USB HID data is exchanged when those features are in use.
@@ -46,6 +49,15 @@ client keeps a protected session token on the device. The desktop client can
 also keep the sign-in email. The client does not save account passwords or
 two-factor codes. Remembered credentials use Windows data protection, the
 Linux desktop Secret portal or Android Keystore, depending on the platform.
+
+When you configure Cloudflare TURN or a custom TURN relay on desktop, the
+client saves the TURN key identifier or relay username in its connection
+settings. It saves the API token or relay password using Windows data
+protection or the Linux desktop Secret portal. Signing out leaves these
+connection settings and credentials in place. To remove a saved secret,
+select **Forget saved API token** or **Forget saved password** in the
+connection settings and save the change. If you enable credential caching,
+temporary Cloudflare TURN credentials are cached in memory.
 
 Optional diagnostic logging stores operational information locally, such as
 application version, event timestamps, connection state and media diagnostics.
