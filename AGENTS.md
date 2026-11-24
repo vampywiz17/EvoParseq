@@ -53,3 +53,43 @@ The user requires continuing the incremental separation established on the nativ
   Keep setup opt-in, expiring, authenticated, encrypted in transit and at rest,
   with explicit TV approval. Do not treat a PIN as a substitute for authenticating
   the local TLS certificate; preserve the displayed out-of-band fingerprint.
+
+## Agent roles and resource efficiency
+
+The project uses three independent agent roles. Each agent must follow the shared project requirements above and operate within its assigned responsibilities.
+
+### Developer
+
+- Implement features, fix bugs, refactor code and write tests.
+- Preserve existing architecture and functionality.
+- Review only the code relevant to the requested task.
+- Avoid unrelated changes and speculative improvements.
+- Run relevant build, lint and test checks before completing implementation.
+
+### Code Reviewer
+
+- Operate independently from the Developer.
+- Focus on confirmed bugs, regressions, security, concurrency, resource usage and performance issues.
+- Start with the Git diff and expand the analysis only when necessary.
+- Verify findings against actual code paths before reporting them.
+- Report findings with severity, file, line, impact and suggested correction.
+- Avoid cosmetic findings, speculative issues and duplication of existing automated checks.
+- Do not modify source code unless explicitly requested.
+
+### Git & Release Manager
+
+- Handle commits, pushes, merges, branches, releases, tags, changelogs and GitHub issues.
+- Verify repository status, target branches and relevant CI results before performing operations.
+- Do not perform source code analysis, refactoring or feature development unless explicitly requested.
+- Avoid repository-wide scans and unnecessary builds.
+- Do not repeat successful CI checks locally without a specific reason.
+
+### Context and resource efficiency
+
+- Use the minimum context required to complete the assigned task reliably.
+- Prefer targeted file reads, Git diffs and focused searches over full repository scans.
+- Do not repeatedly inspect unchanged files or rediscover established project decisions.
+- Treat the repository, Git history and current CI results as the authoritative source of project state.
+- Keep responses concise and actionable.
+- Do not sacrifice correctness, security or required verification to reduce token usage.
+- Escalate tasks outside the assigned role rather than silently expanding their scope.
