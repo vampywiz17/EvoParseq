@@ -25,6 +25,7 @@ struct View {
     rtt: Option<Duration>,
     audio_bytes: u64,
     raw_audio: bool,
+    display_layout: evoparseq_host_interop::display_layout::DisplayLayout,
     hid_devices: (bool, bool),
     audio_codec: Option<evoparseq_host_interop::AudioCodec>,
     authenticated: bool,
@@ -195,6 +196,9 @@ impl evoparseq_host_interop::Sink for View {
     }
     fn raw_audio(&self) -> bool {
         self.raw_audio
+    }
+    fn display_layout(&self) -> evoparseq_host_interop::display_layout::DisplayLayout {
+        self.display_layout
     }
     fn video_config(&self) -> evoparseq_host_interop::VideoConfig {
         self.stream.config()
@@ -652,6 +656,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         rtt: None,
         audio_bytes: 0,
         raw_audio: saved.allow_raw_audio,
+        display_layout: saved.phaze_display_layout,
         hid_devices: saved.phaze_input_mode.devices(),
         audio_codec: None,
         authenticated: false,
@@ -842,6 +847,7 @@ mod tests {
                 rtt: None,
                 audio_bytes: 0,
                 raw_audio: false,
+                display_layout: Default::default(),
                 hid_devices: (false, false),
                 audio_codec: None,
                 authenticated: false,

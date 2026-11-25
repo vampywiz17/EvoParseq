@@ -471,13 +471,6 @@ pub async fn run(
     a: Answer,
     sink: &mut impl Sink,
 ) -> Result<()> {
-    let client_display = match std::env::var("EVOPARSEQ_PHAZE_CLIENT_LAYOUT") {
-        Ok(value) => Some(
-            wire::parse_client_display(&value).context("Invalid EVOPARSEQ_PHAZE_CLIENT_LAYOUT")?,
-        ),
-        Err(std::env::VarError::NotPresent) => None,
-        Err(error) => return Err(error).context("Invalid EVOPARSEQ_PHAZE_CLIENT_LAYOUT"),
-    };
     sink.stage("probing_authenticated_stun");
     let peer = tokio::time::timeout(
         Duration::from_secs(30),
@@ -568,10 +561,11 @@ pub async fn run(
     if usb_probe.is_some() {
         sink.usb_probe_event("started", None, 0);
     }
-    if client_display.is_some() {
+    let display_layout = sink.display_layout();
+    if display_layout.enabled {
         sink.stage("requesting_client_display_layout");
     }
-    for p in reliable.frame(&wire::hello(sink.raw_audio(), client_display))? {
+    for p in reliable.frame(&wire::hello(sink.raw_audio(), display_layout))? {
         send(&mut c, &p)?;
     }
     let transmission_started = Instant::now();

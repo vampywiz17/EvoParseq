@@ -71,7 +71,7 @@ impl Desktop {
             + egui::vec2(((ui.available_width() - s::WIDTH as f32) / 2.).max(24.), 0.);
         let r = |rect| rect_at(origin, s::positioned(rect));
         let footer = if phaze {
-            [860, 1034, 626, 570]
+            [860, f::PHAZE_VIDEO_FOOTER, 626, 570]
         } else {
             [1150, 1034, 750, 570]
         }[self.ui_state.tab];
@@ -141,6 +141,11 @@ impl Desktop {
             .iter()
             .filter(|row| row.tab == tab && (row.group == 0 || usize::from(row.group) == group))
             .filter(|row| {
+                phaze
+                    || ![f::MIRROR_DISPLAY.label, f::VIRTUAL_DISPLAY_RESOLUTION.label]
+                        .contains(&row.label)
+            })
+            .filter(|row| {
                 !phaze
                     || ![
                         f::STUN_SERVERS.label,
@@ -203,6 +208,41 @@ impl Desktop {
                                 s::TRANSPORT_CHOICES[1],
                             );
                         });
+                });
+            } else if row.label == f::MIRROR_DISPLAY.label {
+                use evoparseq_host_interop::display_layout::MIRROR_CHOICES;
+                let enabled = &mut draft.values.phaze_display_layout.enabled;
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    egui::ComboBox::from_id_salt(row.label)
+                        .width(rect.width())
+                        .selected_text(MIRROR_CHOICES[usize::from(*enabled)])
+                        .show_ui(ui, |ui| {
+                            for (index, text) in MIRROR_CHOICES.iter().copied().enumerate() {
+                                ui.selectable_value(enabled, index == 1, text);
+                            }
+                        });
+                });
+            } else if row.label == f::VIRTUAL_DISPLAY_RESOLUTION.label {
+                use evoparseq_host_interop::display_layout::Resolution;
+                let display = &mut draft.values.phaze_display_layout;
+                let labels = Resolution::labels();
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    ui.add_enabled_ui(display.enabled, |ui| {
+                        egui::ComboBox::from_id_salt(row.label)
+                            .width(rect.width())
+                            .selected_text(labels[display.resolution.index()])
+                            .show_ui(ui, |ui| {
+                                for (index, text) in labels.into_iter().enumerate() {
+                                    if let Some(resolution) = Resolution::from_index(index) {
+                                        ui.selectable_value(
+                                            &mut display.resolution,
+                                            resolution,
+                                            text,
+                                        );
+                                    }
+                                }
+                            });
+                    });
                 });
             } else if row.label == f::VIDEO_FORMAT.label {
                 use crate::connection_settings::VideoFormat;

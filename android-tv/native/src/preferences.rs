@@ -5,6 +5,9 @@ use crate::session_preferences::{
     PARSEC_BANDWIDTH_CHOICES, PHAZE_BANDWIDTH_CHOICES, RESOLUTION_CHOICES,
 };
 use anyhow::{ensure, Result};
+use evoparseq_host_interop::display_layout::{
+    DisplayLayout, Resolution, MIRROR_CHOICES, MIRROR_HELP, MIRROR_LABEL, RESOLUTION_LABEL,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -18,6 +21,8 @@ pub struct Preferences {
     pub transport: usize,
     pub video: usize,
     pub resolution: usize,
+    #[serde(default)]
+    pub phaze_display_layout: DisplayLayout,
     pub fps: usize,
     pub bandwidth: usize,
     /// Parsec-only selection; legacy bandwidth is retained for Phaze.
@@ -44,6 +49,7 @@ impl Default for Preferences {
             pacing: 0,
             video: 0,
             resolution: 0,
+            phaze_display_layout: DisplayLayout::default(),
             fps: FPS_CHOICES.iter().position(|s| *s == "60").unwrap(),
             bandwidth: LEGACY_BANDWIDTH_CHOICES
                 .iter()
@@ -109,6 +115,21 @@ impl Preferences {
             Ok(index == 1)
         };
         match field {
+            "mirror_display" => {
+                ensure!(!parsec, "Mirror display requires Phaze.");
+                ensure!(index < MIRROR_CHOICES.len(), "Invalid display setting.");
+                self.phaze_display_layout.enabled = index == 1;
+                return Ok(());
+            }
+            "virtual_display_resolution" => {
+                ensure!(
+                    !parsec && self.phaze_display_layout.enabled,
+                    "Enable Mirror display to choose a virtual display resolution."
+                );
+                self.phaze_display_layout.resolution = Resolution::from_index(index)
+                    .ok_or_else(|| anyhow::anyhow!("Invalid resolution."))?;
+                return Ok(());
+            }
             "audio_custom" => audio.custom = boolean()?,
             "audio_pcm" => audio.pcm = boolean()?,
             "audio_surround" => audio.surround = boolean()?,
@@ -191,6 +212,25 @@ impl Preferences {
                 };
                 json!({"key":key,"label":label,"choices":choices,"selected":selected,"group":if key=="transport" || key=="bandwidth" {"Network"} else {"Video"}})
             }).collect();
+        if phaze {
+            let layout = self.phaze_display_layout;
+            rows.push(json!({
+                "key": "mirror_display",
+                "label": MIRROR_LABEL,
+                "choices": MIRROR_CHOICES,
+                "selected": usize::from(layout.enabled),
+                "group": "Video"
+            }));
+            if layout.enabled {
+                rows.push(json!({
+                    "key": "virtual_display_resolution",
+                    "label": RESOLUTION_LABEL,
+                    "choices": Resolution::labels(),
+                    "selected": layout.resolution.index(),
+                    "group": "Video"
+                }));
+            }
+        }
         for (key, label, selected) in [
             ("audio_custom", "Custom audio buffer", self.audio.custom),
             (
@@ -228,8 +268,11 @@ impl Preferences {
         ] {
             rows.push(json!({"key":key,"label":label,"choices":BUFFER_MS.iter().map(|v|format!("{v} ms")).collect::<Vec<_>>(),"selected":BUFFER_MS.iter().position(|v|*v==value).unwrap_or(0),"group":"Audio"}));
         }
+        let request_hint =
+            "Requests apply to your next connection. The host chooses the actual video format.";
         json!({"ok":true,"settings":self,"rows":rows,
-            "request_hint":"Requests apply to your next connection. The host chooses the actual video format.",
+            "request_hint":request_hint,
+            "video_hint":if phaze {MIRROR_HELP} else {request_hint},
             "audio_hint":if phaze {"Applies to your next connection. Phaze delivers 48 kHz stereo AAC-LC or uncompressed PCM."} else {"Applies to the next connection. Default buffering preserves existing latency. A larger minimum can smooth jitter but adds delay. PCM needs more bandwidth. Surround requires LOWLAT and a verified 5.1/7.1 output; otherwise stereo is used."},
             "diagnostic_hint":"Enable logging before reproducing the issue, then save or share the bounded diagnostic archive. It contains operational events and device information, excluding credentials, clipboard and media content."})
     }
@@ -280,6 +323,28 @@ impl Preferences {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mirror_display_is_opt_in_and_retains_the_selected_resolution() -> Result<()> {
+        let mut saved = Preferences::default();
+        let resolution = "virtual_display_resolution";
+        assert!(saved.select_for_service(resolution, 0, false).is_err());
+        assert!(saved.select_for_service("mirror_display", 1, true).is_err());
+        saved.select_for_service("mirror_display", 1, false)?;
+        saved.select_for_service(resolution, Resolution::Hd.index(), false)?;
+        let phaze = saved.view_for(crate::account::Service::Phaze);
+        let rows = phaze["rows"].as_array().unwrap();
+        assert!(rows.iter().any(|row| row["key"] == resolution));
+        assert!(saved
+            .select_for_service(resolution, usize::MAX, false)
+            .is_err());
+
+        saved.select_for_service("mirror_display", 0, false)?;
+        let saved = Preferences::parse(&serde_json::to_string(&saved)?)?;
+        assert!(!saved.phaze_display_layout.enabled);
+        assert_eq!(saved.phaze_display_layout.resolution, Resolution::Hd);
+        Ok(())
+    }
 
     #[test]
     fn parsec_bandwidth_presets_do_not_raise_phaze_stream_limit() -> Result<()> {

@@ -46,6 +46,8 @@ const FORGET_TOKEN: usize = 4114;
 const STATUS: usize = 4115;
 const GPU: usize = 4116;
 const VIDEO_FORMAT: usize = 4117;
+const MIRROR_DISPLAY: usize = 4141;
+const VIRTUAL_DISPLAY_RESOLUTION: usize = 4142;
 #[cfg(feature = "lowlat")]
 const LOWLAT: usize = 4119;
 const LOWLAT_EXTRA: i32 = if cfg!(feature = "lowlat") { 94 } else { 0 };
@@ -674,6 +676,29 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
         page.font,
     );
     controls::combo(ai);
+    if page.model.phaze {
+        use crate::app_style::forms;
+        use evoparseq_host_interop::display_layout::{Resolution, MIRROR_CHOICES};
+        let display = s.phaze_display_layout;
+        let resolutions = Resolution::labels();
+        for (id, row, labels, selected) in [
+            (
+                MIRROR_DISPLAY,
+                forms::MIRROR_DISPLAY,
+                MIRROR_CHOICES,
+                usize::from(display.enabled),
+            ),
+            (
+                VIRTUAL_DISPLAY_RESOLUTION,
+                forms::VIRTUAL_DISPLAY_RESOLUTION,
+                resolutions.as_slice(),
+                display.resolution.index(),
+            ),
+        ] {
+            row_label(hwnd, page, row.label, row.help, row.y, 0, row.help_height);
+            choice(hwnd, page, id, row.y, labels, selected);
+        }
+    }
     page.building_tab = Some(Tab::Network);
     page.building_feature = Feature::ParsecNetwork;
     #[cfg(feature = "lowlat")]
@@ -1045,6 +1070,7 @@ unsafe fn layout(hwnd: HWND) {
                 680
             }
         }
+        Tab::Video if page.model.phaze => crate::app_style::forms::PHAZE_VIDEO_FOOTER,
         Tab::Video => 1034,
     };
     let height = footer + 138 + HEADER_EXTRA;
@@ -1241,13 +1267,23 @@ unsafe fn binary_choice(hwnd: HWND, page: &mut Page, id: usize, y: i32) {
     choice(hwnd, page, id, y, &labels, 0);
 }
 fn mode_combo(id: usize) -> bool {
-    matches!(id, VIDEO_FORMAT | INPUT_MODE | ROUTE_MODE | IMMERSIVE)
-        || binary_choice_kind(id).is_some()
+    matches!(
+        id,
+        VIDEO_FORMAT | INPUT_MODE | ROUTE_MODE | IMMERSIVE | MIRROR_DISPLAY | VIRTUAL_DISPLAY_RESOLUTION
+    ) || binary_choice_kind(id).is_some()
 }
 fn mode_label(id: usize, index: u32, model: &Form) -> &'static str {
     let index = index as usize;
     if id == VIDEO_FORMAT {
         VideoFormat::LABELS.get(index).copied()
+    } else if id == MIRROR_DISPLAY {
+        evoparseq_host_interop::display_layout::MIRROR_CHOICES
+            .get(index)
+            .copied()
+    } else if id == VIRTUAL_DISPLAY_RESOLUTION {
+        evoparseq_host_interop::display_layout::Resolution::labels()
+            .get(index)
+            .copied()
     } else if id == INPUT_MODE {
         InputMode::LABELS.get(index).copied()
     } else if id == IMMERSIVE {
@@ -1326,6 +1362,14 @@ unsafe fn read_options(hwnd: HWND, page: &mut Page) {
     if let Some(mode) = format {
         mode.apply(s);
     }
+    if model.phaze {
+        s.phaze_display_layout.enabled = selection(hwnd, MIRROR_DISPLAY) == 1;
+        if let Some(resolution) = evoparseq_host_interop::display_layout::Resolution::from_index(
+            selection(hwnd, VIRTUAL_DISPLAY_RESOLUTION),
+        ) {
+            s.phaze_display_layout.resolution = resolution;
+        }
+    }
     s.experimental_chroma_444 = checked(hwnd, CHROMA_444);
     if let Some(backend) = page.ai_upscaler {
         backend.apply(s, selection(hwnd, AI_UPSCALE));
@@ -1392,6 +1436,10 @@ unsafe fn update_enabled(hwnd: HWND) {
         );
     }
     if page.model.phaze {
+        EnableWindow(
+            GetDlgItem(hwnd, VIRTUAL_DISPLAY_RESOLUTION as i32),
+            i32::from(page.model.values.phaze_display_layout.enabled),
+        );
         for id in [STUN, TCP_QOS] {
             EnableWindow(GetDlgItem(hwnd, id as i32), 0);
         }
@@ -1660,7 +1708,9 @@ unsafe extern "system" fn page_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LP
                     return 0;
                 }
 
-                CHROMA_444 | AI_UPSCALE if (wp >> 16) as u32 == CBN_SELCHANGE => {
+                CHROMA_444 | AI_UPSCALE | MIRROR_DISPLAY
+                    if (wp >> 16) as u32 == CBN_SELCHANGE =>
+                {
                     update_enabled(hwnd);
                     return 0;
                 }
@@ -2302,6 +2352,17 @@ mod tests {
             );
             assert_no_overlaps(page);
             capture(page, "phaze-video");
+            let resolution = GetDlgItem(page, VIRTUAL_DISPLAY_RESOLUTION as i32);
+            assert!(!resolution.is_null());
+            assert_eq!(IsWindowEnabled(resolution), 0);
+            select(page, MIRROR_DISPLAY, 1);
+            SendMessageW(
+                page,
+                WM_COMMAND,
+                MIRROR_DISPLAY | ((CBN_SELCHANGE as usize) << 16),
+                0,
+            );
+            assert_ne!(IsWindowEnabled(resolution), 0);
             SendMessageW(page, WM_COMMAND, AUDIO_TAB, 0);
             assert_ne!(
                 GetWindowLongW(GetDlgItem(page, AUDIO_CUSTOM as i32), GWL_STYLE) as u32

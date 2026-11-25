@@ -47,6 +47,7 @@ pub fn run(
         },
         pcm,
         saved.allow_raw_audio,
+        saved.phaze_display_layout,
     )
     .with_hid_devices(saved.phaze_input_mode.devices());
     let result = account::phaze_runtime(async {

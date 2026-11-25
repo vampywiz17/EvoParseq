@@ -7,24 +7,23 @@ are described in [libmatoya's header](https://github.com/snowcone-ltd/libmatoya/
 See [interoperability and source provenance](INTEROPERABILITY.md) for the
 research methods and test-data policy.
 
-## Experimental single-display layout
+## Mirror display
 
-By default, the client sends an empty display list in the authenticated hello.
-To test a single client display against a compatible host, launch EvoParseq with
-`EVOPARSEQ_PHAZE_CLIENT_LAYOUT=1920x1200`. The setting accepts WIDTHxHEIGHT,
-320–8192 by 240–4320, up to 33,177,600 pixels. Remove the variable and relaunch
-to restore the default.
+In Phaze **Settings → Video**, enable **Mirror display** and choose a
+**Virtual display resolution** before connecting. Windows, Linux and
+Android TV use the same Rust presets. The option is off by default.
+The selected resolution is remembered when you turn mirroring off.
 
-A successful stock-client session on a Phaze 0.14.3 host recorded guest options
-`0x100`, applied one client display and exposed a 1920×1200 output during a
-DisplayPort power-off reconnect. The experiment sends that option alongside
-one synthetic primary display in the reconstructed hello format. The host
-controls display creation and reports available outputs. EvoParseq starts the
-usual primary-preferred active output with the regular 20-second startup
-deadline. If the host still advertises only the unusable physical output, the
-session can still time out. Whether the host accepts the synthetic description
-and delivers video requires a live test. This vendor-specific experiment is off
-by default.
+The setting requests one synthetic primary display in the authenticated
+hello with option `0x100`. The host provisions its virtual display, determines
+the actual mode and may replace physical host displays. With mirroring off,
+the hello uses the normal empty display list. This uses the vendor's protocol
+and requires a compatible host.
+
+A Phaze 0.14.3 test with the DisplayPort monitor powered off delivered video
+from the host's virtual output. The same DP capture failure also occurred
+with the stock client when mirroring was disabled. Resolution changes apply
+when a new session starts. The supported presets are requests to the host.
 
 ## Audio and input
 
