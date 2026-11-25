@@ -207,11 +207,13 @@ pub(crate) fn video_header_output_matches(header: &[u8], output: u32) -> u8 {
         return 0;
     }
     header
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .take(5)
         .enumerate()
         .fold(0, |mask, (index, word)| {
-            mask | (u8::from(be(word, 0) == output) << index)
+            mask | (u8::from(u32::from_be_bytes(*word) == output) << index)
         })
 }
 

@@ -234,7 +234,9 @@ impl Desktop {
                             .width(rect.width())
                             .selected_text(DisplayCount::LABELS[display.count.index()])
                             .show_ui(ui, |ui| {
-                                for (count, label) in DisplayCount::ALL.into_iter().zip(DisplayCount::LABELS) {
+                                for (count, label) in
+                                    DisplayCount::ALL.into_iter().zip(DisplayCount::LABELS)
+                                {
                                     ui.selectable_value(&mut display.count, count, label);
                                 }
                             });
