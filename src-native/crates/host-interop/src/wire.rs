@@ -163,12 +163,14 @@ pub(crate) fn video_request(
     let start = config.request(output)?;
     let stop = previous
         .filter(|&previous| previous != output || recovering)
-        .map(|previous| {
-            let mut command = [4; 5];
-            command[1..].copy_from_slice(&previous.to_be_bytes());
-            command
-        });
+        .map(stop_video);
     Ok((stop, start))
+}
+
+pub(crate) fn stop_video(output: u32) -> [u8; 5] {
+    let mut command = [4; 5];
+    command[1..].copy_from_slice(&output.to_be_bytes());
+    command
 }
 
 #[cfg(test)]

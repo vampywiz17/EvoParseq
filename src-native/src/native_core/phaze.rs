@@ -346,6 +346,10 @@ impl evoparseq_host_interop::Sink for View {
         crate::interop_session::log_display_video_header(output, match_mask);
     }
 
+    fn parallel_display_probe(&mut self, status: &'static str) {
+        crate::interop_session::log_parallel_display_probe(status);
+    }
+
     fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()> {
         if reset {
             self.video.encoder_rebuilt();

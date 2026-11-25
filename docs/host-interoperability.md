@@ -26,8 +26,18 @@ The client currently selects one host output at a time. With event logging
 enabled, a multi-display request can log `phaze_display_video_header_observed`
 after opening or switching the selected output. It records the selected
 output ID and which aligned header words match it, without recording raw
-headers or encoded video. A match only identifies a candidate field for
-controlled multi-stream validation.
+headers or encoded video. In a test with two host virtual displays, the
+first aligned 32-bit big-endian word matched each selected output across
+repeated switches.
+
+For a controlled test of independent streams, enable the event log and launch
+the desktop client with `EVOPARSEQ_PHAZE_VERIFY_PARALLEL=1`. Request two displays,
+connect using standard input and leave the primary session alone while the
+probe runs. It temporarily opens another advertised active output at a low
+video rate, looks for video from both outputs, then sends stop for the second
+output and checks for continued primary video. Results appear in
+`phaze_parallel_display_probe`. The secondary video is discarded before decode.
+This opt-in diagnostic does not open another window.
 
 A Phaze 0.14.3 test with the DisplayPort monitor powered off delivered video
 from the host's virtual output. The same DP capture failure also occurred

@@ -1,4 +1,4 @@
-use super::{wire, Answer, Sink};
+use super::{wire, Answer, Sink, VideoConfig};
 use anyhow::{bail, ensure, Context, Result};
 use hmac::{Hmac, Mac};
 use purecrypto::{
@@ -583,6 +583,11 @@ pub async fn run(
     let mut display_header_probe = display_layout
         .requests(1)
         .then(wire::DisplayHeaderProbe::default);
+    let mut parallel_display_probe = (display_layout.requests(1)
+        && !hid_mouse
+        && !hid_keyboard
+        && std::env::var_os("EVOPARSEQ_PHAZE_VERIFY_PARALLEL").is_some_and(|value| value == "1"))
+    .then(crate::parallel_display_probe::Probe::default);
     let mut input = Vec::new();
     let mut controls = Vec::new();
     let mut deferred_motion = None;
@@ -628,6 +633,36 @@ pub async fn run(
                 let request = update.or_else(|| {
                     selected_output.filter(|_| recovering).map(|output| (output, sink.video_config()))
                 });
+                if let Some(probe) = parallel_display_probe.as_mut() {
+                    let now = Instant::now();
+                    let updating = request.is_some();
+                    if updating || probe.stop_due(now) {
+                        if let Some(output) = probe.stop(now, updating) {
+                            for packet in reliable.frame(&wire::stop_video(output))? {
+                                send(&mut c, &packet)?;
+                            }
+                            if updating {
+                                sink.parallel_display_probe("interrupted");
+                            }
+                        }
+                    } else if probe.waiting() && video_received && reliable.pending().count() < 48 {
+                        if let Some(primary) = selected_output {
+                            if let Some(secondary) = outputs_available.iter().find(|output: &&wire::Output| {
+                                output.active && output.id != primary
+                            }) {
+                                let config = VideoConfig { mbps: 3, fps: 5, ..VideoConfig::default() };
+                                for packet in reliable.frame(&config.request(secondary.id)?)? {
+                                    send(&mut c, &packet)?;
+                                }
+                                probe.start(primary, secondary.id, now);
+                                sink.parallel_display_probe("started");
+                            }
+                        }
+                    }
+                    if probe.finish_due(now) {
+                        sink.parallel_display_probe("primary_not_seen_after_stop");
+                    }
+                }
                 if let Some((output,config))=request {
                     ensure!(outputs_available.iter().any(|o: &wire::Output| o.id==output && o.active), "Phaze display is unavailable");
                     let changing_output = selected_output != Some(output);
@@ -754,6 +789,17 @@ pub async fn run(
                         ) {
                             if let Some(mask) = probe.observe(output, &frame[1..]) {
                                 sink.display_video_header_observed(output, mask);
+                            }
+                        }
+                        if let Some(probe) = parallel_display_probe.as_mut() {
+                            let output = wire::be(&frame[1..], 0);
+                            if !bytes.is_empty() {
+                                if let Some(status) = probe.frame(output, Instant::now()) {
+                                    sink.parallel_display_probe(status);
+                                }
+                            }
+                            if selected_output != Some(output) {
+                                continue;
                             }
                         }
                         let flags = u32::from_be_bytes(frame[9..13].try_into().unwrap());

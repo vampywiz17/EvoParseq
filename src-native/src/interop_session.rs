@@ -150,6 +150,14 @@ impl Stream {
     }
 }
 
+pub fn log_parallel_display_probe(status: &'static str) {
+    crate::event_log::record(
+        "INFO",
+        "phaze_parallel_display_probe",
+        serde_json::json!({"status":status}),
+    );
+}
+
 pub fn log_display_video_header(output: u32, match_mask: u8) {
     crate::event_log::record(
         "INFO",

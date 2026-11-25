@@ -8,6 +8,7 @@ mod cursor;
 mod datagram;
 pub mod display_layout;
 mod input;
+mod parallel_display_probe;
 mod transport;
 pub mod turn;
 mod usb_hid;
@@ -246,6 +247,7 @@ pub trait Sink {
     fn stage(&mut self, stage: &'static str);
     fn outputs(&mut self, outputs: &[Output]);
     fn display_video_header_observed(&mut self, _output: u32, _match_mask: u8) {}
+    fn parallel_display_probe(&mut self, _status: &'static str) {}
     fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()>;
     /// Audio payload bytes are measured before decoding; headers are excluded.
     fn audio(&mut self, pcm: &[i16], codec: AudioCodec, payload_bytes: usize) -> Result<()>;
