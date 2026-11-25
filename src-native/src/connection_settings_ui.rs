@@ -1269,7 +1269,12 @@ unsafe fn binary_choice(hwnd: HWND, page: &mut Page, id: usize, y: i32) {
 fn mode_combo(id: usize) -> bool {
     matches!(
         id,
-        VIDEO_FORMAT | INPUT_MODE | ROUTE_MODE | IMMERSIVE | MIRROR_DISPLAY | VIRTUAL_DISPLAY_RESOLUTION
+        VIDEO_FORMAT
+            | INPUT_MODE
+            | ROUTE_MODE
+            | IMMERSIVE
+            | MIRROR_DISPLAY
+            | VIRTUAL_DISPLAY_RESOLUTION
     ) || binary_choice_kind(id).is_some()
 }
 fn mode_label(id: usize, index: u32, model: &Form) -> &'static str {
@@ -1708,9 +1713,7 @@ unsafe extern "system" fn page_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LP
                     return 0;
                 }
 
-                CHROMA_444 | AI_UPSCALE | MIRROR_DISPLAY
-                    if (wp >> 16) as u32 == CBN_SELCHANGE =>
-                {
+                CHROMA_444 | AI_UPSCALE | MIRROR_DISPLAY if (wp >> 16) as u32 == CBN_SELCHANGE => {
                     update_enabled(hwnd);
                     return 0;
                 }
