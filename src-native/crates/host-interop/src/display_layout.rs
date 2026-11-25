@@ -31,7 +31,7 @@ impl DisplayLayout {
     }
 
     pub fn requests(self, index: usize) -> bool {
-        self.enabled && index < self.count.len()
+        self.enabled && index < self.count.total()
     }
 
     pub fn resolutions(self) -> [Resolution; 4] {
@@ -67,7 +67,7 @@ impl DisplayCount {
         self as usize
     }
 
-    pub(crate) fn len(self) -> usize {
+    pub(crate) fn total(self) -> usize {
         self.index() + 1
     }
 }

@@ -581,7 +581,7 @@ pub async fn run(
     heartbeat_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut selected_output = None;
     let mut display_header_samples = 0;
-    let probe_display_headers = display_layout.enabled && display_layout.count.len() > 1;
+    let probe_display_headers = display_layout.enabled && display_layout.count.total() > 1;
     let mut input = Vec::new();
     let mut controls = Vec::new();
     let mut deferred_motion = None;

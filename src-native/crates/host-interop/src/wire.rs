@@ -126,7 +126,11 @@ pub(crate) fn hello(raw_audio: bool, layout: DisplayLayout) -> Vec<u8> {
 
     let mut b = vec![18];
     b.extend(flags.to_be_bytes());
-    let count = if layout.enabled { layout.count.len() } else { 0 };
+    let count = if layout.enabled {
+        layout.count.total()
+    } else {
+        0
+    };
     b.extend((count as u32).to_be_bytes());
     let mut left = 0;
     for (index, resolution) in layout.resolutions().into_iter().take(count).enumerate() {
