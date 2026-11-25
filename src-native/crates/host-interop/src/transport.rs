@@ -1,4 +1,4 @@
-use super::{wire, Answer, Sink, VideoConfig};
+use super::{parallel_display_probe, wire, Answer, Sink};
 use anyhow::{bail, ensure, Context, Result};
 use hmac::{Hmac, Mac};
 use purecrypto::{
@@ -587,7 +587,7 @@ pub async fn run(
         && !hid_mouse
         && !hid_keyboard
         && std::env::var_os("EVOPARSEQ_PHAZE_VERIFY_PARALLEL").is_some_and(|value| value == "1"))
-    .then(crate::parallel_display_probe::Probe::default);
+    .then(parallel_display_probe::Probe::default);
     let mut input = Vec::new();
     let mut controls = Vec::new();
     let mut deferred_motion = None;
@@ -634,33 +634,32 @@ pub async fn run(
                     selected_output.filter(|_| recovering).map(|output| (output, sink.video_config()))
                 });
                 if let Some(probe) = parallel_display_probe.as_mut() {
-                    let now = Instant::now();
-                    let updating = request.is_some();
-                    if updating || probe.stop_due(now) {
-                        if let Some(output) = probe.stop(now, updating) {
-                            for packet in reliable.frame(&wire::stop_video(output))? {
+                    let action = probe.poll(
+                        Instant::now(),
+                        selected_output,
+                        &outputs_available,
+                        video_received && reliable.pending().count() < 48,
+                        request.is_some(),
+                    )?;
+                    match action {
+                        Some(parallel_display_probe::Action::Start(message)) => {
+                            for packet in reliable.frame(&message)? {
                                 send(&mut c, &packet)?;
                             }
-                            if updating {
+                            sink.parallel_display_probe("started");
+                        }
+                        Some(parallel_display_probe::Action::Stop(message, interrupted)) => {
+                            for packet in reliable.frame(&message)? {
+                                send(&mut c, &packet)?;
+                            }
+                            if interrupted {
                                 sink.parallel_display_probe("interrupted");
                             }
                         }
-                    } else if probe.waiting() && video_received && reliable.pending().count() < 48 {
-                        if let Some(primary) = selected_output {
-                            if let Some(secondary) = outputs_available.iter().find(|output: &&wire::Output| {
-                                output.active && output.id != primary
-                            }) {
-                                let config = VideoConfig { mbps: 3, fps: 5, ..VideoConfig::default() };
-                                for packet in reliable.frame(&config.request(secondary.id)?)? {
-                                    send(&mut c, &packet)?;
-                                }
-                                probe.start(primary, secondary.id, now);
-                                sink.parallel_display_probe("started");
-                            }
+                        Some(parallel_display_probe::Action::Status(status)) => {
+                            sink.parallel_display_probe(status);
                         }
-                    }
-                    if probe.finish_due(now) {
-                        sink.parallel_display_probe("primary_not_seen_after_stop");
+                        None => {}
                     }
                 }
                 if let Some((output,config))=request {
@@ -792,13 +791,16 @@ pub async fn run(
                             }
                         }
                         if let Some(probe) = parallel_display_probe.as_mut() {
-                            let output = wire::be(&frame[1..], 0);
-                            if !bytes.is_empty() {
-                                if let Some(status) = probe.frame(output, Instant::now()) {
-                                    sink.parallel_display_probe(status);
-                                }
+                            let (keep, status) = probe.video(
+                                &frame[1..],
+                                selected_output,
+                                !bytes.is_empty(),
+                                Instant::now(),
+                            );
+                            if let Some(status) = status {
+                                sink.parallel_display_probe(status);
                             }
-                            if selected_output != Some(output) {
+                            if !keep {
                                 continue;
                             }
                         }
