@@ -66,15 +66,6 @@ impl PresentationMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum VsrRuntimeConsent {
-    #[default]
-    Ask,
-    Allowed,
-    Declined,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GpuPreference {
@@ -121,24 +112,24 @@ impl GpuPreference {
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub native_core: crate::native_core::profile::Profile,
-    #[cfg(any(feature = "bud", target_os = "linux"))]
-    #[serde(alias = "experimentalBud")]
-    pub bud: bool,
-    #[cfg(any(feature = "bud", target_os = "linux"))]
+    #[cfg(any(feature = "lowlat", target_os = "linux"))]
+    // Keep the persisted key readable by previous releases.
+    #[serde(rename = "bud", alias = "experimentalBud")]
+    pub lowlat: bool,
+    #[cfg(any(feature = "lowlat", target_os = "linux"))]
     #[cfg_attr(target_os = "linux", serde(rename = "experimentalHidMouse"))]
     #[cfg_attr(not(target_os = "linux"), serde(alias = "experimentalHidMouse"))]
     pub hid_mouse: bool,
-    #[cfg(any(feature = "bud", target_os = "linux"))]
+    #[cfg(any(feature = "lowlat", target_os = "linux"))]
     #[cfg_attr(target_os = "linux", serde(rename = "experimentalHidKeyboard"))]
     #[cfg_attr(not(target_os = "linux"), serde(alias = "experimentalHidKeyboard"))]
     pub hid_keyboard: bool,
     pub phaze_input_mode: InputMode,
     pub prefer_hevc: bool,
     pub presentation_mode: PresentationMode,
-    /// Optional RTX Video quality: 0 off, 1..=4 low through ultra.
+    /// NVIDIA driver VSR preference: 0 off; previous nonzero quality levels mean on.
     pub nvidia_vsr: u8,
     pub intel_ai_vsr: bool,
-    pub vsr_runtime_consent: VsrRuntimeConsent,
     pub experimental_ten_bit: bool,
     pub experimental_chroma_444: bool,
     pub event_logging: bool,
@@ -187,8 +178,8 @@ impl Settings {
         }
     }
     pub fn nvidia_vsr_quality(&self, vendor: Option<u32>) -> u8 {
-        if cfg!(nvidia_vsr_sdk) && vendor == Some(0x10de) {
-            self.nvidia_vsr.min(4)
+        if cfg!(windows) && vendor == Some(0x10de) {
+            u8::from(self.nvidia_vsr != 0)
         } else {
             0
         }
@@ -199,18 +190,17 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             native_core: Default::default(),
-            #[cfg(any(feature = "bud", target_os = "linux"))]
-            bud: false,
-            #[cfg(any(feature = "bud", target_os = "linux"))]
+            #[cfg(any(feature = "lowlat", target_os = "linux"))]
+            lowlat: false,
+            #[cfg(any(feature = "lowlat", target_os = "linux"))]
             hid_mouse: false,
-            #[cfg(any(feature = "bud", target_os = "linux"))]
+            #[cfg(any(feature = "lowlat", target_os = "linux"))]
             hid_keyboard: false,
             phaze_input_mode: InputMode::Standard,
             prefer_hevc: false,
             presentation_mode: PresentationMode::Automatic,
             nvidia_vsr: 0,
             intel_ai_vsr: false,
-            vsr_runtime_consent: VsrRuntimeConsent::Ask,
             experimental_ten_bit: false,
             experimental_chroma_444: false,
             event_logging: false,
@@ -241,14 +231,14 @@ impl Default for Settings {
     }
 }
 impl Settings {
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     pub fn hid_mouse_enabled(&self) -> bool {
-        self.bud && self.hid_mouse
+        self.lowlat && self.hid_mouse
     }
 
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     pub fn hid_keyboard_enabled(&self) -> bool {
-        self.bud && self.hid_keyboard
+        self.lowlat && self.hid_keyboard
     }
 
     fn fresh() -> Self {
@@ -389,6 +379,7 @@ struct Cached {
 }
 
 impl Manager {
+    #[cfg(target_os = "linux")]
     pub fn directory(&self) -> PathBuf {
         self.path
             .parent()
@@ -508,13 +499,6 @@ impl Manager {
             settings.native_core.video.validate()
         })
     }
-    /// Local setup consent must be saveable before TURN credentials exist.
-    pub fn update_vsr_consent(&self, consent: VsrRuntimeConsent) -> Result<()> {
-        self.update_local(|settings| {
-            settings.vsr_runtime_consent = consent;
-            Ok(())
-        })
-    }
     pub(crate) fn update_local(
         &self,
         update: impl FnOnce(&mut Settings) -> Result<()>,
@@ -540,12 +524,12 @@ impl Manager {
         }
         self.resolve_settings(&settings).await
     }
-    /// Explicit BUD adapter: freeze preferences and credentials together.
+    /// Explicit LOWLAT adapter: freeze preferences and credentials together.
     #[cfg(any(
-        all(windows, feature = "bud"),
+        all(windows, feature = "lowlat"),
         all(target_os = "linux", feature = "desktop-telemetry")
     ))]
-    pub async fn resolve_bud(&self) -> Result<(Settings, Vec<RTCIceServer>)> {
+    pub async fn resolve_lowlat(&self) -> Result<(Settings, Vec<RTCIceServer>)> {
         let (settings, error) = self.view();
         if error.is_some() {
             bail!("Fix connection settings before connecting");
@@ -559,10 +543,10 @@ impl Manager {
     }
 
     #[cfg(any(
-        all(windows, feature = "bud"),
+        all(windows, feature = "lowlat"),
         all(target_os = "linux", feature = "desktop-telemetry")
     ))]
-    pub async fn resolve_bud_relay(&self, settings: &Settings) -> Result<Vec<RTCIceServer>> {
+    pub async fn resolve_lowlat_relay(&self, settings: &Settings) -> Result<Vec<RTCIceServer>> {
         if settings.stun_only {
             bail!("TURN is disabled by STUN-only settings");
         }
@@ -704,14 +688,14 @@ fn atomic_write(path: &std::path::Path, raw: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     #[test]
     fn promoted_settings_accept_old_keys_and_save_current_names() {
         let settings: Settings = serde_json::from_str(
             r#"{"provider":"custom","experimentalBud":true,"experimentalAudioBuffer":true,"experimentalRawAudio":true,"audioMinBufferMs":20,"audioMaxBufferMs":60,"experimentalSurroundAudio":true}"#,
         )
         .unwrap();
-        assert!(settings.bud && settings.custom_audio_buffer && settings.allow_raw_audio);
+        assert!(settings.lowlat && settings.custom_audio_buffer && settings.allow_raw_audio);
         assert!(settings.experimental_surround_audio);
         assert_eq!(
             (settings.audio_min_buffer_ms, settings.audio_max_buffer_ms),
@@ -730,9 +714,9 @@ mod tests {
             assert!(saved.get(key).is_none());
         }
         let restored: Settings = serde_json::from_value(saved).unwrap();
-        assert!(restored.bud && restored.custom_audio_buffer && restored.allow_raw_audio);
+        assert!(restored.lowlat && restored.custom_audio_buffer && restored.allow_raw_audio);
     }
-    #[cfg(all(feature = "bud", any(feature = "vendor-video", target_os = "linux")))]
+    #[cfg(all(feature = "lowlat", any(feature = "vendor-video", target_os = "linux")))]
     #[test]
     fn promoted_video_and_hid_preferences_preserve_legacy_profiles() {
         let settings: Settings = serde_json::from_str(
@@ -783,7 +767,7 @@ mod tests {
             assert_eq!(restored.phaze_input_mode, mode);
         }
     }
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     #[test]
     fn hid_input_preference_roundtrips_without_enabling_webrtc_input() {
         let mut s: Settings = serde_json::from_str("{}").unwrap();
@@ -793,7 +777,7 @@ mod tests {
         let restored: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert!(restored.hid_mouse);
         assert!(!restored.hid_mouse_enabled());
-        s.bud = true;
+        s.lowlat = true;
         assert!(s.hid_mouse_enabled());
     }
 
@@ -1101,34 +1085,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod runtime_consent_tests {
-    use super::*;
-    #[test]
-    fn consent_can_be_saved_before_network_configuration_without_losing_profile() {
-        let dir =
-            std::env::temp_dir().join(format!("evoparseq-vsr-consent-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.json");
-        let mut settings = Settings::default();
-        settings.native_core.encrypted_session = "opaque-existing-protected-session".into();
-        std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
-        let manager = Manager::open(path.clone());
-        assert!(manager.view().0.validate().is_err());
-        manager
-            .update_vsr_consent(VsrRuntimeConsent::Allowed)
-            .unwrap();
-        let restored = Manager::open(path).view().0;
-        assert_eq!(restored.vsr_runtime_consent, VsrRuntimeConsent::Allowed);
-        assert_eq!(
-            restored.native_core.encrypted_session,
-            settings.native_core.encrypted_session
-        );
-        std::fs::remove_file(dir.join("settings.json")).unwrap();
-        std::fs::remove_dir(dir).unwrap();
-    }
-}
-
 /// Compound choices retain the existing settings schema and transport rules.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VideoFormat {
@@ -1213,8 +1169,8 @@ impl BinaryChoice {
             #[cfg(not(target_os = "linux"))]
             Self::Rendering => ["Normal GPU rendering", "Zero copy (HEVC)"],
             Self::AudioBuffer => ["Default (core limits)", "Custom limits"],
-            Self::AudioCodec => ["Opus", "Allow raw PCM (BUD)"],
-            Self::Speakers => ["Stereo", "Match output layout (experimental, BUD)"],
+            Self::AudioCodec => ["Opus", "Allow raw PCM (LOWLAT)"],
+            Self::Speakers => ["Stereo", "Match output layout (experimental, LOWLAT)"],
         }
     }
 }
@@ -1248,7 +1204,7 @@ impl InputMode {
             matches!(self, Self::HidKeyboard | Self::HidBoth),
         )
     }
-    /// Parsec BUD and Phaze have separate persisted input preferences.
+    /// Parsec LOWLAT and Phaze have separate persisted input preferences.
     pub fn for_service(s: &Settings, phaze: bool) -> Self {
         if phaze {
             s.phaze_input_mode
@@ -1264,7 +1220,7 @@ impl InputMode {
         }
     }
     pub fn current(s: &Settings) -> Self {
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         {
             match (s.hid_mouse, s.hid_keyboard) {
                 (false, false) => Self::Standard,
@@ -1273,19 +1229,19 @@ impl InputMode {
                 (true, true) => Self::HidBoth,
             }
         }
-        #[cfg(not(feature = "bud"))]
+        #[cfg(not(feature = "lowlat"))]
         {
             let _ = s;
             Self::Standard
         }
     }
     pub fn apply(self, s: &mut Settings) {
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         {
             s.hid_mouse = matches!(self, Self::HidMouse | Self::HidBoth);
             s.hid_keyboard = matches!(self, Self::HidKeyboard | Self::HidBoth);
         }
-        #[cfg(not(feature = "bud"))]
+        #[cfg(not(feature = "lowlat"))]
         {
             let _ = (self, s);
         }

@@ -105,7 +105,7 @@ pub mod settings {
     #[cfg(target_os = "linux")]
     pub const NETWORK_RECT: [i32; 4] = [0, 204, 820, 25];
     pub const TRANSPORT_Y: i32 = 844;
-    pub const TRANSPORT_CHOICES: [&str; 2] = ["WebRTC", "BUD"];
+    pub const TRANSPORT_CHOICES: [&str; 2] = ["WebRTC", "lowlat"];
     pub const fn label(y: i32) -> [i32; 4] {
         [0, y + 2, 392, 24]
     }

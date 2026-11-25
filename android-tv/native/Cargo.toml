@@ -6,17 +6,17 @@ publish = false
 license = "MIT"
 rust-version = "1.95"
 
-# Shared sources contain Windows-only feature-gated BUD/HID helpers. Accept
-# the cfg name without enabling those helpers; Android uses its own BUD adapter.
+# Shared sources contain Windows-only feature-gated LOWLAT/HID helpers. Accept
+# the cfg name without enabling those helpers; Android uses its own LOWLAT adapter.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("bud", "desktop-telemetry"))'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("lowlat", "desktop-telemetry"))'] }
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-evoparseq-phaze = { path = "../../src-native/crates/phaze" }
-evoparseq-bud = { path = "../../src-native/crates/bud" }
+evoparseq-host-interop = { path = "../../src-native/crates/host-interop" }
+evoparseq-lowlat = { path = "../../src-native/crates/lowlat" }
 anyhow = "1"
 serde_json = "1.0.154"
 serde = { version = "1", features = ["derive"] }
@@ -73,5 +73,5 @@ opt-level = 3
 opt-level = 3
 
 [patch."https://github.com/nomi-san/lowlat"]
-lowlat-core = { path = "../../src-native/crates/bud/vendor/lowlat-core" }
-lowlat-crypto = { path = "../../src-native/crates/bud/vendor/lowlat-crypto" }
+lowlat-core = { path = "../../src-native/crates/lowlat/vendor/lowlat-core" }
+lowlat-crypto = { path = "../../src-native/crates/lowlat/vendor/lowlat-crypto" }

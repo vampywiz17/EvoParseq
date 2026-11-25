@@ -17,7 +17,7 @@ Windows and Linux reuse display-stream enable/input framing, host configuration
 patches and confirmation, GPU hardware matching, input/clipboard engines and
 canonical secondary-panel action descriptors. Linux-specific code creates
 viewports, translates their events, routes their compressed sinks and owns their
-Vulkan decoders. The BUD receive-ring adapter previously enabled only on Windows
+Vulkan decoders. The lowlat receive-ring adapter previously enabled only on Windows
 is now enabled on Linux too; Android's target-specific path remains unchanged.
 
 The saved GPU schema is unchanged. Linux supplies a stable hash of its Vulkan
@@ -163,7 +163,7 @@ This is a background-video suspension policy, not continuous background video
 decoding. Tests cover a long hidden interval, focus return, cached-parameter
 replay with an IDR lacking parameters, delta gating, repeated window switches,
 the shared recovery timeout and failed refresh requests. Live validation of
-BUD and WebRTC recovery remains necessary.
+lowlat and WebRTC recovery remains necessary.
 
 ## Linux WebRTC binding (0.1.4)
 
@@ -187,14 +187,14 @@ The shared reader's Linux sink is a small UI-independent `NativeSink` trait;
 the Linux frontend supplies its implementation. Android's Linux-hosted Rust
 tests therefore do not acquire an egui/playback dependency. New queued control
 receipts unpark the already existing Linux network consumer, as account
-signaling and BUD already do. The 16-message control bound, SCTP ordering,
+signaling and lowlat already do. The 16-message control bound, SCTP ordering,
 reliability, ICE/DTLS timers and cipher negotiation are unchanged. The Linux
 failure report includes the failed channel and bounded queue counters, without
 SDP, credentials or payload text.
 
 ## Current cleanup and media boundaries (0.1.6)
 
-The legacy Test WebRTC/Test BUD UI actions, headless media sink and eight-second
+The legacy Test WebRTC/Test lowlat UI actions, headless media sink and eight-second
 sample/deadline branch have been removed. Actual playback always binds its
 native video sink. The remaining capability page and --probe-video command are
 supported driver diagnostics. Synthetic H.264 fixtures and test sink/queue
@@ -204,7 +204,7 @@ Failure timing counters remain bounded and useful for regression diagnosis.
 | Layer | Shared Rust | Required platform adapter / remaining difference |
 | --- | --- | --- |
 | WebRTC | attempt, protocol/control, detached media readers, inspector, audio decoder | Native video sink and OS presentation/output |
-| BUD | SDK/header parsing; Windows and Linux additionally share bud_ingress, bounded video-first pump and encoder/keyframe rules | Android still has its own pump/gating adapter; it is not identical to bud_ingress |
+| lowlat | SDK/header parsing; Windows and Linux additionally share lowlat_ingress, bounded video-first pump and encoder/keyframe rules | Android still has its own pump/gating adapter; it is not identical to lowlat_ingress |
 | Video queue | video_output bounds, recovery, timing and buffer recycling; codec parameter cache | Vulkan session/interop, D3D11/MF/vendor decoders, MediaCodec/Surface |
 | Audio | audio_stream Opus/PCM validation, decode and budgets | Linux PipeWire and Android AAudio use the shared callback ring; Windows uses its WASAPI adapter |
 
@@ -249,7 +249,7 @@ The logo is decoded/uploaded once as a UI asset, independently of decoded video.
 
 The Linux event adapter translates egui events to the existing desktop_input
 Engine and input_handoff Inbox (also used by Android). The connection worker
-owns the shared engine; normal control frames use BUD send_frame or WebRTC's
+owns the shared engine; normal control frames use lowlat send_frame or WebRTC's
 control channel. UI input unparks that existing worker; no new input thread,
 transport queue, timer or GPU copy is added. The current presented image extent
 is atomically published for the shared coordinate mapping. The presentation
@@ -292,9 +292,9 @@ work. Windows UI substitutions retain their exact previous values; Windows and
 Android CI must pass independently of the Linux Flatpak checks.
 
 
-## Android shared BUD ingress
+## Android shared lowlat ingress
 
-The Android adapter now uses the same bud_ingress.rs session capabilities,
+The Android adapter now uses the same lowlat_ingress.rs session capabilities,
 borrowed media parsing, encoder-generation resets, parameter/IDR gate and
 bounded video-first/audio pump as Windows/Linux. MediaCodec/Surface and AAudio
 remain Android adapters. There is no new media queue or decoded-image copy.

@@ -14,7 +14,7 @@ use std::sync::{
 pub enum Event {
     NativeSession(Command),
     #[cfg(windows)]
-    PhazeControl(evoparseq_phaze::ClientControl),
+    PhazeControl(evoparseq_host_interop::ClientControl),
     Shortcut(crate::input::Shortcut),
     // Resize is a notification; the view supplies current dimensions.
     Size,
@@ -31,7 +31,7 @@ pub enum Event {
     Key(bool, &'static str, i32),
     Scroll(i32, i32),
     Fullscreen(bool),
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     HidInputRelease,
 }
 
@@ -122,12 +122,12 @@ pub struct State {
     pub hid_primary_ready: AtomicBool,
 }
 
-pub use crate::phaze_session::PhazePeers;
+pub use crate::interop_session::PhazePeers;
 
 impl State {
     pub fn supported_video(&self, video: Video) -> Video {
         if self.phaze.load(Ordering::Acquire) {
-            crate::phaze_session::supported_video(video)
+            crate::interop_session::supported_video(video)
         } else {
             video
         }
@@ -150,7 +150,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn phaze_actions_require_current_admin_and_host_targets() {
-        use evoparseq_phaze::ClientControl;
+        use evoparseq_host_interop::ClientControl;
         let mut peers = PhazePeers {
             local_id: Some(1),
             state: serde_json::from_value(serde_json::json!({

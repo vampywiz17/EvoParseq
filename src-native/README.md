@@ -1,6 +1,6 @@
 # EvoParseq native client
 
-The default build is the native Rust application, with WebRTC/BUD, Win32 UI,
+The default build is the native Rust application, with WebRTC/lowlat, Win32 UI,
 GPU video decoding/presentation, audio, input and account/session handling.
 
 ```powershell

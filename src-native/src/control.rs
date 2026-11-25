@@ -113,7 +113,7 @@ fn cursor_payload(bytes: &[u8]) -> Result<(usize, usize)> {
 }
 
 /// A scheduling hint from validated host metadata, never from button state.
-#[cfg(all(windows, feature = "bud"))]
+#[cfg(all(windows, feature = "lowlat"))]
 pub(crate) fn cursor_capture(bytes: &[u8]) -> Option<bool> {
     if bytes.get(12) != Some(&9) {
         return None;
@@ -389,7 +389,7 @@ mod tests {
         );
     }
 
-    #[cfg(all(windows, feature = "bud"))]
+    #[cfg(all(windows, feature = "lowlat"))]
     #[test]
     fn cursor_wakeup_uses_validated_host_capture_flags_only() {
         let mut frame = vec![0; 34];

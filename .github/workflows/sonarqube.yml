@@ -51,9 +51,6 @@ jobs:
           Expand-Archive -LiteralPath $archive -DestinationPath $destination
           $destination | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           Install-Module Pester -RequiredVersion 5.7.1 -Repository PSGallery -Scope CurrentUser -Force -AllowClobber
-      - name: Prepare the normal optional vendor SDK
-        shell: pwsh
-        run: ./scripts/fetch-rtx-video-sdk.ps1 -Destination (Join-Path $env:RUNNER_TEMP 'rtx-video-sdk-1.1.0')
       - name: Measure actual Rust test execution
         shell: pwsh
         run: |
@@ -181,3 +178,39 @@ jobs:
             -Dsonar.exclusions=ci-tests/**,coverage/**
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      # Keep the real Quality Gate enforced; log the failed metrics without
+      # changing thresholds or exposing the SONAR_TOKEN credential.
+      - name: Explain failed pull-request Quality Gate
+        if: failure() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          response="$(mktemp)"
+          trap 'rm -f "$response"' EXIT
+          if curl --fail --silent --show-error --max-time 30 \
+            -u "$SONAR_TOKEN:" \
+            --get 'https://sonarcloud.io/api/qualitygates/project_status' \
+            --data-urlencode 'projectKey=vampywiz17_EvoParseq' \
+            --data-urlencode "pullRequest=$PR_NUMBER" \
+            --output "$response"; then
+            python - "$response" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as file:
+              gate = json.load(file)["projectStatus"]
+          print("PR Quality Gate:", gate.get("status"))
+          for condition in gate.get("conditions", []):
+              print(" - {metricKey}: {status} actual={actualValue} threshold={errorThreshold}".format(**{
+                  "metricKey": condition.get("metricKey"),
+                  "status": condition.get("status"),
+                  "actualValue": condition.get("actualValue"),
+                  "errorThreshold": condition.get("errorThreshold"),
+              }))
+          PY
+          else
+            echo 'Could not retrieve SonarQube PR gate metrics; original scanner failure remains enforced.'
+          fi

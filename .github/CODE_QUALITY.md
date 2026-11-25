@@ -4,7 +4,7 @@
 a PR ready for review. It also runs on `dev` pushes or manual dispatch. Results
 appear in the PR's Checks tab; they do not approve or merge the PR.
 
-- **Clippy (Windows):** application, BUD workspace, video adapter, QoS tool and
+- **Clippy (Windows):** application, lowlat workspace, video adapter, QoS tool and
   TURN integration tests, including all features and test targets. Warnings fail
   the check. This covers the Windows implementation, not an unmerged macOS port.
 - **Dependency policy:** `cargo-deny` 0.20.2 checks the five dependency graphs

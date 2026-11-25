@@ -53,7 +53,7 @@ pub struct Screen {
     pub window: Arc<Window>,
     pub video: Arc<crate::video_windows::Pipeline>,
     pub inspector: Arc<Mutex<crate::video_stream::Inspector>>,
-    ingress: Mutex<crate::bud_ingress::VideoState>,
+    ingress: Mutex<crate::lowlat_ingress::VideoState>,
     input: Mutex<Input>,
     batch: Mutex<std::collections::VecDeque<Event>>,
     pointer: Mutex<Pointer>,
@@ -153,7 +153,7 @@ impl Displays {
         );
         ensure!(
             !attempt.hid_mouse_enabled()
-                && !(attempt.name() == "BUD" && manager.view().0.hid_keyboard_enabled()),
+                && !(attempt.name() == "lowlat" && manager.view().0.hid_keyboard_enabled()),
             "Additional displays require normal mouse input"
         );
         ensure!(self.get(stream).is_none(), "Display is already open");
@@ -175,7 +175,7 @@ impl Displays {
         }
         let video = Arc::new(crate::video_windows::Pipeline::start(
             window.clone(),
-            if attempt.name() == "BUD" {
+            if attempt.name() == "lowlat" {
                 crate::video_output::DisplayCatchUpPolicy::Fixed
             } else {
                 crate::video_output::DisplayCatchUpPolicy::Adaptive
@@ -194,7 +194,7 @@ impl Displays {
             window,
             video,
             inspector: Arc::new(Mutex::new(inspector)),
-            ingress: Mutex::new(crate::bud_ingress::VideoState::new(
+            ingress: Mutex::new(crate::lowlat_ingress::VideoState::new(
                 flags & 1 != 0,
                 flags & 0x10 != 0,
                 flags & 2 != 0,
@@ -326,7 +326,7 @@ impl Displays {
         Ok(())
     }
 
-    pub fn pump_bud(&self, source: &mut evoparseq_bud::bud::MediaSource) -> Result<()> {
+    pub fn pump_lowlat(&self, source: &mut evoparseq_lowlat::lowlat::MediaSource) -> Result<()> {
         for stream in 1..STREAMS {
             let screen = self.get(stream);
             for _ in 0..16 {

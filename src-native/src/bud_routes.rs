@@ -1,12 +1,12 @@
-//! Shared BUD TURN URL ordering and endpoint resolution, independent of UI/OS.
+//! Shared LOWLAT TURN URL ordering and endpoint resolution, independent of UI/OS.
 use anyhow::{ensure, Result};
-use evoparseq_bud::bud::Route;
+use evoparseq_lowlat::lowlat::Route;
 use std::{collections::VecDeque, time::Duration};
 
 pub(crate) fn relay_carrier(
     url: &webrtc::ice::url::Url,
-) -> Option<evoparseq_bud::bud::RelayTransport> {
-    use evoparseq_bud::bud::RelayTransport;
+) -> Option<evoparseq_lowlat::lowlat::RelayTransport> {
+    use evoparseq_lowlat::lowlat::RelayTransport;
     use webrtc::ice::url::{ProtoType, SchemeType};
     match (url.scheme, url.proto) {
         (SchemeType::Turn, ProtoType::Udp) => Some(RelayTransport::Udp),
@@ -27,8 +27,8 @@ pub(crate) async fn turn_relays(
             let url = webrtc::ice::url::Url::parse_url(raw)?;
             if let Some(carrier) = relay_carrier(&url) {
                 let priority = match carrier {
-                    evoparseq_bud::bud::RelayTransport::Udp => 0,
-                    evoparseq_bud::bud::RelayTransport::Tls { .. } => 1,
+                    evoparseq_lowlat::lowlat::RelayTransport::Udp => 0,
+                    evoparseq_lowlat::lowlat::RelayTransport::Tls { .. } => 1,
                     _ if url.port == 80 => 2,
                     _ => 3,
                 };
@@ -63,14 +63,14 @@ pub(crate) async fn turn_relays(
     .collect();
     ensure!(
         !routes.is_empty(),
-        "BUD requires a reachable UDP, TLS or TCP TURN URL"
+        "LOWLAT requires a reachable UDP, TLS or TCP TURN URL"
     );
     Ok(routes)
 }
 
 // Force TURN starts on the selected relay carrier; otherwise try direct UDP first.
 #[cfg(any(
-    all(windows, feature = "bud"),
+    all(windows, feature = "lowlat"),
     all(target_os = "linux", feature = "desktop-telemetry")
 ))]
 pub(crate) async fn route(
@@ -80,12 +80,12 @@ pub(crate) async fn route(
     Option<VecDeque<Route>>,
     crate::connection_settings::Settings,
 )> {
-    let (settings, servers) = manager.resolve_bud().await?;
+    let (settings, servers) = manager.resolve_lowlat().await?;
     if settings.force_relay {
         let mut routes = turn_relays(servers).await?;
         let first = routes
             .pop_front()
-            .ok_or_else(|| anyhow::anyhow!("BUD requires a supported TURN URL"))?;
+            .ok_or_else(|| anyhow::anyhow!("LOWLAT requires a supported TURN URL"))?;
         return Ok((first, Some(routes), settings));
     }
 
@@ -108,7 +108,7 @@ pub(crate) async fn route(
 }
 
 #[cfg(any(
-    all(windows, feature = "bud"),
+    all(windows, feature = "lowlat"),
     all(target_os = "linux", feature = "desktop-telemetry")
 ))]
 pub(crate) async fn relay_route(
@@ -118,16 +118,17 @@ pub(crate) async fn relay_route(
     if settings.stun_only || (settings.provider == "custom" && settings.turn_urls.is_empty()) {
         return Ok(VecDeque::new());
     }
-    turn_relays(manager.resolve_bud_relay(settings).await?).await
+    turn_relays(manager.resolve_lowlat_relay(settings).await?).await
 }
 
 #[cfg(any(
-    all(windows, feature = "bud"),
+    all(windows, feature = "lowlat"),
     all(target_os = "linux", feature = "desktop-telemetry")
 ))]
 pub(crate) fn native_attempt_id() -> Result<String> {
     let mut random = [0u8; 24];
-    getrandom::fill(&mut random).map_err(|_| anyhow::anyhow!("BUD attempt entropy unavailable"))?;
+    getrandom::fill(&mut random)
+        .map_err(|_| anyhow::anyhow!("LOWLAT attempt entropy unavailable"))?;
     Ok(random
         .as_chunks::<4>()
         .0

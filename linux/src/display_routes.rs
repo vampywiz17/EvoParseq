@@ -18,7 +18,7 @@ pub struct Displays {
 pub struct Channel {
     pub playback: Arc<Playback>,
     pub inspector: Arc<Mutex<crate::video_stream::Inspector>>,
-    ingress: Mutex<crate::bud_ingress::VideoState>,
+    ingress: Mutex<crate::lowlat_ingress::VideoState>,
     opened: std::time::Instant,
 }
 pub fn viewport(stream: usize) -> egui::ViewportId {
@@ -63,7 +63,7 @@ impl Displays {
             opened: std::time::Instant::now(),
             playback: playback.clone(),
             inspector: Arc::new(Mutex::new(inspector)),
-            ingress: Mutex::new(crate::bud_ingress::VideoState::new(
+            ingress: Mutex::new(crate::lowlat_ingress::VideoState::new(
                 playback.hevc(),
                 playback.ten_bit(),
                 false,
@@ -137,11 +137,11 @@ impl Displays {
         }
         Ok(())
     }
-    pub fn bud(&self, source: &mut evoparseq_bud::bud::MediaSource) -> Result<bool> {
+    pub fn lowlat(&self, source: &mut evoparseq_lowlat::lowlat::MediaSource) -> Result<bool> {
         let mut pending = false;
         for stream in 1..crate::display_stream::STREAMS {
             let channel = self.get(stream);
-            for index in 0..crate::bud_ingress::PUMP_BUDGET {
+            for index in 0..crate::lowlat_ingress::PUMP_BUDGET {
                 if source
                     .with_secondary_video(stream, |bytes| {
                         if let Some(channel) = &channel {
@@ -161,7 +161,7 @@ impl Displays {
                 {
                     break;
                 }
-                pending |= index + 1 == crate::bud_ingress::PUMP_BUDGET;
+                pending |= index + 1 == crate::lowlat_ingress::PUMP_BUDGET;
             }
         }
         Ok(pending)

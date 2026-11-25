@@ -111,8 +111,8 @@ impl Desktop {
             self.fitted_stream = None;
             self.ui_state.network = None;
             let saved = self.settings.view().0;
-            self.transport = if saved.bud {
-                connection::Mode::Bud
+            self.transport = if saved.lowlat {
+                connection::Mode::Lowlat
             } else {
                 connection::Mode::WebRtc
             };
@@ -199,7 +199,7 @@ impl Desktop {
                             );
                             ui.selectable_value(
                                 &mut self.transport,
-                                connection::Mode::Bud,
+                                connection::Mode::Lowlat,
                                 s::TRANSPORT_CHOICES[1],
                             );
                         });
@@ -314,7 +314,7 @@ impl Desktop {
                                 ui.add_enabled_ui(
                                     item == InputMode::Standard
                                         || phaze
-                                        || self.transport == connection::Mode::Bud,
+                                        || self.transport == connection::Mode::Lowlat,
                                     |ui| {
                                         ui.selectable_value(&mut mode, item, text);
                                     },
@@ -348,13 +348,13 @@ impl Desktop {
                             (
                                 BinaryChoice::AudioCodec,
                                 &mut draft.values.allow_raw_audio,
-                                phaze || self.transport == connection::Mode::Bud,
+                                phaze || self.transport == connection::Mode::Lowlat,
                             )
                         } else {
                             (
                                 BinaryChoice::Speakers,
                                 &mut draft.values.experimental_surround_audio,
-                                self.transport == connection::Mode::Bud,
+                                self.transport == connection::Mode::Lowlat,
                             )
                         };
                         let labels = if phaze && row.label == f::AUDIO_FORMAT.label {
@@ -559,7 +559,7 @@ impl Desktop {
                 .network
                 .take()
                 .expect("network form initialized");
-            draft.values.bud = self.transport == connection::Mode::Bud;
+            draft.values.lowlat = self.transport == connection::Mode::Lowlat;
             self.ui_state.gpu_changed = draft.values.video_gpu != self.settings.view().0.video_gpu;
             // Retain public/encrypted form values for disabled painting only.
             // Plaintext replacement secrets move exclusively to the save worker.

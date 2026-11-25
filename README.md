@@ -18,8 +18,8 @@
 
 # EvoParseq
 
-EvoParseq is an independent remote desktop client for **Parsec and Phaze** on
-Windows, Linux Flatpak, and Android TV. A shared Rust core handles accounts,
+EvoParseq is an independent remote desktop client compatible with **Parsec**
+and experimentally with **Phaze** on Windows, Linux Flatpak, and Android TV. A shared Rust core handles accounts,
 networking, and session logic. Each platform uses its native video, audio,
 and input APIs. Both services work with their stock hosts.
 
@@ -53,9 +53,10 @@ own implementation alone and can give a misleading impression without that
 context. Dependency findings still require review; upstream origin does not
 automatically make a finding harmless or a false positive.
 
-## Phaze preview
+## Phaze compatibility preview
 
-Development builds include experimental Phaze support. Select **Phaze**
+Development builds use EvoParseq's independent Rust adapter to connect to
+compatible Phaze hosts. Select **Phaze**
 on the sign-in screen, sign in with your Phaze account, and choose a host with
 an active physical or virtual display.
 
@@ -84,20 +85,21 @@ Linux and Android TV Phaze playback uses 4:2:0.
 Windows has been tested against a stock Phaze host with H.264, audio, mouse
 input, and Cloudflare TURN over UDP. The Linux Flatpak and signed Android TV
 APK passed GitHub CI. Live Phaze streaming on those two platforms still needs
-device testing. [Phaze protocol and validation notes](docs/phaze-transport.md)
+device testing. [Phaze compatibility and validation notes](docs/host-interoperability.md)
 
 ## Parsec
 
-Parsec supports **WebRTC** and explicitly selected **BUD**. Use the host
+For Parsec hosts, EvoParseq offers **WebRTC** and an optional **lowlat**
+transport based on the open-source lowlat project. Use the host
 owner's account to sign in and choose an online computer. The platform,
 host encoder, and selected transport determine the available features.
 
 | Area | Windows | Linux Flatpak | Android TV |
 | --- | --- | --- | --- |
 | Video | GPU selection, H.264 and HEVC, compatible 10-bit SDR and 4:4:4, Zero copy and optional AI upscaling | Vulkan Video with GPU selection, H.264 and HEVC 8/10-bit 4:2:0; GPU changes take effect after restart | MediaCodec Surface playback with H.264 and HEVC 8/10-bit 4:2:0 on compatible devices |
-| Audio | Stereo Opus, configurable buffering, BUD PCM and experimental surround | PipeWire, stereo Opus, BUD PCM, and capability-gated surround | AAudio, stereo Opus, BUD PCM, and capability-gated surround |
-| Input | Mouse, keyboard, text clipboard, gamepads, and optional BUD USB HID | Native Wayland mouse and keyboard, text clipboard, gamepads, and optional BUD USB HID | D-pad navigation and remote pointer, physical mouse and keyboard, and gamepads |
-| Displays | Up to three simultaneous outputs on WebRTC or BUD | Up to three simultaneous outputs on WebRTC or BUD | One active stream output |
+| Audio | Stereo Opus, configurable buffering, lowlat PCM and experimental surround | PipeWire, stereo Opus, lowlat PCM, and capability-gated surround | AAudio, stereo Opus, lowlat PCM, and capability-gated surround |
+| Input | Mouse, keyboard, text clipboard, gamepads, and optional lowlat USB HID | Native Wayland mouse and keyboard, text clipboard, gamepads, and optional lowlat USB HID | D-pad navigation and remote pointer, physical mouse and keyboard, and gamepads |
+| Displays | Up to three simultaneous outputs on WebRTC or lowlat | Up to three simultaneous outputs on WebRTC or lowlat | One active stream output |
 
 Windows and Linux use one decoder per active display and share one audio
 output. The primary overlay opens additional host-listed outputs. Each
@@ -121,15 +123,15 @@ on a Xiaomi TV Box S (3rd Gen) running Android 14.
   Login/computer picker and Settings have fixed sizes; the stream is resizable
   and uses centered aspect fitting. Connection stats is a separate fixed-size native window.
 - **Shared Rust core:** account/2FA, discovery, session preferences, settings,
-  WebRTC/BUD, media ingress, normal input and diagnostic models are reused.
+  WebRTC/lowlat, media ingress, normal input and diagnostic models are reused.
   Linux adapters provide Vulkan Video/Vulkan, PipeWire, Wayland input and
   Secret portal credential protection.
-- **Playback:** WebRTC and explicit BUD selection, progressive H.264 or capability-gated HEVC Main/Main10 4:2:0
-  and stereo WebRTC Opus or BUD Opus/PCM with optional matched 5.1/7.1 output. Original NV12 and P010 decoder surfaces feed the same-device Vulkan
+- **Playback:** WebRTC and explicit lowlat selection, progressive H.264 or capability-gated HEVC Main/Main10 4:2:0
+  and stereo WebRTC Opus or lowlat Opus/PCM with optional matched 5.1/7.1 output. Original NV12 and P010 decoder surfaces feed the same-device Vulkan
   presentation shader; no application-side decoded-image copy or CPU readback.
   Shader conversion still costs GPU work: this is GPU-resident rendering,
   **not the application's Zero copy mode**.
-- **Controls:** normal or opt-in BUD HID mouse/keyboard, controllers/rumble,
+- **Controls:** normal or opt-in lowlat HID mouse/keyboard, controllers/rumble,
   focused text clipboard, orientation and immersive input. A
   draggable session icon, host display selection, resolution/bitrate/FPS/pacing
   requests, fullscreen, local PipeWire mute/volume and Disconnect. Host settings
@@ -142,7 +144,7 @@ on a Xiaomi TV Box S (3rd Gen) running Android 14.
   in the system installer for user confirmation. CI artifacts must first be
   published as versioned release assets to be discoverable.
 - **Network:** shared Windows STUN/custom TURN/Cloudflare configuration,
-  direct-only and Force TURN for WebRTC and BUD; protected relay secrets and
+  direct-only and Force TURN for WebRTC and lowlat; protected relay secrets and
   optional in-memory Cloudflare credentials. The QoS switch enables Linux DSCP AF21
   and SO_PRIORITY 6; network equipment may ignore these hints.
 - **Persistence:** Windows-compatible `settings.json` schema and encrypted
@@ -157,7 +159,7 @@ adaptive presentation; physical VRR remains unverified.
 
 - Google TV / Android TV interface with D-pad navigation, 2FA, grouped settings
   and encrypted remembered sign-in using Android Keystore.
-- Shared Rust account, session, WebRTC/BUD, controller and input models; Android
+- Shared Rust account, session, WebRTC/lowlat, controller and input models; Android
   adapters provide MediaCodec Surface video, AAudio and OS input/lifecycle.
 - Direct or STUN/TURN connections, Force TURN and temporary **local-only HTTPS**
   relay setup from a phone/computer, with fingerprint verification and TV approval.
@@ -166,11 +168,11 @@ adaptive presentation; physical VRR remains unverified.
 - Standard gamepads; optional remote D-pad mouse, short/long OK clicks and
   supported OK + direction dragging. Physical mouse/keyboard use normal input
   with optional capture. Windows HID passthrough is not an Android feature.
-- AAudio device recovery, optional custom buffering, BUD PCM and capability-gated
+- AAudio device recovery, optional custom buffering, lowlat PCM and capability-gated
   5.1/7.1 output; diagnostic logging with save/share export. These additions need
   live audio-device validation; WebRTC remains stereo Opus.
 
-Live-tested on Xiaomi TV Box S (3rd Gen), Android 14, including BUD at 50 Mbit/s,
+Live-tested on Xiaomi TV Box S (3rd Gen), Android 14, including lowlat at 50 Mbit/s,
 NVIDIA-encoded Main10, remote mouse and a GameSir controller. WebRTC at sustained
 50 Mbit/s still closed its video channel in this setup; around 30 Mbit/s was
 stable. This is a transport-specific observation, **not a universal hardware limit**.
@@ -190,7 +192,14 @@ See the [Android TV setup, build and compatibility guide](android-tv/README.md).
 | --- | --- |
 | Normal GPU rendering | Keeps decoded frames on the GPU and runs a color conversion pass. Start here for compatibility. |
 | Zero copy | Presents supported original decoder surfaces directly, without a separate conversion or post-processing pass. |
-| AI upscaling | Uses NVIDIA RTX VSR or Intel VPL on compatible hardware. It adds GPU work and an output copy and may increase latency. |
+| AI upscaling | Requests NVIDIA driver RTX VSR or uses Intel VPL on compatible hardware. Both may increase GPU work and latency. Intel VPL adds an output copy. |
+
+For NVIDIA RTX VSR, enable **Super Resolution** in NVIDIA App or NVIDIA Control
+Panel and select its quality there. Turn on AI upscaling in EvoParseq and reconnect
+with an NVIDIA adapter selected. EvoParseq requests VSR during D3D11 scaling of
+NV12 or P010 video. Use the NVIDIA App status indicator to confirm that the driver
+is applying it. The Windows build uses Windows graphics APIs and the installed
+driver, with no NVIDIA SDK or separate bridge download.
 
 The animation shows the order of processing. Check **Connection stats** for
 the active decoder, received chroma and bit depth, application RGB output, and
@@ -213,6 +222,8 @@ listed on the [releases page](https://github.com/vampywiz17/EvoParseq/releases).
 Choose the service at sign-in and reconnect after changing connection
 capabilities. Remembered sessions use the platform's protected storage.
 Users upgrading from ParsecWebTurn can refer to the [migration guide](MIGRATION.md).
+
+[Privacy policy](PRIVACY.md)
 
 ### Windows shortcuts
 
@@ -239,7 +250,7 @@ active routes in **Connection stats**.
 
 | Service | Routing behavior |
 | --- | --- |
-| Parsec | WebRTC or BUD can use the configured TURN service. Enable **Force TURN relay** to require a relay. |
+| Parsec | WebRTC or lowlat can use the configured TURN service. Enable **Force TURN relay** to require a relay. |
 | Phaze | Direct UDP by default. Select **Force TURN relay** to use TURN. A failed forced relay ends the connection attempt. |
 
 ### Set up Cloudflare Realtime TURN
@@ -293,7 +304,9 @@ cargo build --locked --release --manifest-path src-native/Cargo.toml
 [Architecture](docs/native-core.md) · [Development references](docs/NATIVE_REFERENCES.md) ·
 [Changelog](CHANGELOG.md) · [License](LICENSE)
 
-EvoParseq is a community project independent of Parsec, Unity, Phaze, and
-lowlat. The Phaze adapter is an original open-source Rust implementation.
+EvoParseq is a volunteer-run community project with no project revenue
+or company backing. It is independent of Parsec, Unity,
+Phaze and lowlat. Product names identify compatibility. See the
+[interoperability and source provenance notes](docs/INTEROPERABILITY.md).
 Thanks to **Duy (Nguyen Duy)** and [lowlat](https://github.com/nomi-san/lowlat)
 for feedback and MIT-licensed components retained with their license notices.

@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
   push:
     branches: [main, dev]
-    paths: ['android-tv/**', '.github/workflows/android-tv.yml', 'src-native/src/**', 'src-native/vendor/**', 'src-native/crates/bud/**', 'src-native/crates/phaze/**']
+    paths: ['android-tv/**', '.github/workflows/android-tv.yml', 'src-native/src/**', 'src-native/vendor/**', 'src-native/crates/lowlat/**', 'src-native/crates/host-interop/**']
   pull_request:
     branches: [dev]
-    paths: ['android-tv/**', '.github/workflows/android-tv.yml', 'src-native/src/**', 'src-native/vendor/**', 'src-native/crates/bud/**', 'src-native/crates/phaze/**']
+    paths: ['android-tv/**', '.github/workflows/android-tv.yml', 'src-native/src/**', 'src-native/vendor/**', 'src-native/crates/lowlat/**', 'src-native/crates/host-interop/**']
 
 permissions:
   contents: read
@@ -48,7 +48,7 @@ jobs:
           # Both crates use Rust 2021; keep this in sync with native-core cargo fmt.
           rustfmt --edition 2021 --check android-tv/native/src/preferences.rs src-native/src/session_preferences.rs
           cargo test --locked --manifest-path android-tv/native/Cargo.toml --target x86_64-unknown-linux-gnu
-          cargo test --locked --manifest-path src-native/crates/bud/Cargo.toml -p evoparseq-bud --target x86_64-unknown-linux-gnu
+          cargo test --locked --manifest-path src-native/crates/lowlat/Cargo.toml -p evoparseq-lowlat --target x86_64-unknown-linux-gnu
           cargo clippy --locked --manifest-path android-tv/native/Cargo.toml --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
       - name: Prepare Android toolchain
         run: |
@@ -131,7 +131,7 @@ jobs:
             fi
           done
           test -s dist/android-tv/SYMPHONIA-MPL-2.0.txt
-          cp src-native/crates/phaze/SYMPHONIA-NOTICE.txt dist/android-tv/
+          cp src-native/crates/host-interop/SYMPHONIA-NOTICE.txt dist/android-tv/
           mkdir -p dist/android-tv/phaze-crypto-licenses
           cp android-tv/native/vendor/purecrypto-0.10.4/LICENSE dist/android-tv/phaze-crypto-licenses/PURECRYPTO-MIT.txt
           for package in aes-gcm-0.10.3 aes-0.8.4 ghash-0.5.1 polyval-0.6.2; do
@@ -143,7 +143,7 @@ jobs:
             done
             test -s "dist/android-tv/phaze-crypto-licenses/$package-MIT.txt"
           done
-          cp src-native/crates/bud/vendor/lowlat-client/LICENSE dist/android-tv/LOWLAT-LICENSE.txt
+          cp src-native/crates/lowlat/vendor/lowlat-client/LICENSE dist/android-tv/LOWLAT-LICENSE.txt
           git rev-parse HEAD > dist/android-tv/SOURCE.txt
           sha256sum dist/android-tv/EvoParseq-TV.apk > dist/android-tv/SHA256.txt
           cp android-tv/app/build/reports/lint-results-release.html dist/android-tv/

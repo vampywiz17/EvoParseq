@@ -7,9 +7,9 @@ D-pad navigation, two-factor sign-in and shared Rust account/session logic.
 ## Streaming preview
 
 - Connect to an unmodified official Parsec host using **WebRTC direct/STUN**
-  (default) or **BUD direct UDP**.
+  (default) or **lowlat direct UDP**.
   Configure Cloudflare or custom STUN/TURN in Network settings. WebRTC uses its
-  existing ICE selection; BUD tries direct UDP and configured TURN carriers in
+  existing ICE selection; lowlat tries direct UDP and configured TURN carriers in
   UDP/TLS/TCP order (or TURN only when forced). Neither transport silently falls
   back to the other. No browser, WASM or stock SDK is bundled.
 - Hardware **MediaCodec to SurfaceView Surface**, using asynchronous NDK callbacks.
@@ -18,7 +18,7 @@ D-pad navigation, two-factor sign-in and shared Rust account/session logic.
 - H.264 8-bit 4:2:0 is the default. Request HEVC 8/10-bit 4:2:0 in Settings when
   supported. The host chooses the actual format; Main10 is not HDR.
 - Shared Rust Opus/PCM decoder and bounded queues; 48 kHz AAudio pull output.
-  BUD optionally requests raw PCM and the verified output's 5.1/7.1 speaker layout.
+  lowlat optionally requests raw PCM and the verified output's 5.1/7.1 speaker layout.
   WebRTC remains stereo Opus. API 29-31 and outputs without explicit supported
   positions use stereo; API 32+ channel-mask functions are resolved at runtime.
   The callback never waits on the session worker, allocates or issues stream commands.
@@ -45,7 +45,7 @@ D-pad navigation, two-factor sign-in and shared Rust account/session logic.
   payload bitrate and actual codec/depth. It hides after five idle seconds;
   OK/Menu/Back restores it, with Hide and Disconnect buttons. RTT queries pause
   while hidden; no GPU timing or pixel readback is introduced.
-- Shared Rust controller state/lifecycle and full-state protocol on BUD and WebRTC.
+- Shared Rust controller state/lifecycle and full-state protocol on lowlat and WebRTC.
   Android reads standard gamepad/joystick events; Windows uses native XInput.
   Up to four pads; press a face button after hiding the overlay to join the host.
   Local menus/focus loss release controllers; removal sends an explicit unplug.
@@ -53,11 +53,11 @@ D-pad navigation, two-factor sign-in and shared Rust account/session logic.
   gyro and adaptive-trigger passthrough are not implemented. Device compatibility
   and vibration require live testing. Android vibration uses the controller's
   own vibrator, if exposed, without assuming separate motor identities.
-  No HDR, 4:4:4, AI upscaling or rotated BUD output is advertised.
+  No HDR, 4:4:4, AI upscaling or rotated lowlat output is advertised.
 
 Live video is confirmed on the Xiaomi box for H.264 and HEVC 8-bit, and HEVC
 Main10 with NVIDIA encoding. The AMD host test returned 8-bit. The user found
-BUD at 50 Mbps stable in the later build, while sustained WebRTC 50 Mbps still
+lowlat at 50 Mbps stable in the later build, while sustained WebRTC 50 Mbps still
 caused growing delay and video-channel closure on Ethernet and Wi-Fi. WebRTC
 around 30 Mbps was stable. The earlier proposed universal 30-35 Mbps hardware
 ceiling was not supported once the two transports were compared.
@@ -102,14 +102,14 @@ included in status/log output. Network settings take effect on the next stream.
 Closing setup, leaving the app, starting a stream, or the five-minute deadline
 stops the server. No port forwarding, public binding or remote setup is provided.
 
-Local setup and BUD streaming have been live-tested by the user.
+Local setup and lowlat streaming have been live-tested by the user.
 HTTPS, origin/Host checks, bounds, wrong-code rejection and pending approval have
 isolated tests; they do not replace real browser/TV and TURN tests.
 
 ## Shared architecture
 
 The Android crate compiles the existing account, authenticated signaling,
-WebRTC/ICE/DTLS/SCTP and BUD, control framing, audio decoder, video inspection/queue and
+WebRTC/ICE/DTLS/SCTP and lowlat, control framing, audio decoder, video inspection/queue and
 request-validation sources directly. Android-specific code only handles JNI,
 Surface/MediaCodec, AAudio and TV UI/lifecycle. Windows retains its own media and
 input backends. No decoded-frame conversion/copy layer is added to Windows.
@@ -169,12 +169,12 @@ its own directional controls.
 Some remotes cannot report simultaneous
 OK and direction presses; dragging requires a remote that supports that chord.
 
-Physical USB/Bluetooth keyboards and mice use normal Parsec input, on BUD and
+Physical USB/Bluetooth keyboards and mice use normal Parsec input, on lowlat and
 WebRTC. Mouse capture is enabled by default while the overlay is hidden, and
 can be disabled in the overlay. Ctrl+Shift+M releases input and opens controls.
 Focus loss and device removal release held input. Physical keyboard scan codes
 preserve key positions; matching host/client keyboard layouts are recommended.
-This does not enable the Windows BUD HID passthrough mode.
+This does not enable the Windows lowlat HID passthrough mode.
 
 Mouse gestures, keyboard encoding and bounded input handoff are shared Rust;
 Android only translates OS events/capture and draws a small cursor overlay.

@@ -1,12 +1,14 @@
 # EvoParseq development references
 
-EvoParseq is an independent implementation for compatible Parsec hosts. External
-projects are research inputs, not compatibility guarantees.
+EvoParseq is an independent client for compatible Parsec and Phaze hosts.
+See [interoperability and source provenance](INTEROPERABILITY.md) for the
+research methods and distinction between local test authorization and vendor
+approval.
 
 ## lowlat
 
 [nomi-san/lowlat](https://github.com/nomi-san/lowlat), MIT, provides the pinned
-protocol, parser, GPU-driver and BUD transport components identified in the local
+parser, GPU-driver and compatible transport components identified in the local
 `EVOPARSEQ.md` provenance notices. Original copyrights and licenses are retained.
 Only the components required by this application are included; no lowlat SDK,
 host, capture stack or second application/session implementation is embedded.
@@ -36,7 +38,7 @@ that every compressed stream will decode successfully.
   retain their upstream licenses and document changes in `EVOPARSEQ.md`.
   The DTLS 0.13 patch upgrades its NIST curve dependencies without replacing
   the protocol engine; see `src-native/vendor/dtls-0.13.0/EVOPARSEQ.md` for the
-  exact scope and omitted, unused binary state export/import. The pinned BUD
+  exact scope and omitted, unused binary state export/import. The pinned lowlat
   crypto subset retains its credentials and ring record code while omitting
   lowlat's unrelated browser-certificate generator; see its `EVOPARSEQ.md`.
 - Vendor codec documentation and runtime capability queries. Device vendor
@@ -207,6 +209,11 @@ additional encoder: validate an actual secondary keyframe/picture. The installed
 VDD, owner/account policy, driver state and extended desktop remain host-side
 requirements. There is no new VDD-creation feature in the client from this review.
 
-## Experimental Phaze adapter (local development branch)
+## Experimental Phaze-compatible adapter
 
-The independent Rust implementation is in [src-native/crates/phaze](../src-native/crates/phaze/README.md). Protocol field layouts were established through authorized interoperability observations; no Phaze native source, binary extracts, SDK or runtime libraries are incorporated. Authentication, DTLS and wire parsing use original EvoParseq code and open-source Rust dependencies. The crate README records the experimental crypto status, non-EMS compatibility requirement, validated scope and unimplemented features. Windows reuses the existing video inspector, decoder and renderer.
+The [adapter](../src-native/crates/host-interop/README.md) is EvoParseq's Rust
+implementation for compatible Phaze hosts. Its message layouts were derived from
+observations on maintainer-controlled test systems. Authentication, DTLS and
+wire parsing use EvoParseq code and open-source Rust dependencies. The crate
+README records the scope of validation. Windows reuses the existing video
+inspector, decoder and renderer.

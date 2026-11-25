@@ -288,9 +288,9 @@ unsafe fn update_metrics(hwnd: HWND, panel: &mut Panel) {
 
 fn phaze_guest_items(
     peers: &super::session_model::PhazePeers,
-    mut item: impl FnMut(&str, Option<evoparseq_phaze::ClientControl>),
+    mut item: impl FnMut(&str, Option<evoparseq_host_interop::ClientControl>),
 ) {
-    use evoparseq_phaze::ClientControl;
+    use evoparseq_host_interop::ClientControl;
     let display_name = |name: &str| {
         name.chars()
             .filter(|ch| !ch.is_control())
@@ -351,7 +351,7 @@ fn phaze_guest_items(
 }
 
 unsafe fn phaze_guests_menu(hwnd: HWND, window: &crate::window::Window) {
-    use evoparseq_phaze::ClientControl;
+    use evoparseq_host_interop::ClientControl;
     let menu = CreatePopupMenu();
     if menu.is_null() {
         return;
@@ -1281,7 +1281,7 @@ mod tests {
     #[test]
     fn phaze_guest_menu_only_offers_admin_actions_for_current_peers() {
         use super::super::session_model::PhazePeers;
-        use evoparseq_phaze::ClientControl;
+        use evoparseq_host_interop::ClientControl;
 
         fn items(peers: &PhazePeers) -> Vec<(String, Option<ClientControl>)> {
             let mut items = Vec::new();
@@ -1374,8 +1374,8 @@ mod tests {
         window.session.phaze.store(true, Ordering::Release);
         window.session.displays.lock().unwrap().loading = true;
         let path = std::env::temp_dir().join(format!(
-            "evoparseq-phaze-panel-{}.json",
-            crate::bud_attempt::native_attempt_id().unwrap()
+            "evoparseq-host-interop-panel-{}.json",
+            crate::lowlat_attempt::native_attempt_id().unwrap()
         ));
         window.install_connection_settings(crate::connection_settings::Manager::open(path));
         unsafe {
@@ -1479,7 +1479,7 @@ mod tests {
         *window.session.display_resolution.lock().unwrap() = Resolution::Fixed(1536, 864);
         let path = std::env::temp_dir().join(format!(
             "evoparseq-secondary-panel-{}.json",
-            crate::bud_attempt::native_attempt_id().unwrap()
+            crate::lowlat_attempt::native_attempt_id().unwrap()
         ));
         window.install_connection_settings(crate::connection_settings::Manager::open(path));
         unsafe {
@@ -1531,7 +1531,7 @@ mod tests {
         let _close = Close(window.clone());
         let path = std::env::temp_dir().join(format!(
             "evoparseq-overlay-fixture-{}.json",
-            crate::bud_attempt::native_attempt_id().unwrap()
+            crate::lowlat_attempt::native_attempt_id().unwrap()
         ));
         struct Remove(std::path::PathBuf);
         impl Drop for Remove {
@@ -1596,7 +1596,7 @@ mod tests {
                         | crate::window::Event::Motion(..)
                         | crate::window::Event::RelativeMotion(..)
                 )),
-                "Badge dragging must stay local"
+                "Badge dragging must stay local; unexpected queued events: {drag_events:?}"
             );
             if let Some(path) = std::env::var_os("EVOPARSEQ_UI_CAPTURE") {
                 let path = std::path::PathBuf::from(path).with_file_name("stream-waiting.png");

@@ -12,21 +12,21 @@ pub enum AiUpscaler {
 impl AiUpscaler {
     pub fn for_vendor(vendor: Option<u32>) -> Self {
         match vendor {
-            Some(0x10de) if cfg!(nvidia_vsr_sdk) => Self::Nvidia,
+            Some(0x10de) if cfg!(windows) => Self::Nvidia,
             Some(0x8086) if cfg!(feature = "vendor-video") => Self::Intel,
             _ => Self::Unavailable,
         }
     }
     pub fn labels(self) -> &'static [&'static str] {
         match self {
-            Self::Nvidia => &["Off", "Low", "Medium", "High", "Ultra"],
+            Self::Nvidia => &["Off", "On"],
             Self::Intel => &["Off", "On"],
             Self::Unavailable => &["Unavailable for selected GPU"],
         }
     }
     pub fn hint(self) -> &'static str {
         match self {
-            Self::Nvidia => "Experimental NVIDIA RTX VSR; normal GPU rendering.\nAdds GPU work/memory and may increase latency.\nActivates when upscaling; reconnect after changing.",
+            Self::Nvidia => "Request RTX VSR from the NVIDIA driver when upscaling.\nEnable Super Resolution and select quality in NVIDIA App.\nGPU processing may increase latency. Reconnect after changing.",
             Self::Intel => "Experimental Intel VPL AI; hardware support unverified.\n8-bit SDR, normal GPU rendering; may increase latency.\nRequires driver support; reconnect after changing.",
             Self::Unavailable => "AI upscaling is unavailable for the selected GPU.\nNVIDIA RTX and supported Intel GPU/driver combinations only.\nNormal GPU rendering remains available.",
         }
@@ -40,7 +40,7 @@ impl AiUpscaler {
     }
     pub fn selection(self, settings: &Settings) -> usize {
         match self {
-            Self::Nvidia => usize::from(settings.nvidia_vsr.min(4)),
+            Self::Nvidia => usize::from(settings.nvidia_vsr != 0),
             Self::Intel => usize::from(settings.intel_ai_vsr),
             Self::Unavailable => 0,
         }
@@ -78,7 +78,7 @@ impl Tab {
             Self::Network => crate::network_settings::NOTICE,
             Self::Video => "Video options are requests/preferences, not guaranteed results; compatibility fallback may apply.\nCheck Connection stats for the actual stream format, decoder and fallback.\nVideo changes apply to your next connection.",
             Self::Audio => "Audio changes apply on your next connection.",
-            Self::Input => "Enable BUD on the Network tab to use HID input.\nInput changes apply to your next connection.",
+            Self::Input => "Enable LOWLAT on the Network tab to use HID input.\nInput changes apply to your next connection.",
         }
     }
 }
@@ -100,7 +100,7 @@ pub use crate::connection_settings::RouteMode;
 pub use crate::connection_settings::VideoFormat;
 
 pub struct Availability {
-    pub bud: bool,
+    pub lowlat: bool,
     pub audio_limits: bool,
     pub ai_upscale: bool,
     pub chroma_444: bool,
@@ -261,12 +261,12 @@ impl Form {
         }
         let relay = !self.values.stun_only;
         Availability {
-            bud: !self.phaze && {
-                #[cfg(feature = "bud")]
+            lowlat: !self.phaze && {
+                #[cfg(feature = "lowlat")]
                 {
-                    self.values.bud
+                    self.values.lowlat
                 }
-                #[cfg(not(feature = "bud"))]
+                #[cfg(not(feature = "lowlat"))]
                 {
                     false
                 }
@@ -408,7 +408,7 @@ mod tests {
         let mut form = form();
         form.values.allow_raw_audio = true;
         form.values.experimental_surround_audio = true;
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         {
             form.values.hid_mouse = true;
             form.values.hid_keyboard = true;
@@ -428,7 +428,7 @@ mod tests {
                 assert_eq!(enabled.custom_turn, !stun_only && !cloudflare);
                 assert_eq!(enabled.cloudflare_turn, !stun_only && cloudflare);
                 assert!(!enabled.audio_limits);
-                assert!(!enabled.bud);
+                assert!(!enabled.lowlat);
             }
         }
         form.values.custom_audio_buffer = true;
@@ -438,10 +438,10 @@ mod tests {
         assert!(!form.values.force_relay);
         RouteMode::Automatic.apply(&mut form.values);
         assert!(!form.values.force_relay); // No implicit re-enable.
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         {
-            form.values.bud = true;
-            assert!(form.availability().bud);
+            form.values.lowlat = true;
+            assert!(form.availability().lowlat);
             assert!(form.values.hid_mouse);
             assert!(form.values.hid_keyboard);
         }
@@ -588,7 +588,7 @@ mod tests {
             mode.apply(&mut s);
             assert_eq!(VideoFormat::current(&s), mode);
         }
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         for mode in InputMode::ALL {
             let mut s = Settings::default();
             mode.apply(&mut s);
@@ -618,7 +618,7 @@ mod vsr_tests {
             let allowed = vendor == 0x8086 && cfg!(feature = "vendor-video");
             assert_eq!(
                 available.ai_upscale,
-                (cfg!(nvidia_vsr_sdk) && vendor == 0x10de)
+                (cfg!(windows) && vendor == 0x10de)
                     || (cfg!(feature = "vendor-video") && vendor == 0x8086)
             );
             assert_eq!(available.zero_copy, !allowed);
@@ -628,18 +628,19 @@ mod vsr_tests {
             );
         }
         // The rendered backend owns the edit even if the GPU selector has just
-        // changed. Switching providers must not turn NVIDIA Ultra into Intel On.
+        // changed. Switching providers preserves each provider's preferences.
         settings.nvidia_vsr = 4;
-        AiUpscaler::Nvidia.apply(&mut settings, 3);
+        assert_eq!(AiUpscaler::Nvidia.selection(&settings), 1);
+        AiUpscaler::Nvidia.apply(&mut settings, 1);
         assert!(settings.intel_ai_vsr);
         AiUpscaler::Intel.apply(&mut settings, 0);
-        assert_eq!(settings.nvidia_vsr, 3);
+        assert_eq!(settings.nvidia_vsr, 1);
         assert!(!settings.intel_ai_vsr);
         AiUpscaler::Unavailable.apply(&mut settings, 0);
-        assert_eq!(settings.nvidia_vsr, 3);
-        assert_eq!(AiUpscaler::Nvidia.selection(&settings), 3);
+        assert_eq!(settings.nvidia_vsr, 1);
+        assert_eq!(AiUpscaler::Nvidia.selection(&settings), 1);
         assert_eq!(AiUpscaler::Intel.selection(&settings), 0);
-        assert_eq!(AiUpscaler::Nvidia.labels().len(), 5);
+        assert_eq!(AiUpscaler::Nvidia.labels().len(), 2);
         assert_eq!(AiUpscaler::Intel.labels().len(), 2);
         settings.intel_ai_vsr = true;
         for ten_bit in [false, true] {
@@ -652,7 +653,7 @@ mod vsr_tests {
         }
     }
     #[test]
-    fn vsr_defaults_off_retains_quality_and_excludes_original_surface_display() {
+    fn vsr_defaults_off_and_preserves_legacy_enabled_settings() {
         let settings = Settings::default();
         assert_eq!(settings.nvidia_vsr, 0);
         for quality in 0..=4 {
@@ -667,12 +668,12 @@ mod vsr_tests {
                 let available = form.availability();
                 assert_eq!(
                     available.ai_upscale,
-                    (cfg!(nvidia_vsr_sdk) && vendor == 0x10de)
+                    (cfg!(windows) && vendor == 0x10de)
                         || (cfg!(feature = "vendor-video") && vendor == 0x8086)
                 );
                 assert_eq!(
                     available.zero_copy,
-                    quality == 0 || vendor != 0x10de || !cfg!(nvidia_vsr_sdk)
+                    quality == 0 || vendor != 0x10de || !cfg!(windows)
                 );
             }
         }
@@ -695,7 +696,7 @@ mod vsr_tests {
             if phaze {
                 assert_eq!(form.audio_format_labels(), ["AAC-LC", "Uncompressed PCM"]);
                 assert!(form.audio_format_help().contains("AAC-LC"));
-                assert!(!form.availability().bud);
+                assert!(!form.availability().lowlat);
                 assert!(!form.video_formats().contains(&VideoFormat::Hevc10));
             } else {
                 assert_eq!(

@@ -30,7 +30,7 @@ pub struct Preferences {
 const BUFFER_MS: &[u32] = &[
     0, 5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100, 125, 150, 200, 250, 300, 400, 500,
 ];
-const TRANSPORT: &[&str] = &["WebRTC", "BUD"];
+const TRANSPORT: &[&str] = &["WebRTC", "lowlat"];
 const PACING: &[&str] = &["Dynamic FPS", "Fixed FPS"];
 const VIDEO: &[&str] = &["H.264 · 8-bit SDR", "HEVC · 8-bit SDR", "HEVC · 10-bit SDR"];
 type ChoiceField = (&'static str, &'static str, &'static [&'static str], usize);
@@ -198,13 +198,13 @@ impl Preferences {
                 if phaze {
                     "Uncompressed PCM (default AAC-LC)"
                 } else {
-                    "Raw PCM (BUD only)"
+                    "Raw PCM (LOWLAT only)"
                 },
                 self.audio.pcm,
             ),
             (
                 "audio_surround",
-                "Match output speaker layout (BUD only)",
+                "Match output speaker layout (LOWLAT only)",
                 self.audio.surround,
             ),
             ("logging", "Diagnostic logging", self.logging),
@@ -230,7 +230,7 @@ impl Preferences {
         }
         json!({"ok":true,"settings":self,"rows":rows,
             "request_hint":"Requests apply to your next connection. The host chooses the actual video format.",
-            "audio_hint":if phaze {"Applies to your next connection. Phaze delivers 48 kHz stereo AAC-LC or uncompressed PCM."} else {"Applies to the next connection. Default buffering preserves existing latency. A larger minimum can smooth jitter but adds delay. PCM needs more bandwidth. Surround requires BUD and a verified 5.1/7.1 output; otherwise stereo is used."},
+            "audio_hint":if phaze {"Applies to your next connection. Phaze delivers 48 kHz stereo AAC-LC or uncompressed PCM."} else {"Applies to the next connection. Default buffering preserves existing latency. A larger minimum can smooth jitter but adds delay. PCM needs more bandwidth. Surround requires LOWLAT and a verified 5.1/7.1 output; otherwise stereo is used."},
             "diagnostic_hint":"Enable logging before reproducing the issue, then save or share the bounded diagnostic archive. It contains operational events and device information, excluding credentials, clipboard and media content."})
     }
 
@@ -266,9 +266,9 @@ impl Preferences {
     }
 
     #[cfg(any(target_os = "android", test))]
-    pub fn phaze_video_config(&self) -> Result<evoparseq_phaze::VideoConfig> {
+    pub fn phaze_video_config(&self) -> Result<evoparseq_host_interop::VideoConfig> {
         let video = self.host_request_for_service(false)?;
-        Ok(evoparseq_phaze::VideoConfig {
+        Ok(evoparseq_host_interop::VideoConfig {
             hevc: self.video > 0,
             chroma_444: false,
             mbps: video.bandwidth_mbps.unwrap_or(20),

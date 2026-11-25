@@ -40,11 +40,11 @@ mod tests {
         let input = serde_json::json!({"provider":"custom","bud":true,"preferHevc":true,"experimentalZeroCopy":true,"nativeCore":{"email":"fixture@example.invalid","encryptedSession":"opaque-platform-blob","lastPeer":"fixture-host"},"futurePreference":{"enabled":true}});
         std::fs::write(&path, serde_json::to_vec(&input).unwrap()).unwrap();
         let manager = crate::connection_settings::Manager::open(path.clone());
-        assert!(manager.view().0.bud);
+        assert!(manager.view().0.lowlat);
         assert!(manager.view().0.prefer_hevc);
         manager
             .update_local(|settings| {
-                settings.bud = false;
+                settings.lowlat = false;
                 Ok(())
             })
             .unwrap();

@@ -1,4 +1,4 @@
-//! One bounded PipeWire registry/parameter query before BUD negotiation.
+//! One bounded PipeWire registry/parameter query before LOWLAT negotiation.
 //! No subprocess, device polling or persistent discovery thread.
 use crate::audio_layout::Layout;
 use pipewire as pw;

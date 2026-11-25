@@ -163,7 +163,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "evoparseq-profile-{}-{}.json",
             std::process::id(),
-            crate::bud_attempt::native_attempt_id().unwrap()
+            crate::lowlat_attempt::native_attempt_id().unwrap()
         ));
         struct Cleanup(std::path::PathBuf);
         impl Drop for Cleanup {
