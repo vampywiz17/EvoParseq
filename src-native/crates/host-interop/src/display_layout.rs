@@ -112,3 +112,31 @@ impl Resolution {
         Self::PRESETS[self.index()].2
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn previous_settings_request_only_the_saved_primary() -> serde_json::Result<()> {
+        let mut layout: DisplayLayout =
+            serde_json::from_str(r#"{"enabled":true,"resolution":"Qhd"}"#)?;
+        assert!(layout.requests(0));
+        assert!(!layout.requests(1));
+        assert_eq!(layout.resolutions()[0], Resolution::Qhd);
+        layout.count = DisplayCount::Two;
+        layout.set_resolution(0, Resolution::FullHd);
+        layout.set_resolution(1, Resolution::Hd);
+        layout.set_resolution(9, Resolution::Uhd);
+        assert_eq!(
+            layout.resolutions()[..2],
+            [Resolution::FullHd, Resolution::Hd]
+        );
+        assert!(layout.requests(1));
+        assert!(!layout.requests(2));
+        assert!(!layout.single_display().requests(1));
+        layout.enabled = false;
+        assert!(!layout.requests(0));
+        Ok(())
+    }
+}

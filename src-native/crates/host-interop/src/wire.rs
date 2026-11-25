@@ -200,9 +200,38 @@ fn recovery_reopens_the_selected_output_without_changing_stream_settings() -> Re
     assert!(video_request(Some(output), output, VideoConfig { fps: 0, ..config }, true).is_err());
     Ok(())
 }
+#[derive(Default)]
+pub(crate) struct DisplayHeaderProbe {
+    output: Option<u32>,
+    samples: u8,
+}
+
+impl DisplayHeaderProbe {
+    const MAX_SAMPLES: u8 = 8;
+
+    pub(crate) fn observe(&mut self, output: u32, header: &[u8]) -> Option<u8> {
+        if self.output != Some(output) {
+            self.output = Some(output);
+            self.samples = 0;
+        }
+        if self.samples >= Self::MAX_SAMPLES {
+            return None;
+        }
+
+        self.samples += 1;
+        let mask = video_header_output_matches(header, output);
+        if mask != 0 || self.samples == Self::MAX_SAMPLES {
+            self.samples = Self::MAX_SAMPLES;
+            Some(mask)
+        } else {
+            None
+        }
+    }
+}
+
 /// Report which aligned header words equal the selected output ID.
 /// The match alone does not establish a frame-to-output routing contract.
-pub(crate) fn video_header_output_matches(header: &[u8], output: u32) -> u8 {
+fn video_header_output_matches(header: &[u8], output: u32) -> u8 {
     if output == 0 {
         return 0;
     }
@@ -640,6 +669,21 @@ fn video_header_diagnostics_report_word_matches_without_assuming_a_field() {
     assert_eq!(video_header_output_matches(&header, output), 0b00101);
     assert_eq!(video_header_output_matches(&header, 0), 0);
     assert_eq!(video_header_output_matches(&header, 7), 0);
+}
+
+#[cfg(test)]
+#[test]
+fn display_header_probe_is_bounded_and_resets_when_switching_outputs() {
+    let mut probe = DisplayHeaderProbe::default();
+    let header = [0x1234_5678u32.to_be_bytes(), 42u32.to_be_bytes()].concat();
+    for _ in 1..DisplayHeaderProbe::MAX_SAMPLES {
+        assert_eq!(probe.observe(7, &header), None);
+    }
+    assert_eq!(probe.observe(7, &header), Some(0));
+    assert_eq!(probe.observe(7, &header), None);
+    assert_eq!(probe.observe(42, &header), Some(2));
+    assert_eq!(probe.observe(42, &header), None);
+    assert_eq!(probe.observe(0x1234_5678, &header), Some(1));
 }
 
 #[cfg(test)]

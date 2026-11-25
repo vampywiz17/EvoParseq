@@ -580,8 +580,9 @@ pub async fn run(
     let mut heartbeat_timer = tokio::time::interval(Duration::from_millis(200));
     heartbeat_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut selected_output = None;
-    let mut display_header_samples = 0;
-    let probe_display_headers = display_layout.enabled && display_layout.count.total() > 1;
+    let mut display_header_probe = display_layout
+        .requests(1)
+        .then(wire::DisplayHeaderProbe::default);
     let mut input = Vec::new();
     let mut controls = Vec::new();
     let mut deferred_motion = None;
@@ -637,9 +638,6 @@ pub async fn run(
                     let (stop, start) = wire::video_request(selected_output, output, config, recovering)?;
                     for command in stop.as_ref().map(<[u8; 5]>::as_slice).into_iter().chain([start.as_slice()]) {
                         for p in reliable.frame(command)? { send(&mut c,&p)?; }
-                    }
-                    if changing_output {
-                        display_header_samples = 0;
                     }
                     selected_output=Some(output);
                     stream_request=update;
@@ -749,15 +747,13 @@ pub async fn run(
                     }
                     Some(5) if requested => {
                         let bytes = wire::encoded(&frame[1..])?;
-                        if probe_display_headers && !bytes.is_empty() && display_header_samples < 8
-                        {
-                            if let Some(output) = selected_output {
-                                display_header_samples += 1;
-                                let mask = wire::video_header_output_matches(&frame[1..], output);
-                                if mask != 0 || display_header_samples == 8 {
-                                    sink.display_video_header_observed(output, mask);
-                                    display_header_samples = 8;
-                                }
+                        if let (false, Some(output), Some(probe)) = (
+                            bytes.is_empty(),
+                            selected_output,
+                            display_header_probe.as_mut(),
+                        ) {
+                            if let Some(mask) = probe.observe(output, &frame[1..]) {
+                                sink.display_video_header_observed(output, mask);
                             }
                         }
                         let flags = u32::from_be_bytes(frame[9..13].try_into().unwrap());
