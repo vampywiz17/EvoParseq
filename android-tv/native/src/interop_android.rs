@@ -50,6 +50,7 @@ pub fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result
         config,
         pcm,
         prefs.audio.pcm,
+        prefs.phaze_display_layout,
     );
     let network = crate::network::current();
     let result = account::phaze_runtime(async {

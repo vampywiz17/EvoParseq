@@ -6,6 +6,7 @@ mod bandwidth;
 mod control;
 mod cursor;
 mod datagram;
+pub mod display_layout;
 mod input;
 mod transport;
 pub mod turn;
@@ -200,6 +201,10 @@ pub trait Sink {
     /// Request stereo PCM instead of AAC-LC. Applies at connection startup.
     fn raw_audio(&self) -> bool {
         false
+    }
+    /// Select a display layout for the authenticated startup hello.
+    fn display_layout(&self) -> display_layout::DisplayLayout {
+        display_layout::DisplayLayout::default()
     }
     fn video_config(&self) -> VideoConfig {
         VideoConfig::default()

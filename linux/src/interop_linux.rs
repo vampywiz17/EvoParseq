@@ -47,6 +47,7 @@ pub fn run(
         },
         pcm,
         saved.allow_raw_audio,
+        saved.phaze_display_layout,
     )
     .with_hid_devices(saved.phaze_input_mode.devices());
     let result = account::phaze_runtime(async {
@@ -105,6 +106,15 @@ impl interop_client::Platform for Adapter<'_> {
     }
 
     fn outputs(&mut self, outputs: &[evoparseq_host_interop::Output]) {
+        crate::event_log::record(
+            "INFO",
+            "phaze_displays_received",
+            serde_json::json!({
+                "count": outputs.len(),
+                "active": outputs.iter().filter(|output| output.active).count(),
+                "active_primary": outputs.iter().filter(|output| output.active && output.primary).count()
+            }),
+        );
         let mut host = self
             .telemetry
             .host

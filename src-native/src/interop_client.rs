@@ -46,14 +46,22 @@ pub struct Client<P> {
     state: State,
     pcm: DecodedPcm,
     raw_audio: bool,
+    display_layout: evoparseq_host_interop::display_layout::DisplayLayout,
 }
 
 impl<P: Platform> Client<P> {
-    pub fn new(platform: P, config: VideoConfig, pcm: DecodedPcm, raw_audio: bool) -> Self {
+    pub fn new(
+        platform: P,
+        config: VideoConfig,
+        pcm: DecodedPcm,
+        raw_audio: bool,
+        display_layout: evoparseq_host_interop::display_layout::DisplayLayout,
+    ) -> Self {
         Self {
             platform,
             pcm,
             raw_audio,
+            display_layout,
             state: State {
                 stream: Stream::new(config),
                 received: 0,
@@ -109,6 +117,9 @@ impl<P: Platform> Sink for Client<P> {
 
     fn raw_audio(&self) -> bool {
         self.raw_audio
+    }
+    fn display_layout(&self) -> evoparseq_host_interop::display_layout::DisplayLayout {
+        self.display_layout
     }
     fn video_config(&self) -> VideoConfig {
         self.state.stream.config()
@@ -251,8 +262,13 @@ mod tests {
         }
         for devices in [(false, false), (true, false), (false, true), (true, true)] {
             let client = Client::new(
-                Offline, VideoConfig::default(), DecodedPcm::stereo(50), false,
-            ).with_hid_devices(devices);
+                Offline,
+                VideoConfig::default(),
+                DecodedPcm::stereo(50),
+                false,
+                Default::default(),
+            )
+            .with_hid_devices(devices);
             assert_eq!(Sink::usb_hid_devices(&client), devices);
         }
     }

@@ -26,21 +26,7 @@ pub struct SettingRow {
     pub group: u8,
     pub label: &'static str,
     pub help: &'static str,
-    #[cfg_attr(
-        windows,
-        expect(
-            dead_code,
-            reason = "Consumed by the Linux adapter; Win32 reads label/help from this shared descriptor"
-        )
-    )]
     pub y: i32,
-    #[cfg_attr(
-        windows,
-        expect(
-            dead_code,
-            reason = "Consumed by the Linux adapter; Win32 reads label/help from this shared descriptor"
-        )
-    )]
     pub help_height: i32,
     #[cfg_attr(
         windows,
@@ -160,6 +146,30 @@ pub const VIDEO_GPU: SettingRow = SettingRow {
     control_text: "",
 };
 pub const VIDEO_FORMAT:SettingRow=SettingRow{tab:1,group:0,label:"Video format",help:"HEVC and 10-bit require compatible host encoding.\nThe host may select H.264; reconnect after changing.",y:344,help_height:48,field_height:32,kind:Kind::Choice,control_text:""};
+pub const MIRROR_DISPLAY: SettingRow = SettingRow {
+    tab: 1,
+    group: 0,
+    label: evoparseq_host_interop::display_layout::MIRROR_LABEL,
+    help: evoparseq_host_interop::display_layout::MIRROR_HELP,
+    y: 1034,
+    help_height: 48,
+    field_height: 32,
+    kind: Kind::Choice,
+    control_text: "",
+};
+pub const VIRTUAL_DISPLAY_RESOLUTION: SettingRow = SettingRow {
+    tab: 1,
+    group: 0,
+    label: evoparseq_host_interop::display_layout::RESOLUTION_LABEL,
+    help: evoparseq_host_interop::display_layout::RESOLUTION_HELP,
+    y: 1130,
+    help_height: 48,
+    field_height: 32,
+    kind: Kind::Choice,
+    control_text: "",
+};
+pub const PHAZE_VIDEO_FOOTER: i32 = 1230;
+
 pub const DISPLAY_TIMING: SettingRow = SettingRow {
     tab: 1,
     group: 0,
@@ -285,6 +295,8 @@ pub const SETTINGS: &[SettingRow] = &[
     CHROMA,
     SESSION_MENU,
     AI_UPSCALING_EXPERIMENTAL,
+    MIRROR_DISPLAY,
+    VIRTUAL_DISPLAY_RESOLUTION,
     TRANSPORT,
     VIDEO_PRESENTATION,
     TCP_TLS_QOS,

@@ -125,6 +125,7 @@ pub struct Settings {
     #[cfg_attr(not(target_os = "linux"), serde(alias = "experimentalHidKeyboard"))]
     pub hid_keyboard: bool,
     pub phaze_input_mode: InputMode,
+    pub phaze_display_layout: evoparseq_host_interop::display_layout::DisplayLayout,
     pub prefer_hevc: bool,
     pub presentation_mode: PresentationMode,
     /// NVIDIA driver VSR preference: 0 off; previous nonzero quality levels mean on.
@@ -197,6 +198,7 @@ impl Default for Settings {
             #[cfg(any(feature = "lowlat", target_os = "linux"))]
             hid_keyboard: false,
             phaze_input_mode: InputMode::Standard,
+            phaze_display_layout: Default::default(),
             prefer_hevc: false,
             presentation_mode: PresentationMode::Automatic,
             nvidia_vsr: 0,

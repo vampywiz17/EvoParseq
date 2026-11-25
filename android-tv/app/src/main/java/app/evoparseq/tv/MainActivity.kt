@@ -293,7 +293,12 @@ private fun TvSettings(model: TvModel, first: FocusRequester, back: () -> Unit) 
             } else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(choice?.getString("label") ?: category, style = MaterialTheme.typography.headlineSmall)
-                Text(model.settings?.optString(when (category) {"Audio" -> "audio_hint"; "Diagnostics" -> "diagnostic_hint"; else -> "request_hint"}) ?: "",
+                Text(model.settings?.optString(when (category) {
+                    "Video" -> "video_hint"
+                    "Audio" -> "audio_hint"
+                    "Diagnostics" -> "diagnostic_hint"
+                    else -> "request_hint"
+                }) ?: "",
                     color = Color(0xFFA8BED7), fontSize=14.sp, lineHeight=20.sp)
                 if (model.settings == null) Button(onClick = model::readSettings,
                     scale = steadyScale, enabled = !model.busy) { Text("Reload settings") }

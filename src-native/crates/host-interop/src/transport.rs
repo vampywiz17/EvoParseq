@@ -561,7 +561,11 @@ pub async fn run(
     if usb_probe.is_some() {
         sink.usb_probe_event("started", None, 0);
     }
-    for p in reliable.frame(&wire::hello(sink.raw_audio()))? {
+    let display_layout = sink.display_layout();
+    if display_layout.enabled {
+        sink.stage("requesting_client_display_layout");
+    }
+    for p in reliable.frame(&wire::hello(sink.raw_audio(), display_layout))? {
         send(&mut c, &p)?;
     }
     let transmission_started = Instant::now();

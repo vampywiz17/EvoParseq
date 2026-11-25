@@ -1,3 +1,4 @@
+use crate::display_layout::DisplayLayout;
 use anyhow::{bail, ensure, Result};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -114,10 +115,36 @@ pub(crate) fn ack_bandwidth(ack: &[u8]) -> Option<(f64, f64)> {
     ))
 }
 
-pub fn hello(raw_audio: bool) -> Vec<u8> {
+/// Phaze 0.14.3 layout observed in the client serializer. The option value
+/// was corroborated by a successful stock session and an EvoParseq live test.
+pub(crate) fn hello(raw_audio: bool, layout: DisplayLayout) -> Vec<u8> {
+    const CLIENT_DISPLAY_OPTION: u32 = 0x100;
+    let mut flags = u32::from(raw_audio);
+    if layout.enabled {
+        flags |= CLIENT_DISPLAY_OPTION;
+    }
+
     let mut b = vec![18];
-    b.extend(u32::from(raw_audio).to_be_bytes());
-    b.extend(0u32.to_be_bytes()); // No virtual client display layout.
+    b.extend(flags.to_be_bytes());
+    b.extend(u32::from(layout.enabled).to_be_bytes());
+    if !layout.enabled {
+        return b;
+    }
+    let [width, height] = layout.resolution.dimensions();
+
+    const NAME: &[u8] = b"EvoParseq Display";
+    b.extend(0x4556_5031u32.to_be_bytes()); // Synthetic client display ID.
+    b.extend((NAME.len() as u32).to_be_bytes());
+    b.extend(NAME);
+    // x, y, logical width/height, rotation, pixel width/height,
+    // refresh numerator/denominator, reserved display capabilities.
+    for word in [0, 0, width, height, 0, width, height, 60, 1, 0, 0] {
+        b.extend(word.to_be_bytes());
+    }
+    // The vendor serializer scales both normalized floating values by 10,000.
+    b.extend(10_000u32.to_be_bytes());
+    b.extend(10_000u32.to_be_bytes());
+    b.extend([1, 1]); // Active, primary.
     b
 }
 
@@ -495,6 +522,50 @@ impl Reliable {
 }
 #[cfg(test)]
 #[test]
+fn client_display_hello_uses_observed_options_and_one_descriptor() {
+    let display = DisplayLayout {
+        enabled: true,
+        ..DisplayLayout::default()
+    };
+    let hello_with_display = hello(false, display);
+    assert_eq!(hello_with_display[0], 18);
+    assert_eq!(be(&hello_with_display, 1), 0x100);
+    assert_eq!(be(&hello(true, display), 1), 0x101);
+    assert_eq!(be(&hello_with_display, 5), 1);
+    assert_eq!(be(&hello_with_display, 9), 0x4556_5031);
+    let name_end = 17 + be(&hello_with_display, 13) as usize;
+    assert_eq!(&hello_with_display[17..name_end], b"EvoParseq Display");
+    let tail = &hello_with_display[name_end..];
+    assert_eq!(tail.len(), 54);
+    let words = [0, 0, 1920, 1200, 0, 1920, 1200, 60, 1, 0, 0, 10_000, 10_000];
+    for (index, word) in words.into_iter().enumerate() {
+        assert_eq!(be(tail, index * 4), word);
+    }
+    assert_eq!(&tail[52..], &[1, 1]);
+
+    let hd = DisplayLayout {
+        resolution: crate::display_layout::Resolution::Hd,
+        ..display
+    };
+    let hd_hello = hello(false, hd);
+    assert_eq!(be(&hd_hello, name_end + 8), 1280);
+    assert_eq!(be(&hd_hello, name_end + 12), 720);
+    assert_eq!(be(&hd_hello, name_end + 20), 1280);
+    assert_eq!(be(&hd_hello, name_end + 24), 720);
+    assert_eq!(
+        hello(
+            false,
+            DisplayLayout {
+                enabled: false,
+                ..hd
+            }
+        ),
+        hello(false, DisplayLayout::default())
+    );
+}
+
+#[cfg(test)]
+#[test]
 fn wire_contracts() -> Result<()> {
     let data: Vec<u8> = (0..3000).map(|i| (i % 251) as u8).collect();
     let mut a = Reliable::default();
@@ -506,11 +577,11 @@ fn wire_contracts() -> Result<()> {
     ensure!(b.receive(&p[1])?.0 == vec![data], "Reassembly test");
     ensure!(b.receive(&[1]).is_err(), "Truncation test");
     ensure!(
-        hello(true) == vec![18, 0, 0, 0, 1, 0, 0, 0, 0],
+        hello(true, DisplayLayout::default()) == vec![18, 0, 0, 0, 1, 0, 0, 0, 0],
         "Hello/raw audio test"
     );
     ensure!(
-        hello(false) == vec![18, 0, 0, 0, 0, 0, 0, 0, 0],
+        hello(false, DisplayLayout::default()) == vec![18, 0, 0, 0, 0, 0, 0, 0, 0],
         "Hello/AAC test"
     );
     ensure!(

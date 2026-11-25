@@ -7,11 +7,29 @@ are described in [libmatoya's header](https://github.com/snowcone-ltd/libmatoya/
 See [interoperability and source provenance](INTEROPERABILITY.md) for the
 research methods and test-data policy.
 
+## Mirror display
+
+In Phaze **Settings → Video**, enable **Mirror display** and choose a
+**Virtual display resolution** before connecting. Windows, Linux and
+Android TV use the same Rust presets. The option is off by default.
+The selected resolution is remembered when you turn mirroring off.
+
+The setting requests one synthetic primary display in the authenticated
+hello with option `0x100`. The host provisions its virtual display, determines
+the actual mode and may replace physical host displays. With mirroring off,
+the hello uses the normal empty display list. This uses the vendor's protocol
+and requires a compatible host.
+
+A Phaze 0.14.3 test with the DisplayPort monitor powered off delivered video
+from the host's virtual output. The same DP capture failure also occurred
+with the stock client when mirroring was disabled. Resolution changes apply
+when a new session starts. The supported presets are requests to the host.
+
 ## Audio and input
 
-The hello requests raw PCM with option bit 0 set, or AAC-LC with it clear;
-it does not request a virtual display layout. The saved Audio format preference
-selects AAC-LC (default) or Uncompressed PCM on the next connection. Audio opcode
+The hello requests raw PCM with option bit 0 set, or AAC-LC with it clear.
+The saved Audio format preference selects AAC-LC (default) or Uncompressed PCM
+on the next connection. Audio opcode
 7 contains an encoded flag, big-endian stereo frame count and payload. Flag 0
 accepts interleaved 48 kHz signed 16-bit little-endian stereo with an exact bounded
 length. Flag 1 requires a zero frame-count header and a bounded raw AAC block.
