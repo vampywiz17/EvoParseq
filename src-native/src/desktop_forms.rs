@@ -26,21 +26,7 @@ pub struct SettingRow {
     pub group: u8,
     pub label: &'static str,
     pub help: &'static str,
-    #[cfg_attr(
-        windows,
-        expect(
-            dead_code,
-            reason = "Consumed by the Linux adapter; Win32 reads label/help from this shared descriptor"
-        )
-    )]
     pub y: i32,
-    #[cfg_attr(
-        windows,
-        expect(
-            dead_code,
-            reason = "Consumed by the Linux adapter; Win32 reads label/help from this shared descriptor"
-        )
-    )]
     pub help_height: i32,
     #[cfg_attr(
         windows,
