@@ -68,6 +68,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Instrumented additional display fixture failed' }
           cargo llvm-cov report --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --lcov --output-path coverage/rust-raw.info
           if ($LASTEXITCODE -ne 0) { throw 'Merged Rust coverage export failed' }
+          cargo llvm-cov --locked --manifest-path src-native/crates/host-interop/Cargo.toml --target x86_64-pc-windows-msvc --lcov --output-path coverage/host-interop-raw.info -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'Instrumented host interoperability tests failed' }
           # The package must contain the normal executable, never an instrumented build.
           cargo clean --manifest-path src-native/Cargo.toml --release -p libopus_sys
           if ($LASTEXITCODE -ne 0) { throw 'Release Opus cache reset failed' }
@@ -102,24 +104,28 @@ jobs:
           for line in lines:
               ET.SubElement(measured, 'lineToCover', lineNumber=line.attrib['nr'], covered=str(int(line.get('ci', '0')) > 0).lower())
           ET.ElementTree(generic).write('coverage/powershell.xml', encoding='utf-8', xml_declaration=True)
-          output = []
-          keep = False
-          for line in Path('coverage/rust-raw.info').read_text(encoding='utf-8').splitlines():
-              if line.startswith('SF:'):
-                  source = Path(line[3:])
-                  if not source.is_absolute():
-                      source = root / source
-                  try:
-                      relative = source.resolve().relative_to(root).as_posix()
-                  except ValueError:
-                      keep = False
-                      continue
-                  line = 'SF:' + relative
-                  keep = True
-              if keep:
-                  output.append(line)
-          assert any(line.startswith('SF:src-native/src/') for line in output), 'Missing native Rust coverage'
-          Path('coverage/rust.info').write_text('\n'.join(output) + '\n', encoding='utf-8')
+          def normalize_lcov(raw, report, required_source_prefix):
+              output = []
+              keep = False
+              for line in Path(raw).read_text(encoding='utf-8').splitlines():
+                  if line.startswith('SF:'):
+                      source = Path(line[3:])
+                      if not source.is_absolute():
+                          source = root / source
+                      try:
+                          relative = source.resolve().relative_to(root).as_posix()
+                      except ValueError:
+                          keep = False
+                          continue
+                      line = 'SF:' + relative
+                      keep = True
+                  if keep:
+                      output.append(line)
+              assert any(line.startswith('SF:' + required_source_prefix) for line in output), 'Missing measured Rust coverage'
+              Path(report).write_text('\n'.join(output) + '\n', encoding='utf-8')
+
+          normalize_lcov('coverage/rust-raw.info', 'coverage/rust.info', 'src-native/src/')
+          normalize_lcov('coverage/host-interop-raw.info', 'coverage/host-interop.info', 'src-native/crates/host-interop/src/')
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'Measured coverage conversion failed' }
       - name: Measure release scanner offline tests
@@ -172,7 +178,7 @@ jobs:
             -Dsonar.qualitygate.wait=true
             -Dsonar.qualitygate.timeout=600
             -Dsonar.coverageReportPaths=coverage/powershell.xml
-            -Dsonar.rust.lcov.reportPaths=coverage/rust.info
+            -Dsonar.rust.lcov.reportPaths=coverage/rust.info,coverage/host-interop.info
             -Dsonar.python.coverage.reportPaths=coverage/python.xml
             -Dsonar.tests=ci-tests
             -Dsonar.exclusions=ci-tests/**,coverage/**
