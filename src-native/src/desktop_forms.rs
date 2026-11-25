@@ -157,18 +157,34 @@ pub const MIRROR_DISPLAY: SettingRow = SettingRow {
     kind: Kind::Choice,
     control_text: "",
 };
-pub const VIRTUAL_DISPLAY_RESOLUTION: SettingRow = SettingRow {
+pub const VIRTUAL_DISPLAY_COUNT: SettingRow = SettingRow {
     tab: 1,
     group: 0,
-    label: evoparseq_host_interop::display_layout::RESOLUTION_LABEL,
-    help: evoparseq_host_interop::display_layout::RESOLUTION_HELP,
+    label: evoparseq_host_interop::display_layout::DISPLAY_COUNT_LABEL,
+    help: evoparseq_host_interop::display_layout::DISPLAY_COUNT_HELP,
     y: 1130,
     help_height: 48,
     field_height: 32,
     kind: Kind::Choice,
     control_text: "",
 };
-pub const PHAZE_VIDEO_FOOTER: i32 = 1230;
+pub const VIRTUAL_DISPLAY_RESOLUTIONS: [SettingRow; 4] = [
+    virtual_display_resolution("Display 1 resolution", 1226),
+    virtual_display_resolution("Display 2 resolution", 1322),
+    virtual_display_resolution("Display 3 resolution", 1418),
+    virtual_display_resolution("Display 4 resolution", 1514),
+];
+
+const fn virtual_display_resolution(label: &'static str, y: i32) -> SettingRow {
+    SettingRow {
+        label,
+        help: evoparseq_host_interop::display_layout::RESOLUTION_HELP,
+        y,
+        ..VIRTUAL_DISPLAY_COUNT
+    }
+}
+
+pub const PHAZE_VIDEO_FOOTER: i32 = 1610;
 
 pub const DISPLAY_TIMING: SettingRow = SettingRow {
     tab: 1,
@@ -296,7 +312,11 @@ pub const SETTINGS: &[SettingRow] = &[
     SESSION_MENU,
     AI_UPSCALING_EXPERIMENTAL,
     MIRROR_DISPLAY,
-    VIRTUAL_DISPLAY_RESOLUTION,
+    VIRTUAL_DISPLAY_COUNT,
+    VIRTUAL_DISPLAY_RESOLUTIONS[0],
+    VIRTUAL_DISPLAY_RESOLUTIONS[1],
+    VIRTUAL_DISPLAY_RESOLUTIONS[2],
+    VIRTUAL_DISPLAY_RESOLUTIONS[3],
     TRANSPORT,
     VIDEO_PRESENTATION,
     TCP_TLS_QOS,

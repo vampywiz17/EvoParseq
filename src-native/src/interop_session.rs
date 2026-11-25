@@ -150,6 +150,14 @@ impl Stream {
     }
 }
 
+pub fn log_display_video_header(output: u32, match_mask: u8) {
+    crate::event_log::record(
+        "INFO",
+        "phaze_display_video_header_observed",
+        serde_json::json!({"output":output,"matching_word_mask":match_mask}),
+    );
+}
+
 pub fn log_bandwidth_feedback(lower_rate: f64, upper_rate: f64) {
     crate::event_log::record(
         "INFO",

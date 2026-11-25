@@ -143,6 +143,10 @@ impl<P: Platform> Sink for Client<P> {
     fn outputs(&mut self, outputs: &[Output]) {
         self.platform.outputs(outputs);
     }
+    fn display_video_header_observed(&mut self, output: u32, match_mask: u8) {
+        interop_session::log_display_video_header(output, match_mask);
+    }
+
     fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()> {
         if reset {
             self.platform.reset_video();

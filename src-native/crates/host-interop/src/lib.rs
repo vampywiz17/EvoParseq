@@ -245,6 +245,7 @@ pub trait Sink {
     fn rtt(&mut self, _elapsed: Option<Duration>) {}
     fn stage(&mut self, stage: &'static str);
     fn outputs(&mut self, outputs: &[Output]);
+    fn display_video_header_observed(&mut self, _output: u32, _match_mask: u8) {}
     fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()>;
     /// Audio payload bytes are measured before decoding; headers are excluded.
     fn audio(&mut self, pcm: &[i16], codec: AudioCodec, payload_bytes: usize) -> Result<()>;

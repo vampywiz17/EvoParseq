@@ -1,10 +1,13 @@
-//! Shared preferences for requesting one Phaze virtual display.
+//! Shared preferences for requesting Phaze virtual displays.
 use serde::{Deserialize, Serialize};
 
 pub const MIRROR_LABEL: &str = "Mirror display";
 pub const MIRROR_CHOICES: &[&str] = &["Off", "On"];
 pub const MIRROR_HELP: &str =
-    "Request one virtual display on the host.\nMay replace host displays. Next connection.";
+    "Request virtual displays on the host.\nMay replace host displays. Next connection.";
+pub const DISPLAY_COUNT_LABEL: &str = "Virtual display count";
+pub const DISPLAY_COUNT_HELP: &str =
+    "Number of displays to request at startup.\nThe host decides which displays to create.";
 pub const RESOLUTION_LABEL: &str = "Virtual display resolution";
 pub const RESOLUTION_HELP: &str =
     "Requested host desktop size.\nThe host selects the actual mode. Next connection.";
@@ -14,6 +17,59 @@ pub const RESOLUTION_HELP: &str =
 pub struct DisplayLayout {
     pub enabled: bool,
     pub resolution: Resolution,
+    pub count: DisplayCount,
+    pub additional_resolutions: [Resolution; 3],
+}
+
+impl DisplayLayout {
+    /// TV always requests at most its single configured display.
+    pub fn single_display(self) -> Self {
+        Self {
+            count: DisplayCount::One,
+            ..self
+        }
+    }
+
+    pub fn requests(self, index: usize) -> bool {
+        self.enabled && index < self.count.len()
+    }
+
+    pub fn resolutions(self) -> [Resolution; 4] {
+        let [second, third, fourth] = self.additional_resolutions;
+        [self.resolution, second, third, fourth]
+    }
+
+    pub fn set_resolution(&mut self, index: usize, resolution: Resolution) {
+        if let Some(additional) = index.checked_sub(1) {
+            if let Some(slot) = self.additional_resolutions.get_mut(additional) {
+                *slot = resolution;
+            }
+        } else {
+            self.resolution = resolution;
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DisplayCount {
+    #[default]
+    One,
+    Two,
+    Three,
+    Four,
+}
+
+impl DisplayCount {
+    pub const ALL: [Self; 4] = [Self::One, Self::Two, Self::Three, Self::Four];
+    pub const LABELS: [&'static str; 4] = ["1", "2", "3", "4"];
+
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    pub(crate) fn len(self) -> usize {
+        self.index() + 1
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

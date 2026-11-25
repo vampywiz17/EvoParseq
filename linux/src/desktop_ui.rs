@@ -142,8 +142,11 @@ impl Desktop {
             .filter(|row| row.tab == tab && (row.group == 0 || usize::from(row.group) == group))
             .filter(|row| {
                 phaze
-                    || ![f::MIRROR_DISPLAY.label, f::VIRTUAL_DISPLAY_RESOLUTION.label]
-                        .contains(&row.label)
+                    || (row.label != f::MIRROR_DISPLAY.label
+                        && row.label != f::VIRTUAL_DISPLAY_COUNT.label
+                        && !f::VIRTUAL_DISPLAY_RESOLUTIONS
+                            .iter()
+                            .any(|resolution| resolution.label == row.label))
             })
             .filter(|row| {
                 !phaze
@@ -222,28 +225,44 @@ impl Desktop {
                             }
                         });
                 });
-            } else if row.label == f::VIRTUAL_DISPLAY_RESOLUTION.label {
-                use evoparseq_host_interop::display_layout::Resolution;
+            } else if row.label == f::VIRTUAL_DISPLAY_COUNT.label {
+                use evoparseq_host_interop::display_layout::DisplayCount;
                 let display = &mut draft.values.phaze_display_layout;
-                let labels = Resolution::labels();
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     ui.add_enabled_ui(display.enabled, |ui| {
                         egui::ComboBox::from_id_salt(row.label)
                             .width(rect.width())
-                            .selected_text(labels[display.resolution.index()])
+                            .selected_text(DisplayCount::LABELS[display.count.index()])
+                            .show_ui(ui, |ui| {
+                                for (count, label) in DisplayCount::ALL.into_iter().zip(DisplayCount::LABELS) {
+                                    ui.selectable_value(&mut display.count, count, label);
+                                }
+                            });
+                    });
+                });
+            } else if let Some(index) = f::VIRTUAL_DISPLAY_RESOLUTIONS
+                .iter()
+                .position(|resolution| resolution.label == row.label)
+            {
+                use evoparseq_host_interop::display_layout::Resolution;
+                let display = &mut draft.values.phaze_display_layout;
+                let mut selected = display.resolutions()[index];
+                let labels = Resolution::labels();
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    ui.add_enabled_ui(display.requests(index), |ui| {
+                        egui::ComboBox::from_id_salt(row.label)
+                            .width(rect.width())
+                            .selected_text(labels[selected.index()])
                             .show_ui(ui, |ui| {
                                 for (index, text) in labels.into_iter().enumerate() {
                                     if let Some(resolution) = Resolution::from_index(index) {
-                                        ui.selectable_value(
-                                            &mut display.resolution,
-                                            resolution,
-                                            text,
-                                        );
+                                        ui.selectable_value(&mut selected, resolution, text);
                                     }
                                 }
                             });
                     });
                 });
+                display.set_resolution(index, selected);
             } else if row.label == f::VIDEO_FORMAT.label {
                 use crate::connection_settings::VideoFormat;
                 let mut value = VideoFormat::current(&draft.values);

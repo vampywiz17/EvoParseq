@@ -342,6 +342,10 @@ impl evoparseq_host_interop::Sink for View {
             serde_json::json!({"count":outputs.len()}),
         );
     }
+    fn display_video_header_observed(&mut self, output: u32, match_mask: u8) {
+        crate::interop_session::log_display_video_header(output, match_mask);
+    }
+
     fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()> {
         if reset {
             self.video.encoder_rebuilt();

@@ -9,16 +9,25 @@ research methods and test-data policy.
 
 ## Mirror display
 
-In Phaze **Settings → Video**, enable **Mirror display** and choose a
-**Virtual display resolution** before connecting. Windows, Linux and
-Android TV use the same Rust presets. The option is off by default.
-The selected resolution is remembered when you turn mirroring off.
+In Phaze **Settings → Video**, enable **Mirror display** before connecting.
+Windows and Linux offer a **Virtual display count** from one to four and a
+resolution for each requested display. Android TV offers one display.
+The option is off by default. Resolutions are remembered when mirroring is
+off or the display count is reduced.
 
-The setting requests one synthetic primary display in the authenticated
-hello with option `0x100`. The host provisions its virtual display, determines
-the actual mode and may replace physical host displays. With mirroring off,
-the hello uses the normal empty display list. This uses the vendor's protocol
-and requires a compatible host.
+The authenticated hello uses option `0x100` and describes the requested
+displays left to right, with the first as primary. The host provisions its
+virtual displays, determines the actual modes and may replace physical host
+displays. With mirroring off, the hello uses the normal empty display list.
+The one-display request was validated with Phaze 0.14.3. Host acceptance
+and active outputs for larger layouts still require live validation.
+
+The client currently selects one host output at a time. With event logging
+enabled, a multi-display request can log `phaze_display_video_header_observed`
+after opening or switching the selected output. It records the selected
+output ID and which aligned header words match it, without recording raw
+headers or encoded video. A match only identifies a candidate field for
+controlled multi-stream validation.
 
 A Phaze 0.14.3 test with the DisplayPort monitor powered off delivered video
 from the host's virtual output. The same DP capture failure also occurred
