@@ -11,10 +11,10 @@ mod display_stream;
 #[path = "../../src-native/src/lowlat_ingress.rs"]
 mod lowlat_ingress;
 
-#[path = "../../src-native/src/desktop_input.rs"]
-mod desktop_input;
 #[path = "../../src-native/src/cursor_pixels.rs"]
 mod cursor_pixels;
+#[path = "../../src-native/src/desktop_input.rs"]
+mod desktop_input;
 #[path = "../../src-native/src/gamepad.rs"]
 mod gamepad;
 #[path = "../src/video_vulkan/hevc_parameters.rs"]
