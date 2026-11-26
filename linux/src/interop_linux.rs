@@ -20,6 +20,7 @@ pub fn run(
     manager: &Manager,
 ) -> Result<String> {
     let saved = manager.view().0;
+    playback.local_cursor.store(true, Ordering::Release);
     let mut audio = crate::audio_pipewire::Config::new(&saved, crate::audio_layout::Layout::STEREO);
     if !audio.custom {
         audio.minimum_ms = 50;
@@ -80,6 +81,8 @@ pub fn run(
     });
     telemetry.displays.clear();
     playback.set_phaze_cursor_mode(false, true);
+    playback.local_cursor.store(false, Ordering::Release);
+    playback.set_cursor_image(None);
     result?;
     Ok("Phaze stream disconnected".into())
 }
@@ -247,6 +250,22 @@ impl interop_client::Platform for Adapter<'_> {
     fn cursor_mode(&mut self, relative: bool, visible: bool) {
         self.desktop.cursor_mode(relative, visible);
         self.playback.set_phaze_cursor_mode(relative, visible);
+    }
+
+    fn cursor_image(&mut self, image: evoparseq_host_interop::CursorImage<'_>) {
+        match crate::cursor_pixels::Pixels::decode(image) {
+            Ok(image) => self
+                .playback
+                .set_cursor_image(Some(std::sync::Arc::new(image))),
+            Err(error) => {
+                self.playback.set_cursor_image(None);
+                crate::event_log::record(
+                    "WARN",
+                    "phaze_cursor_image_rejected",
+                    serde_json::json!({"error": error.to_string()}),
+                );
+            }
+        }
     }
 
     fn stage(&mut self, stage: &'static str) {

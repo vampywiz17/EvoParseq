@@ -118,7 +118,10 @@ impl Destination {
         } else {
             g.inside_video = false;
         }
-        let show = !g.inside_video;
+        // Parsec embeds the pointer in video; Phaze needs local feedback.
+        let show = !g.inside_video
+            || (target.local_cursor.load(Ordering::Acquire)
+                && !target.phaze_cursor_hidden.load(Ordering::Acquire));
         self.show_icon(show);
     }
     fn end(&mut self, cancelled: bool) {
@@ -575,6 +578,10 @@ impl Drag {
             icon_visible: false,
             icon_positioned: false,
         });
+        destination.show_icon(
+            origin.local_cursor.load(Ordering::Acquire)
+                && !origin.phaze_cursor_hidden.load(Ordering::Acquire),
+        );
         if let Err(error) = self.connection.flush() {
             destination.end(true);
             destination.clear();

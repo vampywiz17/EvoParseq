@@ -81,6 +81,8 @@ mod playback {
     use super::*;
     pub struct Playback {
         pub native_drag: AtomicBool,
+        pub local_cursor: AtomicBool,
+        pub phaze_cursor_hidden: AtomicBool,
         stream: usize,
         peers: Mutex<Vec<std::sync::Weak<Playback>>>,
         pub events: Mutex<Vec<input_handoff::Event>>,
@@ -91,6 +93,8 @@ mod playback {
             let pair = std::array::from_fn(|stream| {
                 Arc::new(Self {
                     native_drag: AtomicBool::new(false),
+                    local_cursor: AtomicBool::new(false),
+                    phaze_cursor_hidden: AtomicBool::new(false),
                     stream,
                     peers: Mutex::new(Vec::new()),
                     events: Mutex::new(Vec::new()),
@@ -402,7 +406,11 @@ fn main() -> Result<()> {
         }
         Ok(())
     };
-    for (source, target) in [(0, 1), (1, 0)] {
+    for (source, target, local_cursor) in [(0, 1, false), (1, 0, false), (0, 1, true), (1, 0, true)]
+    {
+        for p in &playback {
+            p.local_cursor.store(local_cursor, Ordering::Release);
+        }
         driver.command(serde_json::json!(["move", -10000., -10000.]))?;
         pump(&mut drag, &mut f)?;
         // Edges may be outside mapped surface input regions. First move inside
@@ -451,8 +459,8 @@ fn main() -> Result<()> {
         ]))?;
         pump(&mut drag, &mut f)?;
         anyhow::ensure!(
-            !event_log::LOCAL_POINTER.load(Ordering::Acquire),
-            "local drag pointer duplicated the host cursor inside video"
+            event_log::LOCAL_POINTER.load(Ordering::Acquire) == local_cursor,
+            "local drag pointer visibility did not match video cursor policy"
         );
         driver.command(serde_json::json!(["button", false]))?;
         pump(&mut drag, &mut f)?;

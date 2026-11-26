@@ -56,6 +56,8 @@ pub struct Playback {
     clipboard_pending: AtomicBool,
     pub(crate) immersive: std::sync::atomic::AtomicU8,
     cursor_restore: Mutex<Option<(i32, i32)>>,
+    cursor_image: Mutex<Option<Arc<crate::cursor_pixels::Pixels>>>,
+    pub(crate) local_cursor: AtomicBool,
     video_rect: Mutex<Option<eframe::egui::Rect>>,
     cursor_state: AtomicU64,
     input_active: AtomicBool,
@@ -111,6 +113,8 @@ impl Playback {
             clipboard_pending: AtomicBool::new(false),
             immersive: std::sync::atomic::AtomicU8::new(0),
             cursor_restore: Mutex::new(None),
+            cursor_image: Mutex::new(None),
+            local_cursor: AtomicBool::new(false),
             video_rect: Mutex::new(None),
             cursor_state: AtomicU64::new(0),
             input_active: AtomicBool::new(false),
@@ -119,6 +123,24 @@ impl Playback {
             host_relative: AtomicBool::new(false),
             phaze_cursor_hidden: AtomicBool::new(false),
         })
+    }
+    pub(crate) fn set_cursor_image(&self, image: Option<Arc<crate::cursor_pixels::Pixels>>) {
+        *self.cursor_image.lock().unwrap_or_else(|e| e.into_inner()) = image;
+        self.repaint();
+        for slot in 1..crate::display_stream::DESKTOP_DISPLAYS {
+            if let Some(display) = self.display(slot) {
+                display.repaint();
+            }
+        }
+    }
+    pub(crate) fn cursor_image(&self) -> Option<Arc<crate::cursor_pixels::Pixels>> {
+        if self.stream() != 0 {
+            return self.primary().and_then(|root| root.cursor_image());
+        }
+        self.cursor_image
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
     pub fn set_hevc(&self, enabled: bool) {
         self.hevc.store(enabled, Ordering::Relaxed);
@@ -675,4 +697,39 @@ mod clipboard_output_tests {
             matches!(out.platform_output.commands.as_slice(),[eframe::egui::OutputCommand::CopyText(text)] if text=="four")
         );
     }
+}
+
+#[cfg(test)]
+#[test]
+fn linux_phaze_windows_share_latest_cursor_including_late_opened_displays() -> Result<()> {
+    let ctx = eframe::egui::Context::default();
+    let root = Playback::new(ctx.clone());
+    let displays = Arc::new(crate::display_routes::Displays::default());
+    root.attach_displays(&displays, 0);
+    *displays.primary.lock().unwrap() = Arc::downgrade(&root);
+    let image = Arc::new(crate::cursor_pixels::Pixels {
+        size: (1, 1),
+        hotspot: (0, 0),
+        rgba: vec![255; 4],
+    });
+    assert!(root.cursor_image().is_none());
+    root.set_cursor_image(Some(image.clone()));
+    displays.open_phaze(1, 20, &ctx, false)?;
+    let peer = displays.get(1).unwrap().playback.clone();
+    assert!(peer.local_cursor.load(Ordering::Acquire));
+    assert!(Arc::ptr_eq(&peer.cursor_image().unwrap(), &image));
+    assert!(Arc::ptr_eq(&root.cursor_image().unwrap(), &image));
+    let replacement = Arc::new(crate::cursor_pixels::Pixels {
+        size: (2, 1),
+        hotspot: (1, 0),
+        rgba: vec![0; 8],
+    });
+    root.set_cursor_image(Some(replacement.clone()));
+    assert!(Arc::ptr_eq(&peer.cursor_image().unwrap(), &replacement));
+    root.set_cursor_image(None);
+    assert!(root.cursor_image().is_none());
+    assert!(peer.cursor_image().is_none());
+    displays.close(1);
+    assert!(peer.stopped());
+    Ok(())
 }

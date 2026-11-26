@@ -4,9 +4,8 @@
 use anyhow::{bail, Result};
 use windows_sys::Win32::{Graphics::Gdi::*, UI::WindowsAndMessaging::*};
 
-const MAX_SIDE: u32 = 256;
+use crate::cursor_pixels::MAX_SIDE;
 const MAX_LOCAL_SIDE: u32 = 512;
-const MAX_ENCODED: usize = 1024 * 1024;
 
 #[derive(Clone)]
 pub struct Frame {
@@ -26,18 +25,21 @@ impl Frame {
         Self::png(bytes.to_vec(), x, y)
     }
     pub(crate) fn rgba(bytes: Vec<u8>, width: u32, height: u32, x: i32, y: i32) -> Result<Self> {
-        let size = Self::size(width, height)?;
-        if bytes.len() != size {
-            bail!("cursor pixel length mismatch");
-        }
+        let pixels = crate::cursor_pixels::Pixels::decode(evoparseq_host_interop::CursorImage {
+            format: evoparseq_host_interop::CursorFormat::Rgba,
+            size: (width, height),
+            hotspot: (x.max(0) as u32, y.max(0) as u32),
+            bytes: &bytes,
+        })?;
         Ok(Self {
-            width,
-            height,
-            hot_x: x.clamp(0, width as i32 - 1) as u32,
-            hot_y: y.clamp(0, height as i32 - 1) as u32,
-            pixels: Pixels::Rgba(bytes),
+            width: pixels.size.0,
+            height: pixels.size.1,
+            hot_x: pixels.hotspot.0,
+            hot_y: pixels.hotspot.1,
+            pixels: Pixels::Rgba(pixels.rgba),
         })
     }
+
     pub(crate) fn monochrome(
         bytes: Vec<u8>,
         width: u32,
@@ -64,19 +66,10 @@ impl Frame {
         Ok(width as usize * height as usize * 4)
     }
     fn png(bytes: Vec<u8>, x: i32, y: i32) -> Result<Self> {
-        if bytes.len() > MAX_ENCODED {
-            bail!("encoded cursor exceeds limit");
-        }
-        let mut reader =
-            image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Png);
-        let mut limits = image::Limits::default();
-        limits.max_image_width = Some(MAX_SIDE);
-        limits.max_image_height = Some(MAX_SIDE);
-        limits.max_alloc = Some(2 * 1024 * 1024);
-        reader.limits(limits);
-        let image = reader.decode()?.into_rgba8();
-        Self::rgba(image.as_raw().clone(), image.width(), image.height(), x, y)
+        let (rgba, width, height) = crate::cursor_pixels::png(&bytes)?;
+        Self::rgba(rgba, width, height, x, y)
     }
+
     fn fit_local(&self, reference: (u32, u32)) -> Geometry {
         let (rw, rh) = (
             reference.0.clamp(1, MAX_LOCAL_SIDE),

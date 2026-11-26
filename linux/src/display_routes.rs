@@ -79,6 +79,9 @@ impl Displays {
         ensure!(slots[stream - 1].is_none(), "Display is already open");
         let playback = Playback::new(ctx.clone());
         playback.attach_displays(self, stream);
+        playback
+            .local_cursor
+            .store(phaze_output.is_some(), Ordering::Release);
         playback.set_hevc(hevc);
         playback.set_ten_bit(self.ten_bit.load(Ordering::Acquire));
         let mut inspector = crate::video_stream::Inspector::default();

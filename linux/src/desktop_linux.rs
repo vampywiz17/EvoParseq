@@ -22,6 +22,7 @@ pub struct DesktopInput {
     restored_position: Option<Pos2>,
     drag_candidate: Option<Pos2>,
     transferred: bool,
+    cursor: crate::cursor_linux::Cursor,
 }
 impl DesktopInput {
     pub fn keyboard(&self) -> std::sync::Arc<crate::native_loop::KeyboardBridge> {
@@ -60,6 +61,7 @@ impl DesktopInput {
         self.restored_position = None;
         self.drag_candidate = None;
         self.transferred = false;
+        self.cursor = Default::default();
         playback.deactivate_input();
         self.controls = None;
         self.badge = None;
@@ -163,9 +165,27 @@ impl DesktopInput {
             && playback
                 .phaze_cursor_hidden
                 .load(std::sync::atomic::Ordering::Acquire)
+            && ctx.input(|i| {
+                (i.focused || self.transferred)
+                    && i.pointer.hover_pos().is_some_and(|pos| self.inside(pos))
+            });
+        let local_cursor = !grab
+            && !native_drag
+            && !hidden_over_video
+            && self.enabled
+            && playback.input_active()
+            && playback
+                .local_cursor
+                .load(std::sync::atomic::Ordering::Acquire)
+            && ctx.input(|i| {
+                (i.focused || self.transferred)
+                    && i.pointer.hover_pos().is_some_and(|pos| self.inside(pos))
+            });
+        let painted = local_cursor
             && ctx
-                .input(|i| i.focused && i.pointer.hover_pos().is_some_and(|pos| self.inside(pos)));
-        if grab || native_drag || hidden_over_video {
+                .input(|i| i.pointer.hover_pos())
+                .is_some_and(|position| self.cursor.paint(ctx, playback.cursor_image(), position));
+        if grab || native_drag || hidden_over_video || painted {
             ctx.set_cursor_icon(egui::CursorIcon::None);
         }
     }
@@ -699,5 +719,169 @@ mod native_drag_tests {
         raw.events.clear();
         adapter.events(&ctx, &mut raw, &playback);
         assert!(!adapter.enabled && !playback.input_active());
+    }
+}
+
+#[cfg(test)]
+mod phaze_cursor_tests {
+    use super::*;
+    use std::sync::{Arc, atomic::Ordering};
+    #[test]
+    fn linux_phaze_cursor_is_local_only_over_active_video_and_respects_host_visibility() {
+        let ctx = egui::Context::default();
+        let playback = Playback::new(ctx.clone());
+        playback.set_input_ready(true);
+        playback.activate_input();
+        playback.local_cursor.store(true, Ordering::Release);
+        playback.set_cursor_image(Some(Arc::new(crate::cursor_pixels::Pixels {
+            size: (1, 1),
+            hotspot: (0, 0),
+            rgba: vec![255; 4],
+        })));
+        let mut adapter = DesktopInput {
+            enabled: true,
+            video: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.))),
+            controls: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(50., 50.))),
+            ..Default::default()
+        };
+        for (position, focused, transferred, hidden, dragging, enabled, local, drawn, icon) in [
+            (
+                (100., 80.),
+                true,
+                false,
+                false,
+                false,
+                true,
+                true,
+                true,
+                egui::CursorIcon::None,
+            ),
+            (
+                (100., 80.),
+                false,
+                true,
+                false,
+                false,
+                true,
+                true,
+                true,
+                egui::CursorIcon::None,
+            ),
+            (
+                (10., 10.),
+                true,
+                false,
+                false,
+                false,
+                true,
+                true,
+                false,
+                egui::CursorIcon::Text,
+            ),
+            (
+                (900., 80.),
+                true,
+                false,
+                false,
+                false,
+                true,
+                true,
+                false,
+                egui::CursorIcon::Text,
+            ),
+            (
+                (100., 80.),
+                false,
+                false,
+                false,
+                false,
+                true,
+                true,
+                false,
+                egui::CursorIcon::Text,
+            ),
+            (
+                (100., 80.),
+                false,
+                true,
+                true,
+                false,
+                true,
+                true,
+                false,
+                egui::CursorIcon::None,
+            ),
+            (
+                (100., 80.),
+                true,
+                false,
+                true,
+                false,
+                true,
+                true,
+                false,
+                egui::CursorIcon::None,
+            ),
+            (
+                (100., 80.),
+                true,
+                false,
+                false,
+                true,
+                true,
+                true,
+                false,
+                egui::CursorIcon::None,
+            ),
+            (
+                (100., 80.),
+                true,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                egui::CursorIcon::Text,
+            ),
+            (
+                (100., 80.),
+                true,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                egui::CursorIcon::Text,
+            ),
+        ] {
+            adapter.transferred = transferred;
+            adapter.enabled = enabled;
+            playback.local_cursor.store(local, Ordering::Release);
+            playback
+                .phaze_cursor_hidden
+                .store(hidden, Ordering::Release);
+            playback.native_drag.store(dragging, Ordering::Release);
+            let output = ctx.run(
+                egui::RawInput {
+                    focused,
+                    events: vec![Event::PointerMoved(egui::pos2(position.0, position.1))],
+                    ..Default::default()
+                },
+                |ctx| {
+                    ctx.set_cursor_icon(egui::CursorIcon::Text);
+                    adapter.cursor(ctx, &playback);
+                },
+            );
+            assert_eq!(output.platform_output.cursor_icon, icon);
+            assert_eq!(
+                output
+                    .shapes
+                    .iter()
+                    .any(|s| matches!(&s.shape, egui::Shape::Mesh(_))),
+                drawn
+            );
+        }
     }
 }

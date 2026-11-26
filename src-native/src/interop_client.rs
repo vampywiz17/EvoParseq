@@ -32,6 +32,7 @@ pub trait Platform {
         controls: &mut Vec<ClientControl>,
     ) -> Result<bool>;
     fn cursor_mode(&mut self, relative: bool, visible: bool);
+    fn cursor_image(&mut self, _image: evoparseq_host_interop::CursorImage<'_>) {}
     fn clipboard(&mut self, _text: &str) {}
     fn control_sent(&mut self, _control: &ClientControl, _sent: bool) {}
     fn peer_state(&mut self, _local_id: u32, _state: evoparseq_host_interop::PeerState) {}
@@ -205,6 +206,9 @@ impl<P: Platform> Sink for Client<P> {
     fn cursor_mode(&mut self, relative: bool, visible: bool) {
         self.platform.cursor_mode(relative, visible);
     }
+    fn cursor_image(&mut self, image: evoparseq_host_interop::CursorImage<'_>) {
+        self.platform.cursor_image(image);
+    }
     fn clipboard_text(&mut self, text: &str) {
         self.platform.clipboard(text);
     }
@@ -291,8 +295,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shared_client_forwards_selected_usb_hid_devices() {
-        struct Offline;
+    fn linux_shared_client_forwards_selected_usb_hid_devices_and_cursor_images() {
+        #[derive(Default)]
+        struct Offline {
+            cursor: Option<Vec<u8>>,
+        }
         impl Platform for Offline {
             fn video(&mut self, _: &[u8], _: PacketInfo) -> Result<()> {
                 Ok(())
@@ -311,10 +318,16 @@ mod tests {
                 Ok(false)
             }
             fn cursor_mode(&mut self, _: bool, _: bool) {}
+            fn cursor_image(&mut self, image: evoparseq_host_interop::CursorImage<'_>) {
+                assert_eq!(image.size, (1, 1));
+                assert_eq!(image.hotspot, (0, 0));
+                assert_eq!(image.format, evoparseq_host_interop::CursorFormat::Rgba);
+                self.cursor = Some(image.bytes.to_vec());
+            }
         }
         for devices in [(false, false), (true, false), (false, true), (true, true)] {
-            let client = Client::new(
-                Offline,
+            let mut client = Client::new(
+                Offline::default(),
                 VideoConfig::default(),
                 DecodedPcm::stereo(50),
                 false,
@@ -322,6 +335,16 @@ mod tests {
             )
             .with_hid_devices(devices);
             assert_eq!(Sink::usb_hid_devices(&client), devices);
+            Sink::cursor_image(
+                &mut client,
+                evoparseq_host_interop::CursorImage {
+                    format: evoparseq_host_interop::CursorFormat::Rgba,
+                    size: (1, 1),
+                    hotspot: (0, 0),
+                    bytes: &[1, 2, 3, 255],
+                },
+            );
+            assert_eq!(client.platform.cursor, Some(vec![1, 2, 3, 255]));
         }
     }
 

@@ -65,6 +65,9 @@ mod native_core {
 mod clipboard_sync;
 #[path = "../../src-native/src/control.rs"]
 pub mod control;
+mod cursor_linux;
+#[path = "../../src-native/src/cursor_pixels.rs"]
+mod cursor_pixels;
 mod cursor_theme;
 #[path = "../../src-native/src/desktop_input.rs"]
 pub mod desktop_input;
