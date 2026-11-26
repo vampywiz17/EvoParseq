@@ -419,3 +419,46 @@ fn secondary_display_slots_keep_output_identity_until_closed() {
     assert!(matches!(displays.command(), Some(DisplayCommand::Close(7))));
     assert_eq!(displays.vacant(), Some(1));
 }
+
+#[cfg(all(test, not(target_os = "android")))]
+#[test]
+fn secondary_video_waits_for_its_own_picture_and_a_closing_slot_discards_frames() {
+    use evoparseq_host_interop::DisplayCommand;
+    use std::time::{Duration, Instant};
+
+    let mut displays = SecondaryDisplays::default();
+    let config = VideoConfig::default();
+    assert!(!displays.is_open());
+    displays.open(1, 99, config);
+    assert!(!displays.ready(1));
+    let earlier = Instant::now() - Duration::from_secs(21);
+    displays.slots[0].as_mut().unwrap().opened = earlier;
+    assert!(
+        !displays.timed_out(1),
+        "timeout starts when the request is sent"
+    );
+    assert!(matches!(
+        displays.command(),
+        Some(DisplayCommand::Open(99, _))
+    ));
+    assert!(!displays.timed_out(1));
+    assert!(displays.inspect(1, &[0], true).is_none());
+    assert!(displays.is_open());
+    displays.slots[0].as_mut().unwrap().opened = earlier;
+    assert!(displays.timed_out(1));
+    displays.close(1);
+    assert!(displays.inspect(1, &[0], false).is_none());
+    assert!(matches!(
+        displays.command(),
+        Some(DisplayCommand::Close(99))
+    ));
+    assert!(!displays.is_open());
+
+    displays.open(2, 7, config);
+    displays.close(2);
+    assert!(
+        displays.command().is_none(),
+        "an unsent request has nothing to stop"
+    );
+    assert!(!displays.is_open());
+}

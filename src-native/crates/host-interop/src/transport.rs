@@ -589,8 +589,7 @@ pub async fn run(
         && std::env::var_os("EVOPARSEQ_PHAZE_VERIFY_PARALLEL").is_some_and(|value| value == "1"))
     .then(parallel_display_probe::Probe::default);
     let mut input = InputBatch::default();
-    let mut secondary_outputs = [None; 3];
-    let mut routed_video = false;
+    let mut displays = DisplayRoutes::default();
     let mut controls = Vec::new();
     let mut deferred_motion = None;
     let mut outputs_available = Vec::new();
@@ -637,34 +636,12 @@ pub async fn run(
                 });
                 if reliable.pending().count() < 48 && parallel_display_probe.as_ref().is_none_or(|probe| !probe.active()) {
                     if let Some(command) = sink.display_command() {
-                        match command {
-                            DisplayCommand::Open(output, config) => {
-                                let advertised = outputs_available.iter().any(|o: &wire::Output| {
-                                    o.active && o.id == output
-                                });
-                                if advertised && Some(output) != selected_output && !secondary_outputs.contains(&Some(output)) {
-                                    if let Some(slot) = secondary_outputs.iter_mut().find(|slot| slot.is_none()) {
-                                        for packet in reliable.frame(&config.request(output)?)? {
-                                            send(&mut c, &packet)?;
-                                        }
-                                        *slot = Some(output);
-                                        routed_video = true;
-                                    } else {
-                                        sink.secondary_lost(output);
-                                    }
-                                } else {
-                                    sink.secondary_lost(output);
-                                }
+                        displays.command(command, selected_output, &outputs_available, sink, |message| {
+                            for packet in reliable.frame(message)? {
+                                send(&mut c, &packet)?;
                             }
-                            DisplayCommand::Close(output) => {
-                                if let Some(slot) = secondary_outputs.iter_mut().find(|slot| **slot == Some(output)) {
-                                    for packet in reliable.frame(&wire::stop_video(output))? {
-                                        send(&mut c, &packet)?;
-                                    }
-                                    *slot = None;
-                                }
-                            }
-                        }
+                            Ok(())
+                        })?;
                     }
                 }
                 if let Some(probe) = parallel_display_probe.as_mut() {
@@ -672,7 +649,7 @@ pub async fn run(
                         Instant::now(),
                         selected_output,
                         &outputs_available,
-                        video_received && !routed_video && reliable.pending().count() < 48,
+                        video_received && !displays.routed_video && reliable.pending().count() < 48,
                         request.is_some(),
                     )?;
                     match action {
@@ -698,10 +675,7 @@ pub async fn run(
                 }
                 if let Some((output,config))=request {
                     ensure!(outputs_available.iter().any(|o: &wire::Output| o.id==output && o.active), "Phaze display is unavailable");
-                    if let Some(slot) = secondary_outputs.iter_mut().find(|slot| **slot == Some(output)) {
-                        *slot = None;
-                        sink.secondary_lost(output);
-                    }
+                    displays.promote(output, sink);
                     let changing_output = selected_output != Some(output);
                     if changing_output {
                         deferred_motion = None;
@@ -725,10 +699,7 @@ pub async fn run(
                     });
                     let mut commands = deferred.into_iter().chain(input.items.drain(..)).peekable();
                     while let Some((target, command)) = commands.next() {
-                        let target = match target {
-                            Some(target) if target != output && !secondary_outputs.contains(&Some(target)) && command != crate::Input::Release => continue,
-                            target => target.unwrap_or(output),
-                        };
+                        let Some(target) = displays.input_target(output, target, command) else { continue };
                         if usb_probe.as_mut().is_some_and(|usb| usb.input(command)) { continue; }
                         let outstanding = reliable.pending().count();
                         // Preserve room for button and key transitions when the
@@ -819,17 +790,7 @@ pub async fn run(
                                 sink.stage("video_requested");
                             }
                         }
-                        for slot in &mut secondary_outputs {
-                            if let Some(output) = *slot {
-                                if !outputs
-                                    .iter()
-                                    .any(|entry| entry.id == output && entry.active)
-                                {
-                                    *slot = None;
-                                    sink.secondary_lost(output);
-                                }
-                            }
-                        }
+                        displays.advertised(&outputs, sink);
                         outputs_available = outputs;
                     }
                     Some(5) if requested => {
@@ -843,8 +804,9 @@ pub async fn run(
                                 sink.display_video_header_observed(output, mask);
                             }
                         }
-                        if let Some(probe) =
-                            parallel_display_probe.as_mut().filter(|_| !routed_video)
+                        if let Some(probe) = parallel_display_probe
+                            .as_mut()
+                            .filter(|_| !displays.routed_video)
                         {
                             let (keep, status) = probe.video(
                                 &frame[1..],
@@ -859,38 +821,10 @@ pub async fn run(
                                 continue;
                             }
                         }
-                        let flags = u32::from_be_bytes(frame[9..13].try_into().unwrap());
-                        if routed_video {
-                            let output = wire::be(&frame[1..], 0);
-                            if Some(output) != selected_output {
-                                if secondary_outputs.contains(&Some(output)) {
-                                    sink.secondary_video(output, bytes, flags & 1 != 0);
-                                }
-                                continue;
-                            }
-                        }
-                        sink.video(bytes, flags & 1 != 0)?;
-                        video_received |= !bytes.is_empty();
+                        video_received |=
+                            displays.video(selected_output, &frame[1..], bytes, sink)?;
                     }
-                    Some(6) => {
-                        if let Some((relative, visible)) =
-                            crate::cursor::mode(&frame[1..], selected_output)
-                        {
-                            sink.cursor_mode(relative, visible);
-                        } else if routed_video {
-                            let body = &frame[1..];
-                            if body.len() >= 13 {
-                                let output = wire::be(body, 0);
-                                if secondary_outputs.contains(&Some(output)) {
-                                    if let Some((relative, visible)) =
-                                        crate::cursor::mode(body, Some(output))
-                                    {
-                                        sink.secondary_cursor_mode(output, relative, visible);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    Some(6) => displays.cursor(selected_output, &frame[1..], sink),
                     Some(7) => {
                         let (codec, pcm, payload_bytes) = audio.decode(&frame[1..])?;
                         sink.audio(pcm, codec, payload_bytes)?;
@@ -1039,6 +973,155 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_display_routes_keep_video_cursor_and_input_on_their_outputs() -> Result<()> {
+        #[derive(Default)]
+        struct Client {
+            lost: Vec<u32>,
+            primary_video: Vec<(Vec<u8>, bool)>,
+            secondary_video: Vec<(u32, Vec<u8>, bool)>,
+            cursor: Vec<(Option<u32>, bool, bool)>,
+        }
+
+        impl Sink for Client {
+            fn stage(&mut self, _: &'static str) {}
+            fn outputs(&mut self, _: &[wire::Output]) {}
+            fn secondary_lost(&mut self, output: u32) {
+                self.lost.push(output);
+            }
+            fn secondary_video(&mut self, id: u32, encoded: &[u8], reset: bool) {
+                self.secondary_video.push((id, encoded.into(), reset));
+            }
+            fn secondary_cursor_mode(&mut self, id: u32, relative: bool, visible: bool) {
+                self.cursor.push((Some(id), relative, visible));
+            }
+            fn cursor_mode(&mut self, relative: bool, visible: bool) {
+                self.cursor.push((None, relative, visible));
+            }
+            fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()> {
+                self.primary_video.push((encoded.into(), reset));
+                Ok(())
+            }
+            fn audio(&mut self, _: &[i16], _: crate::AudioCodec, _: usize) -> Result<()> {
+                Ok(())
+            }
+            fn poll(
+                &mut self,
+                _: Option<u32>,
+                _: &mut InputBatch,
+                _: &mut Vec<crate::ClientControl>,
+            ) -> Result<bool> {
+                Ok(true)
+            }
+        }
+
+        let primary = Some(7);
+        let config = crate::VideoConfig::default();
+        let mut routes = DisplayRoutes::default();
+        let mut client = Client::default();
+        let targets = [7, 17, 9, 22, 50].map(|id| wire::Output {
+            id,
+            name: String::new(),
+            width: 1920,
+            height: 1080,
+            active: true,
+            primary: id == 7,
+        });
+        let [mut first, mut second] = [[0; 13]; 2];
+        first[..4].copy_from_slice(&7u32.to_be_bytes());
+        second[..4].copy_from_slice(&17u32.to_be_bytes());
+        second[11] = 1;
+
+        assert!(routes.video(primary, &first, b"one", &mut client)?);
+        assert!(!routes.video(primary, &first, b"", &mut client)?);
+        client.primary_video.clear();
+        for id in [7, 8] {
+            routes.command(
+                DisplayCommand::Open(id, config),
+                primary,
+                &targets,
+                &mut client,
+                |_| anyhow::bail!("Unexpected start"),
+            )?;
+        }
+        for id in [17, 9, 22] {
+            routes.command(
+                DisplayCommand::Open(id, config),
+                primary,
+                &targets,
+                &mut client,
+                |message| {
+                    assert_eq!(message[0], 3);
+                    assert_eq!(wire::be(message, 1), id);
+                    Ok(())
+                },
+            )?;
+        }
+        routes.command(
+            DisplayCommand::Open(50, config),
+            primary,
+            &targets,
+            &mut client,
+            |_| anyhow::bail!("No fourth secondary slot"),
+        )?;
+        assert_eq!(client.lost, [7, 8, 50]);
+        assert!(!routes.video(primary, &second, b"two", &mut client)?);
+        assert!(routes.video(primary, &first, b"one", &mut client)?);
+        assert_eq!(client.primary_video, [(b"one".to_vec(), false)]);
+        assert_eq!(client.secondary_video, [(17, b"two".to_vec(), true)]);
+
+        first[4] = 2;
+        second[4] = 1;
+        routes.cursor(primary, &first, &mut client);
+        routes.cursor(primary, &[0], &mut client);
+        routes.cursor(primary, &second, &mut client);
+        assert_eq!(
+            client.cursor,
+            [(None, false, false), (Some(17), true, true)]
+        );
+
+        let motion = crate::Input::Motion {
+            x: 4,
+            y: 5,
+            relative: false,
+        };
+        assert_eq!(routes.input_target(7, None, motion), Some(7));
+        assert_eq!(routes.input_target(7, Some(17), motion), Some(17));
+        assert_eq!(routes.input_target(7, Some(8), motion), None);
+        assert_eq!(
+            routes.input_target(7, Some(8), crate::Input::Release),
+            Some(8)
+        );
+        routes.command(
+            DisplayCommand::Close(17),
+            primary,
+            &targets,
+            &mut client,
+            |message| {
+                assert_eq!(message, wire::stop_video(17));
+                Ok(())
+            },
+        )?;
+        routes.command(
+            DisplayCommand::Close(17),
+            primary,
+            &targets,
+            &mut client,
+            |_| anyhow::bail!("Output is already closed"),
+        )?;
+        assert!(!routes.video(primary, &second, b"late packet", &mut client)?);
+        routes.cursor(primary, &second, &mut client);
+        assert_eq!(client.secondary_video.len(), 1);
+        assert_eq!(client.cursor.len(), 2);
+        routes.promote(9, &mut client);
+        routes.promote(50, &mut client);
+        routes.advertised(&targets[..2], &mut client);
+        assert_eq!(client.lost, [7, 8, 50, 9, 22]);
+        assert_eq!(routes.input_target(9, None, motion), Some(9));
+        assert_eq!(routes.input_target(9, Some(22), motion), None);
+        Ok(())
+    }
 
     #[test]
     fn startup_waits_for_an_active_output_and_prefers_the_primary() {

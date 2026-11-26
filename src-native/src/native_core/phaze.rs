@@ -1398,6 +1398,126 @@ mod tests {
                 .push(Event::NativeSession(Command::HideButton));
             assert!(view.poll(Some(8), &mut commands, &mut controls)?);
             assert!(manager.native_session_button_hidden());
+
+            // Exercise Phaze window dispatch with synthetic input and no host.
+            view.outputs(&[output(7), output(8), output(29)]);
+            view.hid_devices = (true, false);
+            window
+                .events
+                .push(Event::NativeSession(Command::AddPhazeDisplay(29)));
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+            assert!(view.display_command().is_none());
+            view.hid_devices = (false, false);
+            for id in [8, 67] {
+                window
+                    .events
+                    .push(Event::NativeSession(Command::AddPhazeDisplay(id)));
+                assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+                assert!(view.display_command().is_none());
+            }
+            window
+                .events
+                .push(Event::NativeSession(Command::AddPhazeDisplay(29)));
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+            assert!(matches!(
+                view.display_command(),
+                Some(DisplayCommand::Open(29, _))
+            ));
+            let screen = window
+                .displays
+                .get(1)
+                .context("Additional window was not created")?;
+            assert_eq!(screen.phaze_output, Some(29));
+            assert!(window.displays.has_phaze_output(29));
+            view.secondary_cursor_mode(29, false, true);
+            view.secondary_video(29, &[0], true);
+            assert!(!view.secondary.ready(1));
+            assert!(view
+                .secondary
+                .inspect(1, &[0, 0, 1, 0x65, 0x80], false)
+                .is_some());
+            window.events.drain();
+            screen.window.events.drain();
+
+            // Snapshot geometry is synthetic. It does not submit a frame to a
+            // decoder, move the system pointer, or use a real profile.
+            let prepare_input = |target: &Window, (width, height)| {
+                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                    SendMessageW, WM_NULL, WM_SETFOCUS,
+                };
+                let generation = target.begin_video();
+                target.set_video_ready_for(generation, true);
+                *target.video_report.lock().unwrap() = Some(crate::video_output::Snapshot {
+                    width: Some(width),
+                    height: Some(height),
+                    frames_presented: 1,
+                    ..Default::default()
+                });
+                unsafe {
+                    SendMessageW(target.handle(), WM_SETFOCUS, 0, 0);
+                    SendMessageW(target.handle(), WM_NULL, 0, 0);
+                }
+            };
+            prepare_input(&screen.window, (1280, 720));
+            screen.window.events.push(Event::Key(true, "KeyA", 0));
+            commands.clear();
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+            assert!(commands
+                .iter()
+                .any(|command| matches!(command, Input::Key { down: true, .. })));
+            assert_eq!(view.owner, 2);
+
+            let reference = screen
+                .window
+                .presented_viewport()
+                .context("Secondary viewport did not become ready")?;
+            let [l, t, r, b] = reference.rect().unwrap();
+            let (x, y) = ((l + r) / 2, (t + b) / 2);
+            let (dx, dy) = normalized(Some(reference), x, y).unwrap();
+            commands.clear();
+            view.input_event(
+                &screen.window,
+                Event::Button(true, 0, x, y),
+                Some(8),
+                &mut commands,
+            )?;
+            assert!(commands
+                .iter()
+                .any(|command| matches!(command, Input::Button { down: true, .. })));
+            assert_eq!(view.drag_buttons, 1);
+            assert!(dx > 0 && dy > 0);
+
+            screen
+                .window
+                .events
+                .push(Event::Shortcut(crate::input::Shortcut::ReleaseInput));
+            commands.clear();
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+            assert!(commands.iter().any(|command| *command == Input::Release));
+            assert_eq!(view.drag_buttons, 0);
+            screen
+                .window
+                .events
+                .push(Event::NativeSession(Command::Disconnect));
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+            assert!(matches!(
+                view.display_command(),
+                Some(DisplayCommand::Close(29))
+            ));
+            assert!(window.displays.get(1).is_none());
+
+            window
+                .events
+                .push(Event::NativeSession(Command::AddPhazeDisplay(29)));
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+            assert!(matches!(
+                view.display_command(),
+                Some(DisplayCommand::Open(29, _))
+            ));
+            view.secondary_lost(29);
+            assert!(window.displays.get(1).is_none());
+            assert!(view.display_command().is_none());
+
             window
                 .events
                 .push(Event::NativeSession(Command::Disconnect));

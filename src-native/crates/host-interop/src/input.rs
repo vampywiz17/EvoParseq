@@ -346,3 +346,30 @@ fn display_drag_keeps_press_move_and_release_on_their_outputs() {
     batch.push(Input::Release);
     assert_eq!(batch.items, [(None, Input::Release)]);
 }
+
+#[cfg(test)]
+#[test]
+fn initial_pointer_alignment_preserves_the_button_destination() {
+    let down = Input::Button {
+        button: 1,
+        x: 512,
+        y: 384,
+        down: true,
+    };
+    let position = Input::Motion {
+        x: 32767,
+        y: 32767,
+        relative: false,
+    };
+    let mut batch = InputBatch::default();
+    assert!(batch.is_empty());
+    batch.target(Some(29));
+    batch.extend([down]);
+    batch.insert(0, position);
+    assert_eq!(batch.len(), 2);
+    assert_eq!(batch[0], position);
+    assert_eq!(batch.last(), Some(&down));
+    assert_eq!(batch.items, [(Some(29), position), (Some(29), down)]);
+    let copy: InputBatch = batch.iter().copied().collect();
+    assert_eq!(copy.items, [(None, position), (None, down)]);
+}
