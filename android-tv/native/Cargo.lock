@@ -872,6 +872,7 @@ dependencies = [
  "evoparseq-lowlat",
  "evoparseq-host-interop",
  "futures-util",
+ "getrandom 0.4.3",
  "httparse",
  "jni",
  "libc",

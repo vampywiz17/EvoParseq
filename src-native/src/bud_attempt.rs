@@ -827,10 +827,14 @@ fn run(
             // that event and owns its visibility/capture decisions.
             window.events.push(crate::window::Event::CursorReady);
         }
-        let fallback_due = !established
-            && (ended
-                || (direct_attempt
-                    && answered_at.is_some_and(|t| t.elapsed() >= Duration::from_secs(4))));
+        let fallback_due = crate::lowlat_routes::retry_due(
+            established,
+            ended,
+            false,
+            answered_at
+                .filter(|_| direct_attempt)
+                .map(|at| at.elapsed()),
+        );
         if fallback_due {
             *stage = "relay_retry_started";
             if relay_routes.is_none() {

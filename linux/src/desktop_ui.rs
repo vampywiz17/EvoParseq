@@ -173,7 +173,9 @@ impl Desktop {
                 label(
                     ui,
                     r(s::help(y, row.help_height)),
-                    if row.label == f::VIDEO_GPU.label {
+                    if row.label == f::CHROMA.label {
+                        f::chroma_help(phaze)
+                    } else if row.label == f::VIDEO_GPU.label {
                         "GPU for stream decoding and rendering.\nRestart EvoParseq after changing the GPU."
                     } else if phaze && row.label == f::AUDIO_FORMAT.label {
                         "48 kHz stereo: AAC-LC or uncompressed PCM.\nPCM uses about 1.54 Mbps before overhead."
@@ -334,7 +336,12 @@ impl Desktop {
                 } else {
                     crate::connection_settings::BinaryChoice::Rendering.labels()[0]
                 };
-                ui.add_enabled_ui(false, |ui| {
+                let enabled = if row.label == f::CHROMA.label {
+                    f::VIDEO_CAPABILITIES.chroma_enabled(draft.values.prefer_hevc, None)
+                } else {
+                    f::VIDEO_CAPABILITIES.original_surfaces
+                };
+                ui.add_enabled_ui(enabled, |ui| {
                     ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                         egui::ComboBox::from_id_salt(row.label)
                             .width(400.)

@@ -43,8 +43,7 @@ struct View {
     interval_keys: [u32; 2],
     last_input_delivery: evoparseq_host_interop::InputDelivery,
     interval_pictures: u32,
-    route: &'static str,
-    carrier: &'static str,
+    routing: interop_session::RouteState,
 }
 impl View {
     fn publish(&self, state: &str) {
@@ -77,7 +76,7 @@ impl View {
             crate::stats::Sample {
                 phaze: true,
                 state: state.into(),
-                protocol: format!("Phaze / {}", self.carrier),
+                protocol: format!("Phaze / {}", self.routing.carrier()),
                 dtls: if self.authenticated {
                     "Authenticated DTLS 1.2 (legacy non-EMS)"
                 } else {
@@ -100,13 +99,13 @@ impl View {
                     .as_ref()
                     .map(|_| crate::audio_layout::Layout::STEREO),
                 profile: stream.sps_profile_idc,
-                route: if self.authenticated {
-                    self.route
-                } else {
-                    "Unknown"
-                },
-                turn_protocol: (self.authenticated && self.route == "TURN")
-                    .then(|| self.carrier.trim_start_matches("TURN / ").to_owned()),
+                route: self.routing.route(),
+                turn_protocol: (self.authenticated && self.routing.route() == "TURN").then(|| {
+                    self.routing
+                        .carrier()
+                        .trim_start_matches("TURN / ")
+                        .to_owned()
+                }),
                 ..Default::default()
             },
         );
@@ -299,12 +298,13 @@ impl evoparseq_host_interop::Sink for View {
             .notify(Notification::Status(Status::RequestSent));
     }
     fn stage(&mut self, stage: &'static str) {
+        self.routing.stage(stage);
         if stage == "dtls_authenticated" {
             self.authenticated = true;
             crate::event_log::record(
                 "INFO",
                 "phaze_route_selected",
-                serde_json::json!({"route":self.route,"carrier":self.carrier,"authenticated":true}),
+                serde_json::json!({"route":self.routing.route(),"carrier":self.routing.carrier(),"authenticated":true}),
             );
         }
         crate::event_log::record(
@@ -674,8 +674,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         interval_keys: [0; 2],
         last_input_delivery: Default::default(),
         interval_pictures: 0,
-        route: "Direct",
-        carrier: "direct UDP",
+        routing: Default::default(),
     };
     let remote = evoparseq_host_interop::Session::from_token(session.token())?;
     let result = block_on(async {
@@ -725,10 +724,7 @@ async fn connect(
                 .collect()
         },
         |view, name, allocated| {
-            view.carrier = name;
-            if allocated {
-                view.route = "TURN";
-            }
+            view.routing.select(name, allocated);
         },
     )
     .await
@@ -863,8 +859,7 @@ mod tests {
                 interval_keys: [0; 2],
                 last_input_delivery: Default::default(),
                 interval_pictures: 0,
-                route: "Direct",
-                carrier: "direct UDP",
+                routing: Default::default(),
             };
             let output = |id| evoparseq_host_interop::Output {
                 id,
@@ -1151,7 +1146,7 @@ mod tests {
                 })
                 .await?;
                 closed?;
-                assert_eq!(view.carrier, "TURN / TCP");
+                assert_eq!(view.routing.carrier(), "TURN / TCP");
                 assert!(error
                     .unwrap_err()
                     .to_string()

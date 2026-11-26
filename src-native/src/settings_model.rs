@@ -1,5 +1,5 @@
 //! Editable Settings state and rules without window/control APIs.
-use crate::connection_settings::{full_chroma_vendor_allowed, GpuPreference, Manager, Settings};
+use crate::connection_settings::{GpuPreference, Manager, Settings};
 use anyhow::{Context, Result};
 use zeroize::Zeroizing;
 
@@ -183,11 +183,7 @@ impl Form {
         }
     }
     pub fn chroma_help(&self) -> &'static str {
-        if self.phaze {
-            "HEVC 8-bit; requires compatible host and GPU.\nNormal GPU rendering; host may send 4:2:0 instead."
-        } else {
-            crate::app_style::forms::CHROMA.help
-        }
+        crate::app_style::forms::chroma_help(self.phaze)
     }
     pub fn presentation_help(&self) -> &'static str {
         if self.phaze {
@@ -255,7 +251,8 @@ impl Form {
     }
     pub fn availability(&mut self) -> Availability {
         let vendor = self.gpu_vendor();
-        let chroma_allowed = vendor.is_some_and(full_chroma_vendor_allowed);
+        let chroma_allowed =
+            crate::app_style::forms::VIDEO_CAPABILITIES.chroma_enabled(true, vendor);
         if !chroma_allowed {
             self.values.experimental_chroma_444 = false;
         }
@@ -274,7 +271,8 @@ impl Form {
             audio_limits: self.values.custom_audio_buffer,
             chroma_444: self.values.prefer_hevc && chroma_allowed,
             ai_upscale: self.ai_upscaler().enabled(&self.values),
-            zero_copy: self.values.prefer_hevc
+            zero_copy: crate::app_style::forms::VIDEO_CAPABILITIES.original_surfaces
+                && self.values.prefer_hevc
                 && !self.values.experimental_chroma_444
                 && self.values.ai_upscale_quality(vendor) == 0,
             relay,

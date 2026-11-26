@@ -307,14 +307,17 @@ impl interop_client::Platform for Adapter<'_> {
                         "connecting"
                     }
                     .into(),
-                    protocol: format!("Phaze / {}", session.carrier),
-                    route: if self.authenticated {
-                        session.route
-                    } else {
-                        "Unknown"
-                    },
-                    turn_protocol: (self.authenticated && session.route == "TURN")
-                        .then(|| session.carrier.trim_start_matches("TURN / ").to_owned()),
+                    protocol: format!("Phaze / {}", session.routing.carrier()),
+                    route: session.routing.route(),
+                    turn_protocol: (self.authenticated && session.routing.route() == "TURN").then(
+                        || {
+                            session
+                                .routing
+                                .carrier()
+                                .trim_start_matches("TURN / ")
+                                .to_owned()
+                        },
+                    ),
                     received: self.authenticated.then_some(session.received),
                     sent: self.authenticated.then_some(session.sent),
                     rtt_ms: session.rtt.map(|rtt| rtt.as_secs_f64() * 1000.),

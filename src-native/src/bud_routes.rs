@@ -121,10 +121,6 @@ pub(crate) async fn relay_route(
     turn_relays(manager.resolve_lowlat_relay(settings).await?).await
 }
 
-#[cfg(any(
-    all(windows, feature = "lowlat"),
-    all(target_os = "linux", feature = "desktop-telemetry")
-))]
 pub(crate) fn native_attempt_id() -> Result<String> {
     let mut random = [0u8; 24];
     getrandom::fill(&mut random)
@@ -141,4 +137,57 @@ pub(crate) fn native_attempt_id() -> Result<String> {
         })
         .collect::<Vec<_>>()
         .join("-"))
+}
+
+/// Shared decision only. The selected transport owns route teardown and startup.
+pub(crate) fn retry_due(
+    established: bool,
+    failed: bool,
+    timed_out: bool,
+    direct_answer_age: Option<Duration>,
+) -> bool {
+    !established
+        && (failed
+            || timed_out
+            || direct_answer_age.is_some_and(|age| age >= Duration::from_secs(4)))
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+
+    #[test]
+    fn relay_retry_only_precedes_establishment() {
+        for established in [false, true] {
+            for failed in [false, true] {
+                for timed_out in [false, true] {
+                    for age in [
+                        None,
+                        Some(Duration::from_secs(3)),
+                        Some(Duration::from_secs(4)),
+                    ] {
+                        assert_eq!(
+                            retry_due(established, failed, timed_out, age),
+                            !established
+                                && (failed || timed_out || age == Some(Duration::from_secs(4)))
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn account_attempt_ids_keep_the_native_format_and_are_fresh() {
+        let first = native_attempt_id().unwrap();
+        let second = native_attempt_id().unwrap();
+        assert_ne!(first, second);
+        for id in [first, second] {
+            let groups: Vec<_> = id.split('-').collect();
+            assert_eq!(groups.len(), 6);
+            assert!(groups
+                .iter()
+                .all(|group| group.len() == 8 && group.bytes().all(|b| b.is_ascii_hexdigit())));
+        }
+    }
 }

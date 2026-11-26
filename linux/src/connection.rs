@@ -444,12 +444,12 @@ fn run_lowlat(
                     _ => {}
                 }
             }
-            if !established
-                && (ended
-                    || Instant::now() >= deadline
-                    || (direct
-                        && answered_at.is_some_and(|at| at.elapsed() >= Duration::from_secs(4))))
-            {
+            if crate::lowlat_routes::retry_due(
+                established,
+                ended,
+                Instant::now() >= deadline,
+                answered_at.filter(|_| direct).map(|at| at.elapsed()),
+            ) {
                 ensure!(retries < 32, "LOWLAT configured route attempts exhausted");
                 if relays.is_none() {
                     relays = Some(runtime.block_on(async {
