@@ -16,11 +16,21 @@ The user's standing requirement is to keep current and future development standa
 
 - lowlat is authorized only as an explicit alternative. WebRTC remains the default. lowlat integration must not alter the existing WebRTC connection/signaling, ICE/STUN/TURN selection, transport timers, SCTP reliability/ordering or settings behavior. Isolate the lowlat adapter, credentials and lifecycle; use only deliberate, reviewed common interfaces. A lowlat failure must not silently fall back or change the selected transport. Preserve the working WebRTC TURN/TCP and TURN/TLS routes, especially for restricted networks. Validate both transports independently before exposing a usable lowlat option.
 
+## Sonar coverage and implementation design
+
+- At least 80% Sonar coverage on new code is a baseline development requirement. Design each change with testable shared logic and meaningful regression tests from the start, and include those tests in the initial implementation. Plan coverage before coding so meeting the threshold does not routinely require a separate follow-up cycle.
+- Verify measured coverage in CI. Preserve the configured threshold and measure actual behavior. Add targeted tests for uncovered behavior instead of lowering thresholds or excluding production code to pass the gate.
+
 ## Pull requests and Gitar OSS review
 
 - Keep one open GitHub pull request into `dev` for each active feature branch. Push follow-up changes to the same feature branch.
 - Keep an open `dev` → `main` pull request for the next stable release. Merge it only with explicit release approval after the required checks pass. Open the next pull request when new release changes are available.
-- Use Gitar OSS for review and suggestions only. Keep automatic fixes and other Gitar write automation disabled. Leave auto-apply opt-ins such as `gitar-managed` off the pull requests and do not ask Gitar to apply fixes. Codex assesses the findings, implements warranted fixes, and verifies them in GitHub CI.
+- Gitar OSS may review changes and apply small, unambiguous fixes within the repository criteria in `.gitar/config/apply.md`. Eligible fixes include mechanical compilation errors, formatting, behavior-preserving Clippy findings, unused imports/variables and straightforward static-analysis or code-related CI findings. Preserve side effects, resource lifetimes and application behavior.
+- Manual approval is required for changes affecting protocols; WebRTC/ICE/STUN/TURN; connection policy, routing, retries or transport timing; unsafe Rust or memory/resource management; concurrency or synchronization; platform APIs, media or input capture; dependencies; architecture or public interfaces; authentication, credentials or security; CI/release/deployment configuration; and agent instructions or automation permissions. These boundaries override the small-fix allowlist. Gitar must leave such findings open and propose a correction for review.
+- Never weaken or skip tests, suppress warnings, lower the 80% Sonar new-code coverage threshold, exclude production code from analysis, bypass security checks or disable required checks to make CI pass. Codex reviews Gitar commits and verifies the relevant results in GitHub CI.
+- Gitar auto-apply requires per-PR opt-in through `gitar-managed` or `gitar auto-apply:on`. Agents may opt eligible feature PRs in once the repository criteria are available to Gitar on the repository's default branch. A criteria change inside a PR does not authorize that PR's own automatic fixes.
+- The `apply.md` selector governs automatic review fixes only. CI fixes/recovery, rule actions and explicit fix requests are independent Gitar mechanisms. Apply the same approval boundaries when requesting or reviewing those actions, and use specific, bounded fix requests for eligible CI corrections. Do not treat the selector as a technical approval gate for those mechanisms.
+- Keep automatic approval and automatic merging under the existing explicit approval rules. Gitar fixes do not authorize a merge or release.
 
 ## UI and platform boundaries for future development
 
