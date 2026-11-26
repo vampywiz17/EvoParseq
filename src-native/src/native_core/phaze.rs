@@ -485,7 +485,16 @@ impl evoparseq_host_interop::Sink for View {
             }
         };
         match frame {
-            Ok(frame) => self.window.set_cursor(Request::Image(Some(frame))),
+            Ok(frame) => {
+                for slot in 1..DESKTOP_DISPLAYS {
+                    if let Some(screen) = self.window.displays.get(slot) {
+                        screen
+                            .window
+                            .set_cursor(Request::Image(Some(frame.clone())));
+                    }
+                }
+                self.window.set_cursor(Request::Image(Some(frame)));
+            }
             Err(_) => crate::event_log::record(
                 "WARN",
                 "phaze_cursor_image_invalid",

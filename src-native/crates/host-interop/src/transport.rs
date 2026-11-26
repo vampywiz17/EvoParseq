@@ -467,6 +467,7 @@ fn routing_cid(b: &[u8]) -> Option<[u8; 8]> {
 struct DisplayRoutes {
     secondary: [Option<u32>; 3],
     routed_video: bool,
+    visible_cursor: Option<u32>,
 }
 
 impl DisplayRoutes {
@@ -569,16 +570,43 @@ impl DisplayRoutes {
         Ok(!encoded.is_empty())
     }
 
-    fn cursor(&self, primary: Option<u32>, body: &[u8], sink: &mut impl Sink) {
-        if let Some((relative, visible)) = crate::cursor::mode(body, primary) {
-            sink.cursor_mode(relative, visible);
-        } else if self.routed_video && body.len() >= 13 {
-            let output = wire::be(body, 0);
-            if self.secondary.contains(&Some(output)) {
-                if let Some((relative, visible)) = crate::cursor::mode(body, Some(output)) {
-                    sink.secondary_cursor_mode(output, relative, visible);
-                }
+    fn cursor(&mut self, primary: Option<u32>, body: &[u8], sink: &mut impl Sink) {
+        let Some((relative, visible)) =
+            crate::cursor::mode(body, body.get(..4).map(|_| wire::be(body, 0)))
+        else {
+            return;
+        };
+        let output = wire::be(body, 0);
+        if Some(output) != primary
+            && (!self.routed_video || !self.secondary.contains(&Some(output)))
+        {
+            return;
+        }
+        if self.routed_video && !relative && visible {
+            // A visible cursor on this output retires the departed output's
+            // hidden state, including while its HWND still owns drag capture.
+            self.visible_cursor = Some(output);
+            if primary.is_some_and(|id| id != output) {
+                sink.cursor_mode(false, true);
             }
+            for peer in self
+                .secondary
+                .iter()
+                .flatten()
+                .copied()
+                .filter(|id| *id != output)
+            {
+                sink.secondary_cursor_mode(peer, false, true);
+            }
+        }
+        let visible = visible
+            || (self.routed_video
+                && !relative
+                && self.visible_cursor.is_some_and(|owner| owner != output));
+        if Some(output) == primary {
+            sink.cursor_mode(relative, visible);
+        } else {
+            sink.secondary_cursor_mode(output, relative, visible);
         }
     }
 }
@@ -1235,6 +1263,51 @@ mod tests {
         routes.cursor(primary, &second, &mut client);
         assert_eq!(client.secondary_video.len(), 1);
         assert_eq!(client.cursor.len(), 2);
+        routes.command(
+            DisplayCommand::Open(17, config),
+            primary,
+            &targets,
+            &mut client,
+            |_| Ok(()),
+        )?;
+        second[4] = 0;
+        routes.cursor(primary, &second, &mut client);
+        assert_eq!(client.cursor.last(), Some(&(Some(17), false, true)));
+        first[4] = 2;
+        routes.cursor(primary, &first, &mut client);
+        assert_eq!(
+            client.cursor.last(),
+            Some(&(None, false, true)),
+            "a late hide from the departed output must not hide the captured pointer"
+        );
+        second[4] = 2;
+        routes.cursor(primary, &second, &mut client);
+        assert_eq!(
+            client.cursor.last(),
+            Some(&(Some(17), false, false)),
+            "the current output can deliberately hide its cursor"
+        );
+        first[4] = 0;
+        routes.cursor(primary, &first, &mut client);
+        assert_eq!(client.cursor.last(), Some(&(None, false, true)));
+        assert!(client.cursor.contains(&(Some(17), false, true)));
+        second[4] = 2;
+        routes.cursor(primary, &second, &mut client);
+        assert_eq!(client.cursor.last(), Some(&(Some(17), false, true)));
+        second[4] = 3;
+        routes.cursor(primary, &second, &mut client);
+        assert_eq!(
+            client.cursor.last(),
+            Some(&(Some(17), true, false)),
+            "relative input retains the host's hidden cursor"
+        );
+        routes.command(
+            DisplayCommand::Close(17),
+            primary,
+            &targets,
+            &mut client,
+            |_| Ok(()),
+        )?;
         routes.promote(9, &mut client);
         routes.promote(50, &mut client);
         routes.advertised(&targets[..2], &mut client);

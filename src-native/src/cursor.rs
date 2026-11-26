@@ -8,6 +8,7 @@ const MAX_SIDE: u32 = 256;
 const MAX_LOCAL_SIDE: u32 = 512;
 const MAX_ENCODED: usize = 1024 * 1024;
 
+#[derive(Clone)]
 pub struct Frame {
     width: u32,
     height: u32,
@@ -15,6 +16,7 @@ pub struct Frame {
     hot_y: u32,
     pixels: Pixels,
 }
+#[derive(Clone)]
 enum Pixels {
     Rgba(Vec<u8>),
     Monochrome(Vec<u8>),

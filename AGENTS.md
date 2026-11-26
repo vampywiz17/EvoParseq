@@ -16,6 +16,11 @@ The user's standing requirement is to keep current and future development standa
 
 - lowlat is authorized only as an explicit alternative. WebRTC remains the default. lowlat integration must not alter the existing WebRTC connection/signaling, ICE/STUN/TURN selection, transport timers, SCTP reliability/ordering or settings behavior. Isolate the lowlat adapter, credentials and lifecycle; use only deliberate, reviewed common interfaces. A lowlat failure must not silently fall back or change the selected transport. Preserve the working WebRTC TURN/TCP and TURN/TLS routes, especially for restricted networks. Validate both transports independently before exposing a usable lowlat option.
 
+## Sonar coverage and implementation design
+
+- At least 80% Sonar coverage on new code is a baseline development requirement. Design each change with testable shared logic and meaningful regression tests from the start, and include those tests in the initial implementation. Plan coverage before coding so meeting the threshold does not routinely require a separate follow-up cycle.
+- Verify measured coverage in CI. Preserve the configured threshold and measure actual behavior. Add targeted tests for uncovered behavior instead of lowering thresholds or excluding production code to pass the gate.
+
 ## Pull requests and Gitar OSS review
 
 - Keep one open GitHub pull request into `dev` for each active feature branch. Push follow-up changes to the same feature branch.
