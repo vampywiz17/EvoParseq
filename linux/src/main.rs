@@ -495,7 +495,6 @@ impl eframe::App for Desktop {
                         playback.set_input_geometry(source);
                         multi_display::fit(ctx, source, &mut self.fitted_stream);
                     }
-                    self.desktop_input.cursor(ctx, &playback);
                     self.session_overlay(ctx, &playback);
                 } else {
                     self.launcher(ui, ctx);
@@ -507,6 +506,9 @@ impl eframe::App for Desktop {
             self.show_video,
         );
         if let Some(playback) = &self.playback {
+            if !self.show_video {
+                self.desktop_input.cursor(ctx, playback);
+            }
             playback.finish_clipboard(
                 self.desktop_input.enabled
                     && ctx.input(|i| i.focused)

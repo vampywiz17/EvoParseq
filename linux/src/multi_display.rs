@@ -145,7 +145,6 @@ impl crate::Desktop {
                                 channel.playback.set_input_geometry(source);
                                 fit(child, source, &mut surface.fitted);
                             }
-                            surface.input.cursor(child, &channel.playback);
                         });
                     surface
                         .badge
@@ -153,6 +152,7 @@ impl crate::Desktop {
                     if surface.badge.open {
                         secondary_controls(child, stream, surface, parent.as_ref(), &telemetry);
                     }
+                    surface.input.cursor(child, &channel.playback);
                     channel.playback.finish_clipboard(
                         channel.phaze_output.is_none() && surface.input.enabled && raw.focused && !surface.badge.open,
                     );
