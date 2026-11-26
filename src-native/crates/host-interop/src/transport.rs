@@ -462,6 +462,127 @@ fn routing_cid(b: &[u8]) -> Option<[u8; 8]> {
     }
     None
 }
+
+#[derive(Default)]
+struct DisplayRoutes {
+    secondary: [Option<u32>; 3],
+    routed_video: bool,
+}
+
+impl DisplayRoutes {
+    fn command(
+        &mut self,
+        command: DisplayCommand,
+        primary: Option<u32>,
+        outputs: &[wire::Output],
+        sink: &mut impl Sink,
+        send: impl FnOnce(&[u8]) -> Result<()>,
+    ) -> Result<()> {
+        match command {
+            DisplayCommand::Open(output, config) => {
+                let allowed = Some(output) != primary
+                    && !self.secondary.contains(&Some(output))
+                    && outputs.iter().any(|o| o.active && o.id == output);
+                if let Some(slot) = self
+                    .secondary
+                    .iter_mut()
+                    .find(|slot| slot.is_none())
+                    .filter(|_| allowed)
+                {
+                    send(&config.request(output)?)?;
+                    *slot = Some(output);
+                    self.routed_video = true;
+                } else {
+                    sink.secondary_lost(output);
+                }
+            }
+            DisplayCommand::Close(output) => {
+                if let Some(slot) = self
+                    .secondary
+                    .iter_mut()
+                    .find(|slot| **slot == Some(output))
+                {
+                    send(&wire::stop_video(output))?;
+                    *slot = None;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn promote(&mut self, primary: u32, sink: &mut impl Sink) {
+        if let Some(slot) = self
+            .secondary
+            .iter_mut()
+            .find(|slot| **slot == Some(primary))
+        {
+            *slot = None;
+            sink.secondary_lost(primary);
+        }
+    }
+
+    fn advertised(&mut self, outputs: &[wire::Output], sink: &mut impl Sink) {
+        for slot in &mut self.secondary {
+            if let Some(output) = *slot {
+                if !outputs
+                    .iter()
+                    .any(|entry| entry.id == output && entry.active)
+                {
+                    *slot = None;
+                    sink.secondary_lost(output);
+                }
+            }
+        }
+    }
+
+    fn input_target(
+        &self,
+        primary: u32,
+        target: Option<u32>,
+        command: crate::Input,
+    ) -> Option<u32> {
+        let target = target.unwrap_or(primary);
+        (target == primary
+            || self.secondary.contains(&Some(target))
+            || command == crate::Input::Release)
+            .then_some(target)
+    }
+
+    fn video(
+        &self,
+        primary: Option<u32>,
+        frame: &[u8],
+        encoded: &[u8],
+        sink: &mut impl Sink,
+    ) -> Result<bool> {
+        let reset = wire::be(frame, 8) & 1 != 0;
+        if self.routed_video {
+            let output = wire::be(frame, 0);
+            if Some(output) != primary {
+                if self.secondary.contains(&Some(output)) {
+                    sink.secondary_video(output, encoded, reset);
+                }
+                return Ok(false);
+            }
+        }
+        sink.video(encoded, reset)?;
+        Ok(!encoded.is_empty())
+    }
+
+    fn cursor(&self, primary: Option<u32>, body: &[u8], sink: &mut impl Sink) {
+        if let Some((relative, visible)) = crate::cursor::mode(body, primary) {
+            sink.cursor_mode(relative, visible);
+        } else if self.routed_video && body.len() >= 13 {
+            let output = wire::be(body, 0);
+            if self.secondary.contains(&Some(output)) {
+                if let Some((relative, visible)) = crate::cursor::mode(body, Some(output)) {
+                    sink.secondary_cursor_mode(output, relative, visible);
+                }
+            }
+        }
+    }
+}
+
 pub async fn run(
     socket: impl crate::Datagram,
     identity: Identity,
