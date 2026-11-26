@@ -309,6 +309,121 @@ mod tests {
         );
         assert_eq!(Input::Release.encode(7), vec![13]);
     }
+
+    #[test]
+    fn physical_scan_table_maps_supported_usages_and_rejects_unknown_ones() {
+        for usage in 4..=29 {
+            assert!(scan(usage).is_some(), "usage {usage}");
+        }
+        for usage in 30..=39 {
+            assert_eq!(scan(usage), Some(usage - 28));
+        }
+        for usage in 58..=67 {
+            assert_eq!(scan(usage), Some(usage + 1));
+        }
+        for usage in 104..=114 {
+            assert_eq!(scan(usage), Some(usage - 4));
+        }
+        let table = [
+            (40, 0x1c),
+            (41, 1),
+            (42, 0xe),
+            (43, 0xf),
+            (44, 0x39),
+            (45, 0xc),
+            (46, 0xd),
+            (47, 0x1a),
+            (48, 0x1b),
+            (49, 0x2b),
+            (51, 0x27),
+            (52, 0x28),
+            (53, 0x29),
+            (54, 0x33),
+            (55, 0x34),
+            (56, 0x35),
+            (57, 0x3a),
+            (68, 0x57),
+            (69, 0x58),
+            (70, 0x137),
+            (71, 0x46),
+            (72, 0x45),
+            (73, 0x152),
+            (74, 0x147),
+            (75, 0x149),
+            (76, 0x153),
+            (77, 0x14f),
+            (78, 0x151),
+            (79, 0x14d),
+            (80, 0x14b),
+            (81, 0x150),
+            (82, 0x148),
+            (83, 0x145),
+            (84, 0x135),
+            (85, 0x37),
+            (86, 0x4a),
+            (87, 0x4e),
+            (88, 0x11c),
+            (89, 0x4f),
+            (90, 0x50),
+            (91, 0x51),
+            (92, 0x4b),
+            (93, 0x4c),
+            (94, 0x4d),
+            (95, 0x47),
+            (96, 0x48),
+            (97, 0x49),
+            (98, 0x52),
+            (99, 0x53),
+            (100, 0x56),
+            (101, 0x15d),
+            (103, 0x59),
+            (115, 0x76),
+        ];
+        for (usage, expected) in table {
+            assert_eq!(scan(usage), Some(expected), "usage {usage}");
+        }
+        for usage in [0u16, 1, 2, 3, 50, 102, 116, 200, 232] {
+            assert_eq!(scan(usage), None, "usage {usage}");
+        }
+    }
+
+    #[test]
+    fn absolute_motion_is_distinguished_from_relative_motion() {
+        let absolute = Input::Motion {
+            x: 1,
+            y: 2,
+            relative: false,
+        };
+        let relative = Input::Motion {
+            x: 1,
+            y: 2,
+            relative: true,
+        };
+        assert!(absolute.is_absolute_motion());
+        assert!(!relative.is_absolute_motion());
+        assert!(!Input::Release.is_absolute_motion());
+    }
+
+    #[test]
+    fn compact_modifier_sources_fall_back_to_shared_modifier_bits() {
+        let mut keys = Keyboard::default();
+        let modifiers = |input: Option<Input>| match input {
+            Some(Input::Key { modifiers, .. }) => modifiers,
+            _ => panic!("expected keyboard input"),
+        };
+        assert_eq!(modifiers(keys.key(4, 1, true)), 1);
+        assert_eq!(modifiers(keys.key(4, 2, true)), 4);
+        assert_eq!(modifiers(keys.key(4, 4, true)), 16);
+        assert_eq!(modifiers(keys.key(4, 8, true)), 64);
+        assert_eq!(modifiers(keys.key(4, 16, true)), 512);
+        assert_eq!(modifiers(keys.key(4, 32, true)), 256);
+        assert_eq!(modifiers(keys.key(225, 0, true)), 1);
+        assert_eq!(modifiers(keys.key(4, 1, true)), 1);
+        assert_eq!(modifiers(keys.key(4, 1, false)), 1);
+        keys.reset();
+        assert_eq!(modifiers(keys.key(228, 0, true)), 8);
+        assert_eq!(modifiers(keys.key(228, 0, false)), 0);
+    }
 }
 
 #[cfg(test)]

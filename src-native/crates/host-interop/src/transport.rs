@@ -1317,6 +1317,14 @@ mod tests {
             &mut client,
             |_| Ok(()),
         )?;
+        // Closing the output that owned the visible cursor must retire that
+        // ownership, so a later absolute hide from the primary stays a hide.
+        routes.cursor(primary, &first, &mut client);
+        assert_eq!(
+            client.cursor.last(),
+            Some(&(None, false, false)),
+            "closing the cursor-owning output restores primary hides"
+        );
         routes.promote(9, &mut client);
         routes.promote(50, &mut client);
         routes.advertised(&targets[..2], &mut client);
