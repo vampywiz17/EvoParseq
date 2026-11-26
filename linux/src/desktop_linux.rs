@@ -163,30 +163,32 @@ impl DesktopInput {
         // Keep None while locked, but let ordinary UI hover choose its cursor.
         // Repeated native visibility commands would overwrite Wayland CSD resize
         // cursors even though the capture state has not changed.
-        let hidden_over_video = self.enabled
-            && playback.input_active()
+        let position = ctx
+            .input(|i| {
+                (i.focused || self.transferred)
+                    .then_some(i.pointer.hover_pos())
+                    .flatten()
+            })
+            .filter(|&pos| {
+                self.inside(pos)
+                    && ctx
+                        .layer_id_at(pos)
+                        .is_none_or(|layer| layer.order == egui::Order::Background)
+            });
+        let over_video = self.enabled && playback.input_active() && position.is_some();
+        let hidden_over_video = over_video
             && playback
                 .phaze_cursor_hidden
-                .load(std::sync::atomic::Ordering::Acquire)
-            && ctx.input(|i| {
-                (i.focused || self.transferred)
-                    && i.pointer.hover_pos().is_some_and(|pos| self.inside(pos))
-            });
+                .load(std::sync::atomic::Ordering::Acquire);
         let local_cursor = !grab
             && !native_drag
             && !hidden_over_video
-            && self.enabled
-            && playback.input_active()
+            && over_video
             && playback
                 .local_cursor
-                .load(std::sync::atomic::Ordering::Acquire)
-            && ctx.input(|i| {
-                (i.focused || self.transferred)
-                    && i.pointer.hover_pos().is_some_and(|pos| self.inside(pos))
-            });
+                .load(std::sync::atomic::Ordering::Acquire);
         let painted = local_cursor
-            && ctx
-                .input(|i| i.pointer.hover_pos())
+            && position
                 .is_some_and(|position| self.cursor.paint(ctx, playback.cursor_image(), position));
         if grab || native_drag || hidden_over_video || painted {
             ctx.set_cursor_icon(egui::CursorIcon::None);
@@ -997,6 +999,43 @@ mod phaze_cursor_tests {
                     .commands
                     .iter()
                     .any(|c| matches!(c, egui::ViewportCommand::CursorVisible(_)))
+            );
+        }
+    }
+
+    #[test]
+    fn linux_phaze_cursor_does_not_cover_local_windows_inside_video_rectangle() {
+        let (ctx, playback, mut adapter) = session();
+        for _ in 0..2 {
+            let output = ctx.run(
+                egui::RawInput {
+                    focused: true,
+                    events: vec![Event::PointerMoved(egui::pos2(100., 80.))],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |_| {});
+                    egui::Area::new(egui::Id::new("local-statistics"))
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(egui::pos2(60., 60.))
+                        .show(ctx, |ui| {
+                            ui.allocate_exact_size(egui::vec2(200., 200.), egui::Sense::hover());
+                        });
+                    assert_eq!(
+                        ctx.layer_id_at(egui::pos2(100., 80.)).unwrap().order,
+                        egui::Order::Foreground
+                    );
+                    ctx.set_cursor_icon(egui::CursorIcon::Text);
+                    adapter.cursor(ctx, &playback);
+                },
+            );
+            assert_eq!(output.platform_output.cursor_icon, egui::CursorIcon::Text);
+            assert_eq!(adapter.cursor_presentation, Some("native_ui"));
+            assert!(
+                !output
+                    .shapes
+                    .iter()
+                    .any(|s| matches!(&s.shape, egui::Shape::Mesh(_)))
             );
         }
     }
