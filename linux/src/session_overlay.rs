@@ -171,9 +171,9 @@ impl Desktop {
                                     let mut selected=self.metrics.current_output.clone().unwrap_or_default();
                                     let available=!self.metrics.pending&&!self.metrics.hid_mouse&&!self.metrics.displays.is_empty();
                                     ui.add_enabled_ui(available,|ui|{
-                                        ui.scope_builder(egui::UiBuilder::new().max_rect(r([24,164,280,28])),|ui|{
+                                        ui.scope_builder(egui::UiBuilder::new().max_rect(r([24,164,if phaze {260} else {280},28])),|ui|{
                                             egui::ComboBox::from_id_salt("host-display").width(260.).selected_text(if self.metrics.display.is_empty(){"Waiting for host"}else{&self.metrics.display}).show_ui(ui,|ui|{
-                                                for output in &self.metrics.displays{ui.selectable_value(&mut selected,output.id.clone(),&output.name);}
+                                                for output in &self.metrics.displays{if !phaze || !self.telemetry.as_ref().is_some_and(|telemetry| output.id.parse().is_ok_and(|id| telemetry.displays.has_phaze_output(id))) {ui.selectable_value(&mut selected,output.id.clone(),&output.name);}}
                                             });
                                         });
                                     });
@@ -186,11 +186,25 @@ impl Desktop {
                                         16.,
                                         fg,
                                     );
-                                    ui.scope_builder(egui::UiBuilder::new().max_rect(r([274,208,120,28])),|ui| {
-                                        ui.add_enabled_ui(!phaze && !self.metrics.hid_mouse && self.metrics.displays.len()>1,|ui| {
-                                            ui.menu_button("Add screen",|ui| {
+                                    let add_screen = if phaze { f::PHAZE_ADD_SCREEN_RECT } else { [274,208,120,28] };
+                                    ui.scope_builder(egui::UiBuilder::new().max_rect(r(add_screen)),|ui| {
+                                        let native_input = !phaze || self.settings.view().0.phaze_input_mode.devices() == (false, false);
+                                        ui.add_enabled_ui(native_input && !self.metrics.hid_mouse && (!phaze || self.metrics.current_output.is_some()) && self.metrics.displays.len()>1,|ui| {
+                                            ui.menu_button(f::ADD_SCREEN,|ui| {
                                                 if let Some(telemetry)=&self.telemetry {
                                                     let hid_keyboard=self.transport==crate::connection::Mode::Lowlat&&self.settings.view().0.hid_keyboard_enabled();
+                                                    if phaze {
+                                                        for output in &self.metrics.displays {
+                                                            if let Ok(id) = output.id.parse::<u32>() {
+                                                                if self.metrics.current_output.as_deref() != Some(output.id.as_str()) && !telemetry.displays.has_phaze_output(id)
+                                                                    && ui.button(&output.name).clicked()
+                                                                {
+                                                                    playback.push_session(crate::session_controls::Command::AddPhazeDisplay(id));
+                                                                    ui.close();
+                                                                }
+                                                            }
+                                                        }
+                                                    } else {
                                                     for (stream,output) in self.metrics.displays.iter().enumerate().take(crate::display_stream::STREAMS).skip(1) {
                                                         let available=!hid_keyboard&&telemetry.displays.get(stream).is_none()&&self.metrics.current_output.as_deref()!=Some(output.id.as_str());
                                                         if ui.add_enabled(available,egui::Button::new(&output.name)).clicked() {
@@ -200,6 +214,7 @@ impl Desktop {
                                                             }
                                                             ui.close();
                                                         }
+                                                    }
                                                     }
                                                 }
                                             });

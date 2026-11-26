@@ -25,6 +25,71 @@ pub enum Input {
     },
     Release,
 }
+/// The session's existing input batch, with a destination for each event.
+#[derive(Default)]
+pub struct InputBatch {
+    pub(crate) items: Vec<(Option<u32>, Input)>,
+    output: Option<u32>,
+}
+
+impl InputBatch {
+    pub fn target(&mut self, output: Option<u32>) {
+        self.output = output;
+    }
+
+    pub fn push(&mut self, command: Input) {
+        self.items.push((self.output, command));
+    }
+
+    pub fn insert(&mut self, index: usize, command: Input) {
+        self.items.insert(index, (self.output, command));
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Input> {
+        self.items.iter().map(|(_, command)| command)
+    }
+
+    pub fn last(&self) -> Option<&Input> {
+        self.items.last().map(|(_, command)| command)
+    }
+
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.output = None;
+    }
+}
+
+impl Extend<Input> for InputBatch {
+    fn extend<T: IntoIterator<Item = Input>>(&mut self, commands: T) {
+        self.items
+            .extend(commands.into_iter().map(|command| (self.output, command)));
+    }
+}
+
+impl FromIterator<Input> for InputBatch {
+    fn from_iter<T: IntoIterator<Item = Input>>(commands: T) -> Self {
+        let mut batch = Self::default();
+        batch.extend(commands);
+        batch
+    }
+}
+
+impl std::ops::Index<usize> for InputBatch {
+    type Output = Input;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.items[index].1
+    }
+}
+
 impl Input {
     pub(crate) fn is_absolute_motion(self) -> bool {
         matches!(
@@ -244,4 +309,40 @@ mod tests {
         );
         assert_eq!(Input::Release.encode(7), vec![13]);
     }
+}
+
+#[cfg(test)]
+#[test]
+fn display_drag_keeps_press_move_and_release_on_their_outputs() {
+    let mut batch = InputBatch::default();
+    batch.target(Some(11));
+    batch.push(Input::Button {
+        button: 1,
+        x: 2,
+        y: 4,
+        down: true,
+    });
+    batch.target(Some(29));
+    batch.push(Input::Motion {
+        x: 300,
+        y: 200,
+        relative: false,
+    });
+    batch.push(Input::Button {
+        button: 1,
+        x: 20,
+        y: 10,
+        down: false,
+    });
+    let frames: Vec<_> = batch
+        .items
+        .iter()
+        .map(|(output, command)| command.encode(output.unwrap()))
+        .collect();
+    assert_eq!((frames[0][0], frames[0][4], frames[0][20]), (10, 11, 1));
+    assert_eq!((frames[1][0], frames[1][4]), (11, 29));
+    assert_eq!((frames[2][0], frames[2][4], frames[2][20]), (10, 29, 0));
+    batch.clear();
+    batch.push(Input::Release);
+    assert_eq!(batch.items, [(None, Input::Release)]);
 }

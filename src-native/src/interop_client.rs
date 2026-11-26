@@ -6,7 +6,9 @@ use crate::{
     video_stream::PacketInfo,
 };
 use anyhow::Result;
-use evoparseq_host_interop::{AudioCodec, ClientControl, Input, Keyboard, Output, Sink, VideoConfig};
+use evoparseq_host_interop::{
+    AudioCodec, ClientControl, Input, InputBatch, Keyboard, Output, Sink, VideoConfig,
+};
 use std::time::{Duration, Instant};
 
 pub trait Platform {
@@ -15,12 +17,18 @@ pub trait Platform {
     fn stream_request_sent(&mut self, _output: u32, _config: VideoConfig) {}
     fn video(&mut self, encoded: &[u8], info: PacketInfo) -> Result<()>;
     fn reset_video(&mut self);
+    fn display_command(&mut self) -> Option<evoparseq_host_interop::DisplayCommand> {
+        None
+    }
+    fn secondary_video(&mut self, _output: u32, _encoded: &[u8], _reset: bool) {}
+    fn secondary_lost(&mut self, _output: u32) {}
+    fn secondary_cursor_mode(&mut self, _output: u32, _relative: bool, _visible: bool) {}
     fn take_recovery(&mut self) -> bool;
     fn poll(
         &mut self,
         session: &mut State,
         output: Option<u32>,
-        input: &mut Vec<Input>,
+        input: &mut InputBatch,
         controls: &mut Vec<ClientControl>,
     ) -> Result<bool>;
     fn cursor_mode(&mut self, relative: bool, visible: bool);
@@ -160,6 +168,20 @@ impl<P: Platform> Sink for Client<P> {
         }
         Ok(())
     }
+    fn display_command(&mut self) -> Option<evoparseq_host_interop::DisplayCommand> {
+        self.platform.display_command()
+    }
+    fn secondary_video(&mut self, output: u32, encoded: &[u8], reset: bool) {
+        self.platform.secondary_video(output, encoded, reset);
+    }
+    fn secondary_cursor_mode(&mut self, output: u32, relative: bool, visible: bool) {
+        self.platform
+            .secondary_cursor_mode(output, relative, visible);
+    }
+
+    fn secondary_lost(&mut self, output: u32) {
+        self.platform.secondary_lost(output);
+    }
     fn audio(&mut self, pcm: &[i16], codec: AudioCodec, payload_bytes: usize) -> Result<()> {
         self.state.audio_bytes = self.state.audio_bytes.saturating_add(payload_bytes as u64);
         self.pcm.submit(pcm, codec.label());
@@ -175,7 +197,7 @@ impl<P: Platform> Sink for Client<P> {
     fn poll(
         &mut self,
         output: Option<u32>,
-        input: &mut Vec<Input>,
+        input: &mut InputBatch,
         controls: &mut Vec<ClientControl>,
     ) -> Result<bool> {
         self.platform.poll(&mut self.state, output, input, controls)
@@ -205,7 +227,12 @@ impl DesktopInput {
         self.engine.pointer_mode(relative, !visible);
     }
 
-    pub fn event(&mut self, event: Event, size: (u32, u32), input: &mut Vec<Input>) -> Result<()> {
+    pub fn event(
+        &mut self,
+        event: Event,
+        size: (u32, u32),
+        input: &mut impl Extend<Input>,
+    ) -> Result<()> {
         self.engine.geometry(size);
         let keys = &mut self.keys;
         self.engine.event_action(event, Instant::now(), |action| {
@@ -224,32 +251,37 @@ impl DesktopInput {
     }
 }
 
-fn translate(action: Action, keys: &mut Keyboard, size: (u32, u32), commands: &mut Vec<Input>) {
+fn translate(
+    action: Action,
+    keys: &mut Keyboard,
+    size: (u32, u32),
+    commands: &mut impl Extend<Input>,
+) {
     match action {
         Action::Key(usage, mods, down) => commands.extend(keys.key(usage as u16, mods, down)),
-        Action::Motion(x, y, true) => commands.push(Input::Motion {
+        Action::Motion(x, y, true) => commands.extend([Input::Motion {
             x,
             y,
             relative: true,
-        }),
-        Action::Motion(x, y, false) => commands.push(Input::Motion {
+        }]),
+        Action::Motion(x, y, false) => commands.extend([Input::Motion {
             x: interop_session::normalized_axis(i64::from(x), size.0),
             y: interop_session::normalized_axis(i64::from(y), size.1),
             relative: false,
-        }),
-        Action::Button(button, down, x, y) => commands.push(Input::Button {
+        }]),
+        Action::Button(button, down, x, y) => commands.extend([Input::Button {
             button: button as u8,
             down,
             x,
             y,
-        }),
-        Action::Scroll(x, y) => commands.push(Input::Scroll {
+        }]),
+        Action::Scroll(x, y) => commands.extend([Input::Scroll {
             x,
             y: y.saturating_neg(),
-        }),
+        }]),
         Action::Release => {
             keys.reset();
-            commands.push(Input::Release);
+            commands.extend([Input::Release]);
         }
     }
 }
@@ -262,10 +294,22 @@ mod tests {
     fn shared_client_forwards_selected_usb_hid_devices() {
         struct Offline;
         impl Platform for Offline {
-            fn video(&mut self, _: &[u8], _: PacketInfo) -> Result<()> { Ok(()) }
+            fn video(&mut self, _: &[u8], _: PacketInfo) -> Result<()> {
+                Ok(())
+            }
             fn reset_video(&mut self) {}
-            fn take_recovery(&mut self) -> bool { false }
-            fn poll(&mut self, _: &mut State, _: Option<u32>, _: &mut Vec<Input>, _: &mut Vec<ClientControl>) -> Result<bool> { Ok(false) }
+            fn take_recovery(&mut self) -> bool {
+                false
+            }
+            fn poll(
+                &mut self,
+                _: &mut State,
+                _: Option<u32>,
+                _: &mut InputBatch,
+                _: &mut Vec<ClientControl>,
+            ) -> Result<bool> {
+                Ok(false)
+            }
             fn cursor_mode(&mut self, _: bool, _: bool) {}
         }
         for devices in [(false, false), (true, false), (false, true), (true, true)] {

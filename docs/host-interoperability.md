@@ -22,7 +22,12 @@ displays. With mirroring off, the hello uses the normal empty display list.
 The one-display request was validated with Phaze 0.14.3. Host acceptance
 and active outputs for larger layouts still require live validation.
 
-The client currently selects one host output at a time. With event logging
+Windows and Linux can open active host outputs in separate windows using **Add
+screen** in the Session panel. Each window sends normal mouse and keyboard
+input to its own output. A held pointer drag can cross into another client
+window and release on its output. USB HID sessions keep a single window.
+Closing an additional window stops only that output. Android TV still selects
+one host output at a time. With event logging
 enabled, a multi-display request can log `phaze_display_video_header_observed`
 after opening or switching the selected output. It records the selected
 output ID and which aligned header words match it, without recording raw
@@ -36,7 +41,9 @@ connect using standard input and leave the primary session alone while the
 probe runs. It temporarily opens another advertised active output at a low
 video rate, looks for video from both outputs, then sends stop for the second
 output and checks for continued primary video. Results appear in
-`phaze_parallel_display_probe`. The secondary video is discarded before decode.
+`phaze_parallel_display_probe`. The probe discards secondary video before decode. The test on Phaze host
+0.14.3 confirmed interleaved video and continued primary video after stopping
+the secondary. The probe did not exercise cross-window input.
 This opt-in diagnostic does not open another window.
 
 A Phaze 0.14.3 test with the DisplayPort monitor powered off delivered video

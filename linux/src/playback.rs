@@ -147,6 +147,9 @@ impl Playback {
                 .request_repaint_of(crate::display_routes::viewport(self.stream()));
         }
     }
+    pub fn ui_context(&self) -> &eframe::egui::Context {
+        &self.ui
+    }
     pub fn attach_displays(&self, displays: &Arc<crate::display_routes::Displays>, stream: usize) {
         let _ = self.displays.set((Arc::downgrade(displays), stream));
     }
@@ -305,6 +308,12 @@ impl Playback {
         if self.capture.swap(capture, Ordering::AcqRel) != capture {
             self.ui.request_repaint();
         }
+    }
+    pub fn phaze_pointer_mode(&self) -> (bool, bool) {
+        (
+            self.host_relative.load(Ordering::Acquire),
+            !self.phaze_cursor_hidden.load(Ordering::Acquire),
+        )
     }
     pub fn set_phaze_cursor_mode(&self, relative: bool, visible: bool) {
         self.host_relative.store(relative, Ordering::Release);

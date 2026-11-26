@@ -1,4 +1,4 @@
-use super::{parallel_display_probe, wire, Answer, Sink};
+use super::{parallel_display_probe, wire, Answer, DisplayCommand, InputBatch, Sink};
 use anyhow::{bail, ensure, Context, Result};
 use hmac::{Hmac, Mac};
 use purecrypto::{
@@ -588,7 +588,9 @@ pub async fn run(
         && !hid_keyboard
         && std::env::var_os("EVOPARSEQ_PHAZE_VERIFY_PARALLEL").is_some_and(|value| value == "1"))
     .then(parallel_display_probe::Probe::default);
-    let mut input = Vec::new();
+    let mut input = InputBatch::default();
+    let mut secondary_outputs = [None; 3];
+    let mut routed_video = false;
     let mut controls = Vec::new();
     let mut deferred_motion = None;
     let mut outputs_available = Vec::new();
@@ -633,12 +635,44 @@ pub async fn run(
                 let request = update.or_else(|| {
                     selected_output.filter(|_| recovering).map(|output| (output, sink.video_config()))
                 });
+                if reliable.pending().count() < 48 && parallel_display_probe.as_ref().is_none_or(|probe| !probe.active()) {
+                    if let Some(command) = sink.display_command() {
+                        match command {
+                            DisplayCommand::Open(output, config) => {
+                                let advertised = outputs_available.iter().any(|o: &wire::Output| {
+                                    o.active && o.id == output
+                                });
+                                if advertised && Some(output) != selected_output && !secondary_outputs.contains(&Some(output)) {
+                                    if let Some(slot) = secondary_outputs.iter_mut().find(|slot| slot.is_none()) {
+                                        for packet in reliable.frame(&config.request(output)?)? {
+                                            send(&mut c, &packet)?;
+                                        }
+                                        *slot = Some(output);
+                                        routed_video = true;
+                                    } else {
+                                        sink.secondary_lost(output);
+                                    }
+                                } else {
+                                    sink.secondary_lost(output);
+                                }
+                            }
+                            DisplayCommand::Close(output) => {
+                                if let Some(slot) = secondary_outputs.iter_mut().find(|slot| **slot == Some(output)) {
+                                    for packet in reliable.frame(&wire::stop_video(output))? {
+                                        send(&mut c, &packet)?;
+                                    }
+                                    *slot = None;
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Some(probe) = parallel_display_probe.as_mut() {
                     let action = probe.poll(
                         Instant::now(),
                         selected_output,
                         &outputs_available,
-                        video_received && reliable.pending().count() < 48,
+                        video_received && !routed_video && reliable.pending().count() < 48,
                         request.is_some(),
                     )?;
                     match action {
@@ -664,6 +698,10 @@ pub async fn run(
                 }
                 if let Some((output,config))=request {
                     ensure!(outputs_available.iter().any(|o: &wire::Output| o.id==output && o.active), "Phaze display is unavailable");
+                    if let Some(slot) = secondary_outputs.iter_mut().find(|slot| **slot == Some(output)) {
+                        *slot = None;
+                        sink.secondary_lost(output);
+                    }
                     let changing_output = selected_output != Some(output);
                     if changing_output {
                         deferred_motion = None;
@@ -681,25 +719,29 @@ pub async fn run(
                     // A newer position supersedes a deferred position. A release
                     // clears it, so it cannot move the pointer after focus loss.
                     let deferred = deferred_motion.take().filter(|_| {
-                        !input.first().is_some_and(|event| {
+                        !input.items.first().is_some_and(|(_, event)| {
                             event.is_absolute_motion() || *event == crate::Input::Release
                         })
                     });
-                    let mut commands = deferred.into_iter().chain(input.drain(..)).peekable();
-                    while let Some(command) = commands.next() {
+                    let mut commands = deferred.into_iter().chain(input.items.drain(..)).peekable();
+                    while let Some((target, command)) = commands.next() {
+                        let target = match target {
+                            Some(target) if target != output && !secondary_outputs.contains(&Some(target)) && command != crate::Input::Release => continue,
+                            target => target.unwrap_or(output),
+                        };
                         if usb_probe.as_mut().is_some_and(|usb| usb.input(command)) { continue; }
                         let outstanding = reliable.pending().count();
                         // Preserve room for button and key transitions when the
                         // peer is slow to acknowledge a burst of positions.
                         if outstanding >= 48 && command.is_absolute_motion() && commands.peek().is_none() {
-                            deferred_motion = Some(command);
+                            deferred_motion = Some((Some(target), command));
                             break;
                         }
                         if outstanding >= 63 {
                             release_and_close(&mut c,&mut reliable,&socket,peer,usb_probe.as_mut()).await;
                             bail!("Phaze input acknowledgment window exhausted; reconnect to continue");
                         }
-                        for p in reliable.frame(&command.encode(output))? { send(&mut c,&p)?; }
+                        for p in reliable.frame(&command.encode(target))? { send(&mut c,&p)?; }
                     }
                 }
                 for control in &controls {
@@ -777,6 +819,17 @@ pub async fn run(
                                 sink.stage("video_requested");
                             }
                         }
+                        for slot in &mut secondary_outputs {
+                            if let Some(output) = *slot {
+                                if !outputs
+                                    .iter()
+                                    .any(|entry| entry.id == output && entry.active)
+                                {
+                                    *slot = None;
+                                    sink.secondary_lost(output);
+                                }
+                            }
+                        }
                         outputs_available = outputs;
                     }
                     Some(5) if requested => {
@@ -790,7 +843,9 @@ pub async fn run(
                                 sink.display_video_header_observed(output, mask);
                             }
                         }
-                        if let Some(probe) = parallel_display_probe.as_mut() {
+                        if let Some(probe) =
+                            parallel_display_probe.as_mut().filter(|_| !routed_video)
+                        {
                             let (keep, status) = probe.video(
                                 &frame[1..],
                                 selected_output,
@@ -805,6 +860,15 @@ pub async fn run(
                             }
                         }
                         let flags = u32::from_be_bytes(frame[9..13].try_into().unwrap());
+                        if routed_video {
+                            let output = wire::be(&frame[1..], 0);
+                            if Some(output) != selected_output {
+                                if secondary_outputs.contains(&Some(output)) {
+                                    sink.secondary_video(output, bytes, flags & 1 != 0);
+                                }
+                                continue;
+                            }
+                        }
                         sink.video(bytes, flags & 1 != 0)?;
                         video_received |= !bytes.is_empty();
                     }
@@ -813,6 +877,18 @@ pub async fn run(
                             crate::cursor::mode(&frame[1..], selected_output)
                         {
                             sink.cursor_mode(relative, visible);
+                        } else if routed_video {
+                            let body = &frame[1..];
+                            if body.len() >= 13 {
+                                let output = wire::be(body, 0);
+                                if secondary_outputs.contains(&Some(output)) {
+                                    if let Some((relative, visible)) =
+                                        crate::cursor::mode(body, Some(output))
+                                    {
+                                        sink.secondary_cursor_mode(output, relative, visible);
+                                    }
+                                }
+                            }
                         }
                     }
                     Some(7) => {

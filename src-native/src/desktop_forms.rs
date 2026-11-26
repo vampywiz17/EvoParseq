@@ -53,6 +53,8 @@ pub struct SettingRow {
     )]
     pub control_text: &'static str,
 }
+pub const ADD_SCREEN: &str = "Add screen";
+pub const PHAZE_ADD_SCREEN_RECT: [i32; 4] = [294, 164, 100, 28];
 pub const STUN_SERVERS:SettingRow=SettingRow{tab:0,group:0,label:"STUN servers",help:"Discover a direct route. One stun: URL per line.\nLeave blank to use the default discovery server.",y:242,help_height:48,field_height:76,kind:Kind::Edit,control_text:""};
 pub const CONNECTION_ROUTE:SettingRow=SettingRow{tab:0,group:0,label:"Connection route",help:"Choose automatic routing, direct-only or TURN relay.\nDirect-only is intended for LAN or VPN connections.",y:344,help_height:40,field_height:32,kind:Kind::Choice,control_text:""};
 pub const TURN_PROVIDER: SettingRow = SettingRow {

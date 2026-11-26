@@ -83,6 +83,10 @@ impl Probe {
         (selected == Some(output), result)
     }
 
+    pub(crate) fn active(&self) -> bool {
+        matches!(self, Self::Receiving { .. } | Self::Stopped { .. })
+    }
+
     fn waiting(&self) -> bool {
         matches!(self, Self::Waiting)
     }

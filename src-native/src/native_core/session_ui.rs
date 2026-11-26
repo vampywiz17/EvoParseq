@@ -178,13 +178,21 @@ unsafe fn update_displays(hwnd: HWND, panel: &mut Panel) {
         .displays
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    let phaze = window.session.phaze.load(Ordering::Acquire);
     let combo = GetDlgItem(hwnd, DISPLAY as i32);
     SendMessageW(combo, WM_SETREDRAW, 0, 0);
     SendMessageW(combo, CB_RESETCONTENT, 0, 0);
     panel.display_ids.clear();
     let mut selected = None;
     for (stream, output) in displays.outputs.iter().enumerate() {
-        if stream != 0 && window.displays.get(stream).is_some() {
+        if if phaze {
+            output
+                .id
+                .parse()
+                .is_ok_and(|id| window.displays.has_phaze_output(id))
+        } else {
+            stream != 0 && window.displays.get(stream).is_some()
+        } {
             continue;
         }
         let label = format!(
@@ -219,6 +227,7 @@ unsafe fn update_displays(hwnd: HWND, panel: &mut Panel) {
         GetDlgItem(hwnd, ADD_SCREEN as i32),
         i32::from(
             window.multidisplay_ready.load(Ordering::Acquire)
+                && (!phaze || displays.current.is_some())
                 && !displays.hid_mouse
                 && !displays.loading
                 && displays.outputs.len() > 1,
@@ -657,6 +666,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                             ));
                     }
                     APPLY if (&*p.window).display_stream.load(Ordering::Acquire) != 0 => {
+                        if (&*p.window).session.phaze.load(Ordering::Acquire) {
+                            return 0;
+                        }
                         match crate::session_preferences::resolution(&selected_field(p, 0)) {
                             Ok(resolution) => {
                                 EnableWindow(GetDlgItem(hwnd, APPLY as i32), 0);
@@ -998,7 +1010,13 @@ pub unsafe fn toggle(
         }
         ShowWindow(hwnd, SW_SHOW);
         SetForegroundWindow(hwnd);
-        SetFocus(p.controls[0]);
+        if window.session.phaze.load(Ordering::Acquire) {
+            EnableWindow(p.controls[0], 0);
+            EnableWindow(GetDlgItem(hwnd, APPLY as i32), 0);
+            SetFocus(GetDlgItem(hwnd, SECONDARY_FULLSCREEN as i32));
+        } else {
+            SetFocus(p.controls[0]);
+        }
         if window.session.video_pending.load(Ordering::Acquire) {
             SendMessageW(hwnd, RESULT, Status::Waiting.message(), 0);
         }
@@ -1022,17 +1040,35 @@ pub unsafe fn toggle(
         "",
         DISPLAY,
         WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST as u32,
-        [24, 164, 280, 260],
+        [
+            24,
+            164,
+            if window.session.phaze.load(Ordering::Acquire) {
+                260
+            } else {
+                280
+            },
+            260,
+        ],
     );
     crate::connection_settings_ui::controls::combo(GetDlgItem(hwnd, DISPLAY as i32));
+    let phaze = window.session.phaze.load(Ordering::Acquire);
     control(
         hwnd,
         p,
         "BUTTON",
-        "Refresh",
-        REFRESH_DISPLAYS,
+        if phaze {
+            crate::app_style::forms::ADD_SCREEN
+        } else {
+            "Refresh"
+        },
+        if phaze { ADD_SCREEN } else { REFRESH_DISPLAYS },
         BS_OWNERDRAW as u32 | WS_TABSTOP,
-        [314, 164, 80, 28],
+        if phaze {
+            crate::app_style::forms::PHAZE_ADD_SCREEN_RECT
+        } else {
+            [314, 164, 80, 28]
+        },
     );
     control(
         hwnd,
@@ -1043,12 +1079,15 @@ pub unsafe fn toggle(
         0,
         [24, 199, 240, 44],
     );
-    let phaze = window.session.phaze.load(Ordering::Acquire);
     control(
         hwnd,
         p,
         "BUTTON",
-        if phaze { "Guests" } else { "Add screen" },
+        if phaze {
+            "Guests"
+        } else {
+            crate::app_style::forms::ADD_SCREEN
+        },
         if phaze { PHAZE_GUESTS } else { ADD_SCREEN },
         BS_OWNERDRAW as u32 | WS_TABSTOP,
         [274, 208, 120, 28],
@@ -1410,15 +1449,9 @@ mod tests {
                     CB_ERR as isize
                 );
             }
-            assert!(GetDlgItem(panel, ADD_SCREEN as i32).is_null());
-            for id in [
-                20,
-                23,
-                24,
-                DISPLAY as i32,
-                REFRESH_DISPLAYS as i32,
-                SECURE_ATTENTION as i32,
-            ] {
+            assert_eq!(text(GetDlgItem(panel, ADD_SCREEN as i32)), "Add screen");
+            assert_eq!(IsWindowEnabled(GetDlgItem(panel, ADD_SCREEN as i32)), 0);
+            for id in [20, 23, 24, DISPLAY as i32, SECURE_ATTENTION as i32] {
                 let control = GetDlgItem(panel, id);
                 assert!(!control.is_null(), "Missing control {id}");
                 assert_eq!(IsWindowEnabled(control), 0, "Enabled control {id}");

@@ -537,6 +537,21 @@ impl Window {
         Some(viewport)
     }
 
+    pub(crate) fn pointer_in(&self, target: &Self, x: i32, y: i32) -> Option<(i32, i32)> {
+        let mut point = POINT { x, y };
+        unsafe {
+            if ClientToScreen(self.handle(), &mut point) == 0
+                || GetAncestor(WindowFromPoint(point), GA_ROOT) != target.handle()
+                || ScreenToClient(target.handle(), &mut point) == 0
+            {
+                return None;
+            }
+        }
+        let [left, top, right, bottom] = target.presented_viewport()?.rect()?;
+        ((left..right).contains(&point.x) && (top..bottom).contains(&point.y))
+            .then_some((point.x, point.y))
+    }
+
     unsafe fn mouse_button(&self, down: bool, button: i32, x: i32, y: i32) {
         #[cfg(feature = "lowlat")]
         self.sync_absolute_pointer(x, y, false);

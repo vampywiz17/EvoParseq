@@ -7,6 +7,123 @@ use crate::{
 use anyhow::{ensure, Result};
 use evoparseq_host_interop::{ClientControl, Input, PeerState, VideoConfig};
 
+#[cfg(not(target_os = "android"))]
+pub const DESKTOP_DISPLAYS: usize = 4;
+
+#[cfg(not(target_os = "android"))]
+#[derive(Default)]
+pub struct SecondaryDisplays {
+    slots: [Option<Secondary>; DESKTOP_DISPLAYS - 1],
+}
+
+#[cfg(not(target_os = "android"))]
+struct Secondary {
+    output: u32,
+    video: Stream,
+    opened: std::time::Instant,
+    started: bool,
+    requested: bool,
+    closing: bool,
+}
+
+#[cfg(not(target_os = "android"))]
+impl SecondaryDisplays {
+    pub fn available(&self, output: u32, primary: Option<u32>) -> bool {
+        primary.is_some() && primary != Some(output) && self.slot(output).is_none()
+    }
+
+    pub fn slot(&self, output: u32) -> Option<usize> {
+        self.slots
+            .iter()
+            .position(|slot| slot.as_ref().is_some_and(|screen| screen.output == output))
+            .map(|index| index + 1)
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.slots.iter().any(Option::is_some)
+    }
+
+    pub fn vacant(&self) -> Option<usize> {
+        self.slots
+            .iter()
+            .position(Option::is_none)
+            .map(|index| index + 1)
+    }
+
+    pub fn open(&mut self, slot: usize, output: u32, config: VideoConfig) {
+        self.slots[slot - 1] = Some(Secondary {
+            output,
+            video: Stream::new(config),
+            opened: std::time::Instant::now(),
+            started: false,
+            requested: false,
+            closing: false,
+        });
+    }
+
+    pub fn output(&self, slot: usize) -> Option<u32> {
+        let screen = self.slots.get(slot.checked_sub(1)?)?.as_ref()?;
+        (!screen.closing).then_some(screen.output)
+    }
+
+    pub fn ready(&self, slot: usize) -> bool {
+        self.output(slot).is_some()
+            && self.slots[slot - 1]
+                .as_ref()
+                .is_some_and(|screen| screen.started)
+    }
+
+    pub fn timed_out(&self, slot: usize) -> bool {
+        self.slots[slot - 1].as_ref().is_some_and(|screen| {
+            screen.requested
+                && !screen.started
+                && screen.opened.elapsed() >= std::time::Duration::from_secs(20)
+        })
+    }
+
+    pub fn close(&mut self, slot: usize) {
+        if let Some(screen) = self.slots[slot - 1].as_mut() {
+            screen.closing = true;
+        }
+    }
+
+    pub fn lost(&mut self, output: u32) -> Option<usize> {
+        let slot = self.slot(output)?;
+        self.slots[slot - 1] = None;
+        Some(slot)
+    }
+
+    pub fn inspect(&mut self, slot: usize, bytes: &[u8], reset: bool) -> Option<PacketInfo> {
+        let screen = self.slots[slot - 1].as_mut()?;
+        if screen.closing {
+            return None;
+        }
+        let info = screen.video.inspect(bytes, reset)?;
+        screen.started |= info.picture;
+        Some(info)
+    }
+
+    pub fn command(&mut self) -> Option<evoparseq_host_interop::DisplayCommand> {
+        use evoparseq_host_interop::DisplayCommand;
+        for slot in &mut self.slots {
+            let Some(screen) = slot else { continue };
+            if screen.closing {
+                let output = screen.output;
+                let requested = screen.requested;
+                *slot = None;
+                if requested {
+                    return Some(DisplayCommand::Close(output));
+                }
+            } else if !screen.requested {
+                screen.requested = true;
+                screen.opened = std::time::Instant::now();
+                return Some(DisplayCommand::Open(screen.output, screen.video.config()));
+            }
+        }
+        None
+    }
+}
+
 pub fn supported_video(mut video: Video) -> Video {
     video.resolution = Resolution::Host;
     video.constant_fps = None;
@@ -271,4 +388,34 @@ pub async fn connect_relay<S: evoparseq_host_interop::Sink>(
     anyhow::bail!(
         "No configured TURN server could allocate a Phaze relay. Check the URL and credentials."
     )
+}
+
+#[cfg(all(test, not(target_os = "android")))]
+#[test]
+fn secondary_display_slots_keep_output_identity_until_closed() {
+    use evoparseq_host_interop::DisplayCommand;
+
+    let mut displays = SecondaryDisplays::default();
+    let config = VideoConfig::default();
+    assert!(!displays.available(7, None));
+    assert!(!displays.available(6, Some(6)));
+    assert!(displays.available(7, Some(6)));
+    displays.open(1, 7, config);
+    assert!(!displays.available(7, Some(6)));
+    assert_eq!(displays.vacant(), Some(2));
+    assert!(matches!(
+        displays.command(),
+        Some(DisplayCommand::Open(7, _))
+    ));
+    assert!(displays.command().is_none());
+    displays.open(2, 9, config);
+    displays.open(3, 5, config);
+    assert_eq!(displays.vacant(), None);
+    assert_eq!(displays.lost(9), Some(2));
+    assert_eq!(displays.output(1), Some(7));
+    assert_eq!(displays.output(3), Some(5));
+    displays.close(1);
+    assert_eq!(displays.output(1), None);
+    assert!(matches!(displays.command(), Some(DisplayCommand::Close(7))));
+    assert_eq!(displays.vacant(), Some(1));
 }

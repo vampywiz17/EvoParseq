@@ -1,7 +1,12 @@
 //! Wayland/Vulkan/PipeWire binding for the shared Phaze session.
 use crate::{account, connection_settings::Manager, interop_client, playback::Playback, telemetry};
+use crate::{
+    desktop_input::Event as Desktop,
+    input_handoff::DragPhase,
+    interop_session::{DESKTOP_DISPLAYS, SecondaryDisplays},
+};
 use anyhow::Result;
-use evoparseq_host_interop::{ClientControl, Input, VideoConfig};
+use evoparseq_host_interop::{ClientControl, DisplayCommand, InputBatch, VideoConfig};
 use std::{
     collections::VecDeque,
     sync::atomic::Ordering,
@@ -31,6 +36,9 @@ pub fn run(
             telemetry,
             manager,
             desktop: Default::default(),
+            secondary: Default::default(),
+            owner: None,
+            drag_origin: None,
             events: VecDeque::new(),
             clipboard: Default::default(),
             peers: Default::default(),
@@ -71,6 +79,7 @@ pub fn run(
             result = stopped => result,
         }
     });
+    telemetry.displays.clear();
     playback.set_phaze_cursor_mode(false, true);
     result?;
     Ok("Phaze stream disconnected".into())
@@ -81,6 +90,9 @@ struct Adapter<'a> {
     telemetry: &'a telemetry::Session,
     manager: &'a Manager,
     desktop: interop_client::DesktopInput,
+    secondary: SecondaryDisplays,
+    owner: Option<usize>,
+    drag_origin: Option<usize>,
     events: VecDeque<crate::input_handoff::Event>,
     clipboard: crate::clipboard_sync::State,
     peers: crate::interop_session::PhazePeers,
@@ -88,6 +100,117 @@ struct Adapter<'a> {
     authenticated: bool,
     paste_after_send: bool,
     paste_ready: bool,
+}
+
+impl Adapter<'_> {
+    fn desktop_event(&mut self, slot: usize, event: Desktop, input: &mut InputBatch) -> Result<()> {
+        if slot == 0 && !self.secondary.is_open() {
+            match event {
+                Desktop::Focus(true) => self.owner = Some(0),
+                Desktop::Focus(false) => self.owner = None,
+                _ => {}
+            }
+            input.target(None);
+            return self
+                .desktop
+                .event(event, self.playback.input_geometry(), input);
+        }
+        let target = (slot != 0).then(|| self.playback.display(slot)).flatten();
+        let (geometry, output, mode) = if slot == 0 {
+            (
+                self.playback.input_geometry(),
+                None,
+                self.playback.phaze_pointer_mode(),
+            )
+        } else if let (Some(target), Some(output)) = (target, self.secondary.output(slot)) {
+            if !self.secondary.ready(slot) && !matches!(event, Desktop::Focus(_) | Desktop::Release)
+            {
+                return Ok(());
+            }
+            (
+                target.input_geometry(),
+                Some(output),
+                target.phaze_pointer_mode(),
+            )
+        } else {
+            return Ok(());
+        };
+        if self.drag_origin.is_some() && !matches!(event, Desktop::Release) {
+            return Ok(());
+        }
+        if matches!(event, Desktop::Focus(true)) {
+            if self.owner.is_some_and(|owner| owner != slot) {
+                input.target(None);
+                self.desktop.event(Desktop::Release, geometry, input)?;
+            }
+            self.owner = Some(slot);
+        } else if self.owner != Some(slot) {
+            return Ok(());
+        }
+        input.target(output);
+        self.desktop.cursor_mode(mode.0, mode.1);
+        self.desktop.event(event, geometry, input)?;
+        if matches!(event, Desktop::Focus(false) | Desktop::Release) {
+            self.owner = None;
+            self.drag_origin = None;
+        }
+        Ok(())
+    }
+
+    fn drag_event(
+        &mut self,
+        slot: usize,
+        mut pointer: crate::desktop_input::Pointer,
+        phase: DragPhase,
+        input: &mut InputBatch,
+    ) -> Result<()> {
+        if phase == DragPhase::Begin {
+            if self.drag_origin.is_some() || self.owner != Some(slot) {
+                return Ok(());
+            }
+            self.drag_origin = Some(slot);
+        }
+        let Some(origin) = self.drag_origin else {
+            return Ok(());
+        };
+        let target = self.playback.display(slot);
+        let output = self.secondary.output(slot);
+        let geometry = if phase == DragPhase::Cancel {
+            None
+        } else if slot == 0 {
+            (!self.playback.phaze_pointer_mode().0).then(|| self.playback.input_geometry())
+        } else if output.is_some() && self.secondary.ready(slot) {
+            target
+                .filter(|p| !p.stopped() && !p.phaze_pointer_mode().0)
+                .map(|p| p.input_geometry())
+        } else {
+            None
+        };
+        let cancelled = geometry.is_none();
+        if let Some(geometry) = geometry {
+            input.target(output);
+            pointer.buttons = u32::from(phase != DragPhase::Drop);
+            pointer.relative = false;
+            self.desktop
+                .event(Desktop::Pointer(pointer), geometry, input)?;
+        } else {
+            input.target(None);
+            self.desktop
+                .event(Desktop::Release, self.playback.input_geometry(), input)?;
+        }
+        if cancelled || phase == DragPhase::Drop {
+            self.drag_origin = None;
+            self.clipboard.revoke();
+            if let Some(source) = self.playback.display(origin) {
+                source.clipboard_allowed.store(false, Ordering::Release);
+            } else if origin == 0 {
+                self.playback
+                    .clipboard_allowed
+                    .store(false, Ordering::Release);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl interop_client::Platform for Adapter<'_> {
@@ -151,6 +274,41 @@ impl interop_client::Platform for Adapter<'_> {
         Ok(())
     }
 
+    fn display_command(&mut self) -> Option<DisplayCommand> {
+        self.secondary.command()
+    }
+
+    fn secondary_video(&mut self, output: u32, encoded: &[u8], reset: bool) {
+        if let Some(slot) = self.secondary.slot(output) {
+            if let Some(channel) = self.telemetry.displays.get(slot) {
+                if reset {
+                    channel.playback.encoder_rebuilt();
+                }
+                if let Some(info) = self.secondary.inspect(slot, encoded, reset) {
+                    if channel.playback.submit_packet(encoded, info).is_err() {
+                        channel.playback.stop();
+                    }
+                }
+            }
+        }
+    }
+
+    fn secondary_cursor_mode(&mut self, output: u32, relative: bool, visible: bool) {
+        if let Some(channel) = self
+            .secondary
+            .slot(output)
+            .and_then(|slot| self.telemetry.displays.get(slot))
+        {
+            channel.playback.set_phaze_cursor_mode(relative, visible);
+        }
+    }
+
+    fn secondary_lost(&mut self, output: u32) {
+        if let Some(slot) = self.secondary.lost(output) {
+            self.telemetry.displays.close(slot);
+        }
+    }
+
     fn reset_video(&mut self) {
         self.playback.encoder_rebuilt();
     }
@@ -189,11 +347,10 @@ impl interop_client::Platform for Adapter<'_> {
         &mut self,
         session: &mut interop_client::State,
         output: Option<u32>,
-        input: &mut Vec<Input>,
+        input: &mut InputBatch,
         controls: &mut Vec<ClientControl>,
     ) -> Result<bool> {
         use crate::{
-            desktop_input::Event as Desktop,
             input_handoff::Event,
             session_controls::{Command, Status},
         };
@@ -205,6 +362,31 @@ impl interop_client::Platform for Adapter<'_> {
             anyhow::bail!("Phaze video stopped: {stage}");
         }
         self.playback.set_input_ready(output.is_some());
+        for slot in 1..DESKTOP_DISPLAYS {
+            if !self.secondary.is_open() {
+                break;
+            }
+            if let Some(channel) = self.telemetry.displays.get(slot) {
+                channel.playback.poll_gpu();
+                channel.playback.set_input_ready(self.secondary.ready(slot));
+                if channel.playback.stopped()
+                    || channel.playback.video_snapshot().failure_stage.is_some()
+                    || self.secondary.timed_out(slot)
+                {
+                    self.secondary.close(slot);
+                    self.telemetry.displays.close(slot);
+                }
+            }
+        }
+        if self
+            .owner
+            .is_some_and(|slot| slot != 0 && self.secondary.output(slot).is_none())
+        {
+            self.desktop
+                .event(Desktop::Release, self.playback.input_geometry(), input)?;
+            self.owner = None;
+            self.drag_origin = None;
+        }
         self.playback.input.take(&mut self.events)?;
         let geometry = self.playback.input_geometry();
         let mut paste_now = std::mem::take(&mut self.paste_ready);
@@ -217,7 +399,28 @@ impl interop_client::Platform for Adapter<'_> {
                         self.paste_after_send = false;
                         controls.retain(|control| !matches!(control, ClientControl::Clipboard(_)));
                     }
-                    self.desktop.event(event, geometry, input)?;
+                    self.desktop_event(0, event, input)?;
+                }
+                Event::DisplayDesktop { stream, event } => {
+                    if matches!(event, Desktop::Focus(true)) && self.owner != Some(stream) {
+                        self.clipboard.revoke();
+                        paste_now = false;
+                        self.paste_after_send = false;
+                        controls.retain(|control| !matches!(control, ClientControl::Clipboard(_)));
+                    }
+                    self.desktop_event(stream, event, input)?
+                }
+                Event::DisplayDrag {
+                    stream,
+                    pointer,
+                    phase,
+                } => {
+                    self.drag_event(stream, pointer, phase, input)?;
+                    if phase == DragPhase::Drop || phase == DragPhase::Cancel {
+                        paste_now = false;
+                        self.paste_after_send = false;
+                        controls.retain(|control| !matches!(control, ClientControl::Clipboard(_)));
+                    }
                 }
                 Event::Session(Command::Disconnect) => return Ok(false),
                 Event::Session(Command::Clipboard { text, paste }) if output.is_some() => {
@@ -237,6 +440,7 @@ impl interop_client::Platform for Adapter<'_> {
                     }
                 }
                 Event::Session(command) => {
+                    input.target(None);
                     let mut host = self
                         .telemetry
                         .host
@@ -253,7 +457,38 @@ impl interop_client::Platform for Adapter<'_> {
                                     .store(video.immersive, Ordering::Release);
                                 session.stream.apply(config, output);
                             }
+                            Command::AddPhazeDisplay(id) => {
+                                anyhow::ensure!(
+                                    session.hid_devices == (false, false),
+                                    "Additional displays require normal input"
+                                );
+                                anyhow::ensure!(
+                                    self.secondary.available(id, output),
+                                    "Display is already open"
+                                );
+                                anyhow::ensure!(
+                                    host.outputs
+                                        .iter()
+                                        .any(|output| output.id == id.to_string()),
+                                    "Phaze display is unavailable"
+                                );
+                                let slot = self.secondary.vacant().ok_or_else(|| {
+                                    anyhow::anyhow!("No additional display slot is available")
+                                })?;
+                                let config = session.stream.config();
+                                self.telemetry.displays.open_phaze(
+                                    slot,
+                                    id,
+                                    self.playback.ui_context(),
+                                    config.hevc,
+                                )?;
+                                self.secondary.open(slot, id, config);
+                            }
                             Command::SelectDisplay(id) => {
+                                anyhow::ensure!(
+                                    self.secondary.slot(id.parse()?).is_none(),
+                                    "Display is already open"
+                                );
                                 // Reuse the Windows policy: USB HID mouse targets the
                                 // host's primary display, not another selected output.
                                 crate::host_displays::Displays {
@@ -281,6 +516,7 @@ impl interop_client::Platform for Adapter<'_> {
                 _ => {}
             }
         }
+        input.target(None);
         if paste_now && self.playback.clipboard_allowed.load(Ordering::Acquire) {
             for down in [true, false] {
                 self.desktop.event(

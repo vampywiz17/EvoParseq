@@ -20,7 +20,7 @@ pub use control::{ClientControl, PeerState, MAX_CLIPBOARD_BYTES};
 pub use cursor::{CursorFormat, CursorImage};
 pub use datagram::Datagram;
 use futures_util::{SinkExt, StreamExt};
-pub use input::{Input, Keyboard};
+pub use input::{Input, InputBatch, Keyboard};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{sync::Arc, time::Duration};
@@ -197,6 +197,12 @@ fn random_hex(n: usize) -> Result<String> {
     getrandom::fill(&mut b).map_err(|_| anyhow::anyhow!("OS randomness unavailable"))?;
     Ok(b.iter().map(|v| format!("{v:02x}")).collect())
 }
+#[derive(Clone, Copy)]
+pub enum DisplayCommand {
+    Open(u32, VideoConfig),
+    Close(u32),
+}
+
 /// Called directly by the network consumer. No decoded frames or extra queue.
 pub trait Sink {
     /// Request stereo PCM instead of AAC-LC. Applies at connection startup.
@@ -246,6 +252,12 @@ pub trait Sink {
     fn rtt(&mut self, _elapsed: Option<Duration>) {}
     fn stage(&mut self, stage: &'static str);
     fn outputs(&mut self, outputs: &[Output]);
+    fn display_command(&mut self) -> Option<DisplayCommand> {
+        None
+    }
+    fn secondary_video(&mut self, _output: u32, _encoded: &[u8], _reset: bool) {}
+    fn secondary_lost(&mut self, _output: u32) {}
+    fn secondary_cursor_mode(&mut self, _output: u32, _relative: bool, _visible: bool) {}
     fn display_video_header_observed(&mut self, _output: u32, _match_mask: u8) {}
     fn parallel_display_probe(&mut self, _status: &'static str) {}
     fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()>;
@@ -255,7 +267,7 @@ pub trait Sink {
     fn poll(
         &mut self,
         output: Option<u32>,
-        input: &mut Vec<Input>,
+        input: &mut InputBatch,
         controls: &mut Vec<ClientControl>,
     ) -> Result<bool>;
 }
