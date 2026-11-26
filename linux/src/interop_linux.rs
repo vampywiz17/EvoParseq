@@ -172,7 +172,12 @@ impl Adapter<'_> {
         let Some(origin) = self.drag_origin else {
             return Ok(());
         };
-        let target = self.playback.display(slot);
+        let other = (slot != 0).then(|| self.playback.display(slot)).flatten();
+        let target = if slot == 0 {
+            Some(self.playback)
+        } else {
+            other.as_deref()
+        };
         let output = self.secondary.output(slot);
         let geometry = if phase == DragPhase::Cancel {
             None
@@ -200,13 +205,39 @@ impl Adapter<'_> {
         if cancelled || phase == DragPhase::Drop {
             self.drag_origin = None;
             self.clipboard.revoke();
-            if let Some(source) = self.playback.display(origin) {
+            let source = (origin != 0)
+                .then(|| self.playback.display(origin))
+                .flatten();
+            let source = if origin == 0 {
+                Some(self.playback)
+            } else {
+                source.as_deref()
+            };
+            if let Some(source) = source {
                 source.clipboard_allowed.store(false, Ordering::Release);
-            } else if origin == 0 {
-                self.playback
-                    .clipboard_allowed
-                    .store(false, Ordering::Release);
+                source.deactivate_input();
+                source.native_drag.store(false, Ordering::Release);
             }
+            // Wayland DnD can consume key releases. Retire them before the
+            // destination resumes ordinary input, after the pointer button up.
+            input.target(None);
+            self.desktop
+                .event(Desktop::Release, self.playback.input_geometry(), input)?;
+            if !cancelled && let Some(target) = target {
+                self.desktop
+                    .event(Desktop::Focus(true), target.input_geometry(), input)?;
+                self.owner = Some(slot);
+                target.activate_input();
+                target.drag_activation.store(true, Ordering::Release);
+                target.repaint();
+            } else {
+                self.owner = None;
+            }
+            crate::event_log::record(
+                "INFO",
+                "phaze_display_drag_finished",
+                serde_json::json!({"source_stream":origin,"target_stream":slot,"cancelled":cancelled}),
+            );
         }
         Ok(())
     }
@@ -566,4 +597,132 @@ impl interop_client::Platform for Adapter<'_> {
         }
         Ok(true)
     }
+}
+
+#[cfg(test)]
+#[test]
+fn linux_phaze_drop_and_cancel_restore_input_after_wayland_drag() -> Result<()> {
+    use crate::{connection::Mode, desktop_input::Pointer};
+    use evoparseq_host_interop::Input;
+    use std::sync::Arc;
+
+    let ctx = eframe::egui::Context::default();
+    let manager = Manager::open(std::env::temp_dir().join(format!(
+        "evoparseq-phaze-drag-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos(),
+    )));
+    for (origin, destination, phase) in [
+        (0, 0, DragPhase::Drop),
+        (1, 1, DragPhase::Drop),
+        (0, 1, DragPhase::Drop),
+        (1, 0, DragPhase::Drop),
+        (0, 1, DragPhase::Cancel),
+        (1, 0, DragPhase::Cancel),
+    ] {
+        let telemetry = telemetry::Session::new(Mode::Phaze);
+        let root = Playback::new(ctx.clone());
+        root.attach_displays(&telemetry.displays, 0);
+        *telemetry.displays.primary.lock().unwrap() = Arc::downgrade(&root);
+        telemetry.displays.open_phaze(1, 29, &ctx, false)?;
+        let peer = telemetry.displays.get(1).unwrap().playback.clone();
+        root.set_input_geometry((1920, 1080));
+        peer.set_input_geometry((1280, 720));
+        let mut adapter = Adapter {
+            playback: &root,
+            telemetry: &telemetry,
+            manager: &manager,
+            desktop: Default::default(),
+            secondary: Default::default(),
+            owner: None,
+            drag_origin: None,
+            events: Default::default(),
+            clipboard: Default::default(),
+            peers: Default::default(),
+            next: Instant::now(),
+            authenticated: true,
+            paste_after_send: false,
+            paste_ready: false,
+        };
+        adapter.secondary.open(
+            1,
+            29,
+            VideoConfig {
+                hevc: false,
+                ..Default::default()
+            },
+        );
+        assert!(
+            adapter
+                .secondary
+                .inspect(1, &[0, 0, 1, 0x65, 0x80], false)
+                .is_some()
+        );
+        let source = if origin == 0 { &root } else { &peer };
+        let target = if destination == 0 { &root } else { &peer };
+        source.activate_input();
+        source.native_drag.store(true, Ordering::Release);
+        source.clipboard_allowed.store(true, Ordering::Release);
+        let pointer = Pointer {
+            x: 200.,
+            y: 120.,
+            relative: false,
+            moved: true,
+            viewport: (640, 360),
+            buttons: 1,
+            wheel: (0, 0),
+        };
+        let mut input = InputBatch::default();
+        adapter.desktop_event(origin, Desktop::Focus(true), &mut input)?;
+        adapter.drag_event(origin, pointer, DragPhase::Begin, &mut input)?;
+        adapter.drag_event(destination, pointer, DragPhase::Motion, &mut input)?;
+        adapter.drag_event(destination, pointer, phase, &mut input)?;
+        assert!(!source.native_drag.load(Ordering::Acquire));
+        assert!(!source.clipboard_allowed.load(Ordering::Acquire));
+        assert!(adapter.drag_origin.is_none());
+        if phase == DragPhase::Cancel {
+            assert!(!source.input_active());
+            assert_eq!(adapter.owner, None);
+            assert!(input.iter().any(|event| *event == Input::Release));
+        } else {
+            assert!(target.input_active());
+            assert!(target.drag_activation.load(Ordering::Acquire));
+            assert_eq!(adapter.owner, Some(destination));
+            let release = input
+                .iter()
+                .position(|event| matches!(event, Input::Button { down: false, .. }))
+                .unwrap();
+            assert!(
+                input
+                    .iter()
+                    .skip(release + 1)
+                    .any(|event| *event == Input::Release)
+            );
+            assert_eq!(
+                input
+                    .iter()
+                    .filter(|event| matches!(event, Input::Button { down: true, .. }))
+                    .count(),
+                1
+            );
+            input.clear();
+            adapter.desktop_event(destination, Desktop::Pointer(pointer), &mut input)?;
+            assert!(
+                input
+                    .iter()
+                    .any(|event| matches!(event, Input::Button { down: true, .. })),
+                "the click following a completed drag must reach the host"
+            );
+            if origin != destination {
+                adapter.desktop_event(origin, Desktop::Focus(false), &mut input)?;
+                assert_eq!(adapter.owner, Some(destination));
+                assert!(
+                    !input.iter().any(|event| *event == Input::Release),
+                    "late source focus loss must not cancel the new destination click"
+                );
+            }
+        }
+        telemetry.displays.clear();
+    }
+    Ok(())
 }
