@@ -242,7 +242,7 @@ impl DesktopInput {
     }
 
     #[cfg(target_os = "android")]
-    pub fn tick(&mut self, size: (u32, u32), input: &mut Vec<Input>) -> Result<()> {
+    pub fn tick(&mut self, size: (u32, u32), input: &mut InputBatch) -> Result<()> {
         let keys = &mut self.keys;
         self.engine.tick_action(Instant::now(), |action| {
             translate(action, keys, size, input);
