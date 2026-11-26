@@ -1310,6 +1310,9 @@ mod tests {
             Some(&(Some(17), true, false)),
             "relative input retains the host's hidden cursor"
         );
+        second[4] = 0;
+        routes.cursor(primary, &second, &mut client);
+        assert_eq!(routes.visible_cursor, Some(17));
         routes.command(
             DisplayCommand::Close(17),
             primary,
@@ -1317,6 +1320,7 @@ mod tests {
             &mut client,
             |_| Ok(()),
         )?;
+        first[4] = 2;
         // Closing the output that owned the visible cursor must retire that
         // ownership, so a later absolute hide from the primary stays a hide.
         routes.cursor(primary, &first, &mut client);
