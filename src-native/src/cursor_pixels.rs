@@ -117,7 +117,7 @@ mod tests {
         assert!(decode(CursorFormat::Monochrome, (9, 1), &[0; 3]).is_err());
         let p = decode(CursorFormat::Monochrome, (9, 1), &[0xff, 0x80, 0, 0]).unwrap();
         assert_eq!(p.rgba.len(), 36);
-        assert!(p.rgba.chunks_exact(4).all(|p| p[3] == 0));
+        assert!(p.rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 0));
     }
     #[test]
     fn linux_cursor_png_is_bounded_and_matches_declared_geometry() {
