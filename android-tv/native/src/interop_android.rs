@@ -177,7 +177,7 @@ impl interop_client::Platform for Adapter<'_> {
                 "state": if video.submitted > 0 { "Streaming" } else { "Connecting…" },
                 "ended": false, "video": video, "audio": self.receiver.snapshot(),
                 "audio_output": self.audio.snapshot(), "overlay": overlay,
-                "network": {"transport":"Phaze","carrier":state.carrier,"route":state.route,"rtt_ms":rtt,"received_mbps":rate,"received_bytes":[state.received],"sent_bytes":[state.sent]},
+                "network": {"transport":"Phaze","carrier":state.routing.carrier(),"route":state.routing.route(),"rtt_ms":rtt,"received_mbps":rate,"received_bytes":[state.received],"sent_bytes":[state.sent]},
             });
             self.sampled = now;
             self.received = state.received;

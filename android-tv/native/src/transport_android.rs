@@ -38,7 +38,6 @@ pub struct Lowlat {
     config: control::Config,
     writer: SignalingWrite,
     peer: String,
-    base_id: String,
     wire_id: String,
     routes: Option<VecDeque<Route>>,
     retries: usize,
@@ -152,7 +151,6 @@ impl Transport {
             config: config.clone(),
             writer,
             peer: peer.into(),
-            base_id: id.into(),
             wire_id: id.into(),
             routes,
             retries: 0,
@@ -203,21 +201,40 @@ impl Transport {
                             lowlat.controls.push_back(Bytes::from(bytes));
                         }
                         Event::Ended { outcome } => {
-                            if !lowlat.established && lowlat.retry()? {
+                            if crate::lowlat_routes::retry_due(
+                                lowlat.established,
+                                true,
+                                false,
+                                None,
+                            ) && lowlat.retry()?
+                            {
                                 break;
                             }
                             anyhow::bail!("LOWLAT connection ended: {outcome:?}")
                         }
                         Event::IoFailure { stage, kind, .. } => {
+                            if crate::lowlat_routes::retry_due(
+                                lowlat.established,
+                                true,
+                                false,
+                                None,
+                            ) && lowlat.retry()?
+                            {
+                                break;
+                            }
                             anyhow::bail!("LOWLAT IO failed: {} ({kind:?})", stage.name())
                         }
                         _ => {}
                     }
                 }
-                ensure!(
-                    lowlat.established || lowlat.started.elapsed() < Duration::from_secs(30),
-                    "LOWLAT connection timed out"
-                );
+                if crate::lowlat_routes::retry_due(
+                    lowlat.established,
+                    false,
+                    lowlat.started.elapsed() >= Duration::from_secs(30),
+                    None,
+                ) {
+                    ensure!(lowlat.retry()?, "LOWLAT configured routes exhausted");
+                }
                 let pumped = lowlat_ingress::pump(
                     &mut lowlat.source,
                     &mut lowlat.ingress,
@@ -308,7 +325,7 @@ impl Transport {
 
 impl Lowlat {
     fn retry(&mut self) -> Result<bool> {
-        if self.network.provider == "direct" {
+        if self.network.provider == "direct" || self.retries >= 32 {
             return Ok(false);
         }
         if self.routes.is_none() {
@@ -335,7 +352,7 @@ impl Lowlat {
         )?;
         session.wake_consumer(std::thread::current());
         self.retries += 1;
-        self.wire_id = format!("{}-relay-{}", self.base_id, self.retries);
+        self.wire_id = crate::lowlat_routes::native_attempt_id()?;
         let credentials = session.offer(&self.wire_id, route)?;
         self.source = session.take_media()?;
         self.signaling = Signaling::new(&self.peer, &self.wire_id)?;

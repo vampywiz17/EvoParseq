@@ -6,7 +6,9 @@ use crate::{
     video_stream::PacketInfo,
 };
 use anyhow::Result;
-use evoparseq_host_interop::{AudioCodec, ClientControl, Input, Keyboard, Output, Sink, VideoConfig};
+use evoparseq_host_interop::{
+    AudioCodec, ClientControl, Input, Keyboard, Output, Sink, VideoConfig,
+};
 use std::time::{Duration, Instant};
 
 pub trait Platform {
@@ -35,8 +37,7 @@ pub struct State {
     pub sent: u64,
     pub rtt: Option<Duration>,
     pub audio_bytes: u64,
-    pub route: &'static str,
-    pub carrier: &'static str,
+    pub routing: interop_session::RouteState,
     /// Selected virtual USB devices, independent of the normal Parsec LOWLAT profile.
     pub hid_devices: (bool, bool),
 }
@@ -68,8 +69,7 @@ impl<P: Platform> Client<P> {
                 sent: 0,
                 rtt: None,
                 audio_bytes: 0,
-                route: "Direct",
-                carrier: "direct UDP",
+                routing: Default::default(),
                 hid_devices: (false, false),
             },
         }
@@ -88,6 +88,7 @@ impl<P: Platform> Client<P> {
         servers: Option<Vec<webrtc::ice_transport::ice_server::RTCIceServer>>,
         roots: impl Fn() -> Vec<Vec<u8>>,
     ) -> Result<()> {
+        self.state.routing = Default::default();
         let remote = evoparseq_host_interop::Session::from_token(token)?;
         if let Some(servers) = servers {
             interop_session::connect_relay(
@@ -97,10 +98,7 @@ impl<P: Platform> Client<P> {
                 servers,
                 roots,
                 |client, name, allocated| {
-                    client.state.carrier = name;
-                    if allocated {
-                        client.state.route = "TURN";
-                    }
+                    client.state.routing.select(name, allocated);
                 },
             )
             .await
@@ -138,6 +136,7 @@ impl<P: Platform> Sink for Client<P> {
         interop_session::log_bandwidth_feedback(lower_rate, upper_rate);
     }
     fn stage(&mut self, stage: &'static str) {
+        self.state.routing.stage(stage);
         self.platform.stage(stage);
     }
     fn outputs(&mut self, outputs: &[Output]) {
@@ -254,10 +253,22 @@ mod tests {
     fn shared_client_forwards_selected_usb_hid_devices() {
         struct Offline;
         impl Platform for Offline {
-            fn video(&mut self, _: &[u8], _: PacketInfo) -> Result<()> { Ok(()) }
+            fn video(&mut self, _: &[u8], _: PacketInfo) -> Result<()> {
+                Ok(())
+            }
             fn reset_video(&mut self) {}
-            fn take_recovery(&mut self) -> bool { false }
-            fn poll(&mut self, _: &mut State, _: Option<u32>, _: &mut Vec<Input>, _: &mut Vec<ClientControl>) -> Result<bool> { Ok(false) }
+            fn take_recovery(&mut self) -> bool {
+                false
+            }
+            fn poll(
+                &mut self,
+                _: &mut State,
+                _: Option<u32>,
+                _: &mut Vec<Input>,
+                _: &mut Vec<ClientControl>,
+            ) -> Result<bool> {
+                Ok(false)
+            }
             fn cursor_mode(&mut self, _: bool, _: bool) {}
         }
         for devices in [(false, false), (true, false), (false, true), (true, true)] {

@@ -174,11 +174,7 @@ pub const DISPLAY_TIMING: SettingRow = SettingRow {
     tab: 1,
     group: 0,
     label: "Display timing",
-    help: if cfg!(target_os = "linux") {
-        "Experimental: normal GPU rendering; reconnect to apply.\nVRR requests adaptive Vulkan presentation.\nMonitor/driver/compositor VRR is not verified."
-    } else {
-        "Normal GPU rendering; reconnect to apply.\nVRR needs an enabled compatible monitor and driver.\nZero copy keeps Windows-managed timing."
-    },
+    help: "Requests the presentation timing supported by the renderer.\nRequires compatible monitor, driver and compositor settings.\nReconnect after changing.",
     y: 626,
     help_height: 60,
     field_height: 32,
@@ -189,11 +185,7 @@ pub const CHROMA: SettingRow = SettingRow {
     tab: 1,
     group: 0,
     label: "Chroma",
-    help: if cfg!(target_os = "linux") {
-        "4:4:4 needs a compatible Vulkan renderer; not integrated.\nHEVC Main/Main10 currently use 4:2:0 surfaces."
-    } else {
-        "NVIDIA tested; Intel not live-validated. AMD unavailable.\nHEVC 8/10-bit; requires compatible host and GPU.\nNormal GPU rendering; host may send 4:2:0 instead."
-    },
+    help: "4:4:4 requires compatible host, decoder and renderer support.\nHEVC 8/10-bit; the host may send 4:2:0 instead.\nReconnect after changing.",
     y: 438,
     help_height: 60,
     field_height: 32,
@@ -440,3 +432,52 @@ pub const STAT_MEMORY_RESIDENT_TOTAL: &str = "Memory resident (total)";
 pub const STAT_MEMORY_RESIDENT_PRIVATE: &str = "Memory resident (private)";
 
 pub const STAT_MEMORY_COMMITTED_PRIVATE: &str = "Memory committed (private)";
+
+/// Backend integration capabilities, independent of GPU or host availability.
+pub struct VideoCapabilities {
+    pub full_chroma: bool,
+    pub original_surfaces: bool,
+}
+
+pub const VIDEO_CAPABILITIES: VideoCapabilities = VideoCapabilities {
+    full_chroma: cfg!(windows),
+    original_surfaces: cfg!(windows),
+};
+
+impl VideoCapabilities {
+    pub fn chroma_enabled(&self, hevc: bool, vendor: Option<u32>) -> bool {
+        self.full_chroma
+            && hevc
+            && vendor.is_some_and(crate::connection_settings::full_chroma_vendor_allowed)
+    }
+}
+
+pub fn chroma_help(phaze: bool) -> &'static str {
+    if phaze {
+        "HEVC 8-bit; requires compatible host, decoder and renderer.\nThe host may send 4:2:0 instead; reconnect after changing."
+    } else {
+        CHROMA.help
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn video_capabilities_gate_chroma_without_changing_common_copy() {
+    for supported in [false, true] {
+        let caps = VideoCapabilities {
+            full_chroma: supported,
+            original_surfaces: supported,
+        };
+        for hevc in [false, true] {
+            for vendor in [None, Some(0x10de), Some(0x8086), Some(0x1002)] {
+                assert_eq!(
+                    caps.chroma_enabled(hevc, vendor),
+                    supported && hevc && matches!(vendor, Some(0x10de | 0x8086))
+                );
+            }
+        }
+        assert_eq!(caps.original_surfaces, supported);
+    }
+    assert_eq!(chroma_help(false), CHROMA.help);
+    assert!(chroma_help(true).contains("8-bit"));
+}

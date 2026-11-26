@@ -7,6 +7,61 @@ use crate::{
 use anyhow::{ensure, Result};
 use evoparseq_host_interop::{ClientControl, Input, PeerState, VideoConfig};
 
+/// Evidence from the explicitly selected Phaze carrier and authenticated peer.
+#[derive(Default)]
+pub struct RouteState {
+    carrier: Option<&'static str>,
+    relay: bool,
+    authenticated: bool,
+}
+
+impl RouteState {
+    pub fn select(&mut self, carrier: &'static str, relay: bool) {
+        self.carrier = Some(carrier);
+        self.relay = relay;
+        self.authenticated = false;
+    }
+
+    pub fn stage(&mut self, stage: &str) {
+        self.authenticated |= stage == "dtls_authenticated";
+    }
+
+    pub fn route(&self) -> &'static str {
+        if !self.authenticated {
+            "Unknown"
+        } else if self.relay {
+            "TURN"
+        } else {
+            "Direct"
+        }
+    }
+
+    pub fn carrier(&self) -> &'static str {
+        self.carrier.unwrap_or("direct UDP")
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn phaze_route_waits_for_authentication_on_every_selected_carrier() {
+    let mut state = RouteState::default();
+    assert_eq!(state.route(), "Unknown");
+    for (carrier, relay, expected) in [
+        ("direct UDP", false, "Direct"),
+        ("TURN / TCP", true, "TURN"),
+        ("TURN / TLS", true, "TURN"),
+    ] {
+        state.select(carrier, relay);
+        state.stage("connecting_signaling");
+        assert_eq!(state.route(), "Unknown");
+        state.stage("dtls_authenticated");
+        assert_eq!(state.route(), expected);
+        assert_eq!(state.carrier(), carrier);
+    }
+    state.select("TURN / UDP", true);
+    assert_eq!(state.route(), "Unknown");
+}
+
 pub fn supported_video(mut video: Video) -> Video {
     video.resolution = Resolution::Host;
     video.constant_fps = None;
