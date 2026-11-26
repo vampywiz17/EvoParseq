@@ -54,7 +54,7 @@ struct State {
     icon: Option<DragIcon>,
 }
 struct Destination {
-    surfaces: [Option<wl_surface::WlSurface>; crate::interop_session::DESKTOP_DISPLAYS],
+    surfaces: [Option<wl_surface::WlSurface>; crate::display_stream::DESKTOP_DISPLAYS],
     gesture: Option<Gesture>,
     image: Option<wayland_cursor::CursorImageBuffer>,
     zoom: f64,
@@ -336,7 +336,7 @@ impl Drag {
         let observer: Observer = Arc::new(move |id, window, _event| {
             if let Some(drag) = weak.upgrade() {
                 let mut d = drag.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(stream) = (0..crate::interop_session::DESKTOP_DISPLAYS).find(|s| {
+                if let Some(stream) = (0..crate::display_stream::DESKTOP_DISPLAYS).find(|s| {
                     id == if *s == 0 {
                         egui::ViewportId::ROOT
                     } else {
@@ -516,7 +516,7 @@ impl Drag {
         );
         let root = origin.primary().context("No primary display")?;
         anyhow::ensure!(
-            (1..crate::interop_session::DESKTOP_DISPLAYS).any(|s| root.display(s).is_some()),
+            (1..crate::display_stream::DESKTOP_DISPLAYS).any(|s| root.display(s).is_some()),
             "No peer display"
         );
         let pointer = origin.desktop_pointer(point, 1).context("Outside video")?;

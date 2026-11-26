@@ -67,7 +67,7 @@ impl crate::Desktop {
             return;
         };
         let mut open_settings = false;
-        for stream in 1..crate::interop_session::DESKTOP_DISPLAYS {
+        for stream in 1..crate::display_stream::DESKTOP_DISPLAYS {
             let slot = &mut self.screens[stream - 1];
             let Some(channel) = telemetry.displays.get(stream) else {
                 *slot = None;

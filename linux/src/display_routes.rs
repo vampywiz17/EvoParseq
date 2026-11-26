@@ -1,5 +1,5 @@
 //! Linux compressed-stream routing and bounded lifecycle; no windows or renderer.
-use crate::{interop_session::DESKTOP_DISPLAYS, playback::Playback};
+use crate::{display_stream::DESKTOP_DISPLAYS, playback::Playback};
 use anyhow::{Result, ensure};
 use eframe::egui;
 use std::sync::{

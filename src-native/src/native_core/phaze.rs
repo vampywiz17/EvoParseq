@@ -6,7 +6,8 @@ mod turn_research;
 use crate::platform::Desktop as _;
 use crate::{
     connection_settings::Manager,
-    interop_session::{self, normalized, SecondaryDisplays, Stream, DESKTOP_DISPLAYS},
+    display_stream::DESKTOP_DISPLAYS,
+    interop_session::{self, normalized, SecondaryDisplays, Stream},
     window::{Event, Window},
 };
 use anyhow::Result;

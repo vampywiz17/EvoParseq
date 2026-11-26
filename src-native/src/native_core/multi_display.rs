@@ -5,8 +5,8 @@ use crate::{connection_settings::Manager, window::Window};
 use anyhow::{ensure, Result};
 use std::sync::{Arc, Mutex};
 
+use crate::display_stream::DESKTOP_DISPLAYS;
 use crate::display_stream::{enable, STREAMS};
-use crate::interop_session::DESKTOP_DISPLAYS;
 
 pub unsafe fn add_menu(window: &Window) {
     use windows_sys::Win32::{Foundation::POINT, UI::WindowsAndMessaging::*};

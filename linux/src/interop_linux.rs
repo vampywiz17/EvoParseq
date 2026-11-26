@@ -1,9 +1,8 @@
 //! Wayland/Vulkan/PipeWire binding for the shared Phaze session.
 use crate::{account, connection_settings::Manager, interop_client, playback::Playback, telemetry};
 use crate::{
-    desktop_input::Event as Desktop,
-    input_handoff::DragPhase,
-    interop_session::{DESKTOP_DISPLAYS, SecondaryDisplays},
+    desktop_input::Event as Desktop, display_stream::DESKTOP_DISPLAYS, input_handoff::DragPhase,
+    interop_session::SecondaryDisplays,
 };
 use anyhow::Result;
 use evoparseq_host_interop::{ClientControl, DisplayCommand, InputBatch, VideoConfig};

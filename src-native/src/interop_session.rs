@@ -8,7 +8,7 @@ use anyhow::{ensure, Result};
 use evoparseq_host_interop::{ClientControl, Input, PeerState, VideoConfig};
 
 #[cfg(not(target_os = "android"))]
-pub const DESKTOP_DISPLAYS: usize = 4;
+use crate::display_stream::DESKTOP_DISPLAYS;
 
 #[cfg(not(target_os = "android"))]
 #[derive(Default)]

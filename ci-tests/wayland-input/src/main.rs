@@ -69,9 +69,9 @@ mod event_log {
         println!("{event} {details}");
     }
 }
-mod display_stream {
-    pub const STREAMS: usize = 3;
-}
+#[allow(dead_code)]
+#[path = "../../../src-native/src/display_stream.rs"]
+mod display_stream;
 mod display_routes {
     pub fn viewport(s: usize) -> egui::ViewportId {
         egui::ViewportId::from_hash_of(("display-stream", s))

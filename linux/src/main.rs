@@ -186,7 +186,7 @@ struct Desktop {
     playback: Option<Arc<playback::Playback>>,
     telemetry: Option<Arc<telemetry::Session>>,
     metrics: telemetry::View,
-    screens: [Option<multi_display::Surface>; crate::interop_session::DESKTOP_DISPLAYS - 1],
+    screens: [Option<multi_display::Surface>; crate::display_stream::DESKTOP_DISPLAYS - 1],
 }
 
 fn account_worker(
