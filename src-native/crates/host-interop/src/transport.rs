@@ -505,6 +505,9 @@ impl DisplayRoutes {
                 {
                     send(&wire::stop_video(output))?;
                     *slot = None;
+                    if self.visible_cursor == Some(output) {
+                        self.visible_cursor = None;
+                    }
                 }
             }
         }
@@ -519,6 +522,9 @@ impl DisplayRoutes {
         {
             *slot = None;
             sink.secondary_lost(primary);
+            if self.visible_cursor == Some(primary) {
+                self.visible_cursor = None;
+            }
         }
     }
 
@@ -531,6 +537,9 @@ impl DisplayRoutes {
                 {
                     *slot = None;
                     sink.secondary_lost(output);
+                    if self.visible_cursor == Some(output) {
+                        self.visible_cursor = None;
+                    }
                 }
             }
         }
