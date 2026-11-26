@@ -48,28 +48,63 @@ impl Pixels {
                 }
                 image.bytes.to_vec()
             }
-            CursorFormat::Monochrome => {
-                let mask = count.div_ceil(8);
-                if image.bytes.len() != mask * 2 {
-                    bail!("cursor mask length mismatch");
-                }
-                (0..count)
-                    .flat_map(|i| {
-                        let and = image.bytes[i / 8] & (0x80 >> (i % 8)) != 0;
-                        let xor = image.bytes[mask + i / 8] & (0x80 >> (i % 8)) != 0;
-                        // RGBA cannot invert the underlying desktop. Represent
-                        // inverse pixels as white; never read back the video.
-                        let value = if xor { 255 } else { 0 };
-                        [value, value, value, if and && !xor { 0 } else { 255 }]
-                    })
-                    .collect()
-            }
+            CursorFormat::Monochrome => return Self::monochrome(image),
         };
         Ok(Self {
             size: image.size,
             hotspot: (
                 image.hotspot.0.min(width - 1),
                 image.hotspot.1.min(height - 1),
+            ),
+            rgba,
+        })
+    }
+    fn monochrome(image: CursorImage<'_>) -> Result<Self> {
+        let (width, height) = image.size;
+        let count = (width * height) as usize;
+        let mask = count.div_ceil(8);
+        if image.bytes.len() != mask * 2 {
+            bail!("cursor mask length mismatch");
+        }
+        let bits = |i: usize| {
+            let bit = 0x80 >> (i % 8);
+            (
+                image.bytes[i / 8] & bit != 0,
+                image.bytes[mask + i / 8] & bit != 0,
+            )
+        };
+        // RGBA cannot invert the desktop. Outline inverse pixels in white
+        // and draw their centres black, so both light and dark video retain
+        // a visible cursor without reading back any decoded video.
+        let border = u32::from((0..count).any(|i| bits(i) == (true, true)));
+        let size = (width + border * 2, height + border * 2);
+        let mut rgba = vec![0; (size.0 * size.1 * 4) as usize];
+        if border != 0 {
+            for i in (0..count).filter(|&i| bits(i) == (true, true)) {
+                let (x, y) = (i as u32 % width, i as u32 / width);
+                for dy in 0..3 {
+                    for dx in 0..3 {
+                        let offset = (((y + dy) * size.0 + x + dx) * 4) as usize;
+                        rgba[offset..offset + 4].copy_from_slice(&[255; 4]);
+                    }
+                }
+            }
+        }
+        for i in 0..count {
+            let (and, xor) = bits(i);
+            if and && !xor {
+                continue;
+            }
+            let value = if xor && !and { 255 } else { 0 };
+            let (x, y) = (i as u32 % width + border, i as u32 / width + border);
+            let offset = ((y * size.0 + x) * 4) as usize;
+            rgba[offset..offset + 4].copy_from_slice(&[value, value, value, 255]);
+        }
+        Ok(Self {
+            size,
+            hotspot: (
+                image.hotspot.0.min(width - 1) + border,
+                image.hotspot.1.min(height - 1) + border,
             ),
             rgba,
         })
@@ -110,10 +145,15 @@ mod tests {
     fn linux_cursor_monochrome_preserves_masks_and_partial_bytes() {
         // black, white, transparent, inverse; masks are MSB first.
         let p = decode(CursorFormat::Monochrome, (4, 1), &[0x30, 0x50]).unwrap();
-        assert_eq!(
-            p.rgba,
-            [0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 0, 255, 255, 255, 255]
-        );
+        assert_eq!(p.size, (6, 3));
+        assert_eq!(p.hotspot, (4, 1));
+        let pixel = |x: usize, y: usize| &p.rgba[(y * 6 + x) * 4..(y * 6 + x + 1) * 4];
+        assert_eq!(pixel(1, 1), [0, 0, 0, 255]);
+        assert_eq!(pixel(2, 1), [255; 4]);
+        assert_eq!(pixel(4, 1), [0, 0, 0, 255]);
+        assert_eq!(pixel(3, 0), [255; 4]);
+        assert_eq!(pixel(5, 2), [255; 4]);
+        assert_eq!(pixel(0, 0), [0; 4]);
         assert!(decode(CursorFormat::Monochrome, (9, 1), &[0; 3]).is_err());
         let p = decode(CursorFormat::Monochrome, (9, 1), &[0xff, 0x80, 0, 0]).unwrap();
         assert_eq!(p.rgba.len(), 36);
