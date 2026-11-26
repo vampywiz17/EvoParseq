@@ -582,7 +582,7 @@ impl DisplayRoutes {
         {
             return;
         }
-        if self.routed_video && !relative && visible {
+        if self.routed_video && !relative && visible && self.visible_cursor != Some(output) {
             // A visible cursor on this output retires the departed output's
             // hidden state, including while its HWND still owns drag capture.
             self.visible_cursor = Some(output);
