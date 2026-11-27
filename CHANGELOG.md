@@ -2,6 +2,76 @@
 
 ## Unreleased
 
+## v0.9.9-dev.3 — Phaze multi-display and refresh-rate fixes (2026-11-27)
+
+This development preview builds on **EvoParseq v0.9.9-dev.2**. It includes
+Windows x64, the distribution-signed Android TV APK and the experimental Linux
+x86_64 Flatpak. All three clients report **0.9.9-dev.3**.
+
+**This is a development preview. EvoParseq v0.9.8 remains the stable release.**
+
+### What's new and improved
+
+- **Phaze virtual displays:** add an optional Mirror display setting on
+  Windows, Linux and Android TV. Desktop clients can request up to four virtual
+  outputs with per-output resolutions; Android TV remains single-display.
+  Mirror display is off by default and the host controls the applied display
+  modes.
+- **Phaze multi-window streaming:** open active host outputs from the desktop
+  Session panel with **Add screen**. Each window has its own video stream and
+  output-targeted input; closing a secondary window leaves the other streams
+  running. Focus changes release held input, and Windows pointer capture plus
+  the Linux Wayland drag handoff carry a held button across output windows.
+  USB HID sessions remain single-window.
+- **Linux Phaze cursor:** render host cursor shapes with their hotspots above
+  the video and preserve pointer feedback during Wayland window dragging.
+  Cursor shapes are shared across stream windows and update only when the
+  reported shape changes. Parsec keeps its existing in-video cursor behavior.
+- **Phaze reconnect recovery:** when a reconnect produces no first video frame,
+  retain a bounded startup window for a late virtual output and retry eligible
+  host outputs. Keep a slow but healthy primary output selected.
+- **Mirror refresh-rate encoding:** encode requested and native refresh fields
+  independently in the Phaze display descriptor, with a 60 Hz default. The
+  corrected request fixed the reported Windows 24 Hz virtual-display mode.
+- **Privacy information:** document client data handling, third-party STUN/TURN
+  contacts and locally stored relay credentials in the new privacy policy.
+
+### Known limitations
+
+- The user confirmed two Windows outputs at different resolutions and a stable
+  60 Hz applied Windows mode across reconnects. Linux multi-display and cursor
+  behavior were confirmed on Zorin OS 18. Three- and four-output streaming are
+  not claimed as live-validated.
+- Mixed 60/120 Hz operation and live Linux/Android refresh behavior remain
+  unvalidated. Host-reported refresh values alone do not establish the applied
+  operating-system mode.
+- Normal Phaze mouse or keyboard input may occasionally be missed, including
+  with the official client. This has not been observed in USB HID mode.
+- NVIDIA RTX VSR driver acceptance does not by itself verify image enhancement.
+
+### Compatibility and updating
+
+Windows requires Windows 11 x64 and Direct3D feature level 11.0+. Android TV
+requires Android 10 (API 29) or later on ARMv7 or ARM64. The Linux preview
+requires Wayland, PipeWire, Flatpak 1.15.6 or later and compatible Vulkan Video
+support. Platform, GPU and host capabilities vary; see README and the linked
+feature PRs for details.
+
+Windows: close the client and extract **EvoParseq-v0.9.9-dev.3-win64.zip**. The
+legacy **ParsecWebTurn-v0.9.9-dev.3-win64.zip** contains the same executable
+under its previous name. The ZIPs exclude user settings.
+
+Android TV: install **EvoParseq-TV.apk** or select the prerelease channel in
+Settings > Updates. The APK uses the existing distribution signing identity.
+
+Linux: install **EvoParseq-Linux-v0.9.9-dev.3-x86_64.flatpak**. The application ID
+and settings directory remain the same.
+
+[Phaze Mirror display](https://github.com/vampywiz17/EvoParseq/pull/23) ·
+[Phaze multi-display](https://github.com/vampywiz17/EvoParseq/pull/36) ·
+[Display refresh correction](https://github.com/vampywiz17/EvoParseq/pull/42)
+
+
 ## v0.9.9-dev.2 — Driver-based NVIDIA VSR preview (2026-11-22)
 
 This development preview builds on **EvoParseq v0.9.9-dev.1**. It includes
