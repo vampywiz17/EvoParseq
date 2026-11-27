@@ -82,11 +82,13 @@ class VirusTotal:
         self.key = key
         self.next_request = 0.0
 
-    def request(self, url, file=None):
+    def request(self, url, file=None, *, large_upload=False):
         parsed = urlsplit(url)
-        allowed_host = parsed.hostname == "www.virustotal.com" or (
-            file is not None and parsed.hostname == "bigfiles.virustotal.com")
-        if (parsed.scheme != "https" or not allowed_host
+        # The large-file API can issue a one-time URL on its dedicated host.
+        bigfiles = (large_upload and file is not None
+                    and parsed.hostname == "bigfiles.virustotal.com"
+                    and re.fullmatch(r"/_ah/upload/[A-Za-z0-9_/%=-]+", parsed.path))
+        if (parsed.scheme != "https" or (parsed.hostname != "www.virustotal.com" and not bigfiles)
                 or parsed.port not in (None, 443) or parsed.username or parsed.password or parsed.fragment):
             raise ScanError("VirusTotal returned an untrusted endpoint")
         for attempt in range(3):
@@ -112,9 +114,18 @@ class VirusTotal:
 
     def scan(self, path, digest):
         url = VT_API + "files"
-        if path.stat().st_size > 32 * 1024 * 1024:
+        large_upload = path.stat().st_size > 32 * 1024 * 1024
+        if large_upload:
             url = self.request(VT_API + "files/upload_url")["data"]
-        analysis_id = self.request(url, file=path)["data"]["id"]
+            # The documented one-time upload URL can use a legacy HTTP scheme.
+            # Upgrade only that endpoint before sending the file or API key.
+            parsed = urlsplit(url)
+            if (parsed.scheme == "http" and parsed.netloc == "www.virustotal.com"
+                    and re.fullmatch(r"/_ah/upload/[A-Za-z0-9_/%=-]+", parsed.path)
+                    and re.fullmatch(r"[A-Za-z0-9_/%=&.-]*", parsed.query)
+                    and "#" not in url):
+                url = parsed._replace(scheme="https").geturl()
+        analysis_id = self.request(url, file=path, large_upload=large_upload)["data"]["id"]
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
             result = self.request(VT_API + "analyses/" + quote(analysis_id, safe=""))

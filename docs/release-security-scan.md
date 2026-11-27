@@ -64,10 +64,13 @@ limit. Large-file upload URLs support files up to 650 MiB. Quota exhaustion or
 service failures are errors, never successful clean results. Other users of the
 same API key can still consume its quota.
 
-Large uploads may use the documented `bigfiles.virustotal.com` endpoint. It is
-allowed only for file uploads, over HTTPS on the default port, without embedded
-credentials or fragments; API/control requests remain on `www.virustotal.com`.
-Redirects remain disabled. See the [VirusTotal large-upload notice](https://blog.virustotal.com/2024/11/).
+Large uploads use the same validation as the trusted main-branch scanner. The
+documented `bigfiles.virustotal.com` host is allowed only during the large-upload
+flow, for file uploads to its one-time `/_ah/upload/` endpoint, over HTTPS on the
+default port, without embedded credentials or fragments. A narrowly validated
+legacy HTTP upload URL from `www.virustotal.com` is upgraded to HTTPS before any
+file/key is sent. API/control requests remain on `www.virustotal.com`; redirects
+remain disabled. See the [VirusTotal large-upload notice](https://blog.virustotal.com/2024/11/).
 
 Non-exempt detections, suspicious verdicts, missing supported verdicts and failed file
 analyses make the job fail **after reporting the available results**. Remaining

@@ -172,14 +172,15 @@ class Fixtures(unittest.TestCase):
         client = scan.VirusTotal(KEY)
         path = self.root / "public-elf"
         with patch.object(scan, "command", return_value='{"data":1}\n200') as run:
-            self.assertEqual(client.request("https://bigfiles.virustotal.com/upload", file=path), {"data": 1})
+            self.assertEqual(client.request("https://bigfiles.virustotal.com/_ah/upload/test_token/",
+                                            file=path, large_upload=True), {"data": 1})
             self.assertIn("--form", run.call_args.args[0])
             run.reset_mock()
             for url in ["http://bigfiles.virustotal.com/upload", "https://bigfiles.virustotal.com:444/upload",
                         "https://user@bigfiles.virustotal.com/upload", "https://bigfiles.virustotal.com/upload#fragment",
                         "https://bigfiles.virustotal.com.evil.invalid/upload", "https://other.virustotal.com/upload"]:
                 with self.assertRaises(scan.ScanError):
-                    client.request(url, file=path)
+                    client.request(url, file=path, large_upload=True)
             run.assert_not_called()
 
     @patch.object(scan.time, "sleep")
@@ -225,10 +226,32 @@ class Fixtures(unittest.TestCase):
         path = Mock(suffix=".apk")
         path.stat.return_value.st_size = 33 * 1024 * 1024
         client = scan.VirusTotal(KEY)
-        with patch.object(client, "request", side_effect=[{"data": scan.VT_API + "large"},
-                          {"data": {"id": "analysis"}}, {"data": {"attributes": DONE}}]) as request:
-            client.scan(path, HASH)
-            self.assertEqual(request.call_args_list[1].args[0], scan.VT_API + "large")
+        upload_url = "https://www.virustotal.com/_ah/upload/test_token-1/"
+        bigfiles_url = upload_url.replace("www.", "bigfiles.")
+        for original, expected in ((upload_url, upload_url), ("http" + upload_url[5:], upload_url),
+                                   (bigfiles_url, bigfiles_url)):
+            with self.subTest(original=original), patch.object(scan, "command", side_effect=[
+                    json.dumps({"data": original}) + "\n200",
+                    '{"data":{"id":"analysis"}}\n200',
+                    json.dumps({"data": {"attributes": DONE}}) + "\n200"]) as run:
+                client.scan(path, HASH)
+                upload = run.call_args_list[1].args[0]
+                self.assertEqual(upload[upload.index("--url") + 1], expected)
+                self.assertEqual(upload[upload.index("--proto") + 1], "=https")
+        for original in ("http://evil.invalid/_ah/upload/token/",
+                         "https://bigfiles.virustotal.com/api/v3/files",
+                         "https://bigfiles.virustotal.com.evil.invalid/_ah/upload/token/",
+                         "http://www.virustotal.com/api/v3/files",
+                         "http://www.virustotal.com/_ah/upload/token/#fragment"):
+            with self.subTest(original=original), patch.object(scan, "command", return_value=
+                    json.dumps({"data": original}) + "\n200") as run:
+                with self.assertRaisesRegex(scan.ScanError, "untrusted endpoint"):
+                    client.scan(path, HASH)
+                self.assertEqual(run.call_count, 1)
+        with self.assertRaisesRegex(scan.ScanError, "untrusted endpoint"):
+            client.request(bigfiles_url)
+        with self.assertRaisesRegex(scan.ScanError, "untrusted endpoint"):
+            client.request(bigfiles_url, file=path)
 
     def test_same_hash_scanned_once_and_failures_do_not_turn_green(self):
         path = self.root / "a.exe"
