@@ -470,7 +470,8 @@ pub fn log_display_refresh(event: &evoparseq_host_interop::display_refresh::Diag
         "phaze_display_refresh",
         serde_json::json!({
             "observation": event,
-            "field_interpretation_verified": false,
+            "schema_version": 2,
+            "field_interpretation_verified": true,
             "os_mode_verified": false,
         }),
     );

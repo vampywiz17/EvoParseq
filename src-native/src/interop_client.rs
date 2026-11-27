@@ -358,9 +358,10 @@ mod tests {
                     slot: 1,
                     descriptor_id: 0x4556_5032,
                     size: [1920, 1200],
+                    physical_size: [60, 1],
                     fields: evoparseq_host_interop::display_refresh::Fields {
-                        word_0: 120,
-                        word_1: 1,
+                        refresh_scaled: 1_200_000,
+                        native_refresh_scaled: 1_200_000,
                     },
                     intended_hz: 120,
                     probe_override: true,

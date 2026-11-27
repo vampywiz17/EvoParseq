@@ -1186,6 +1186,7 @@ mod tests {
         let mut routes = DisplayRoutes::default();
         let mut client = Client::default();
         let targets = [7, 17, 9, 22, 50].map(|id| wire::Output {
+            physical_size: Default::default(),
             refresh_fields: Default::default(),
             id,
             name: String::new(),
@@ -1349,6 +1350,7 @@ mod tests {
     #[test]
     fn startup_waits_for_an_active_output_and_prefers_the_primary() {
         let output = |id, active, primary| wire::Output {
+            physical_size: Default::default(),
             refresh_fields: Default::default(),
             id,
             name: String::new(),

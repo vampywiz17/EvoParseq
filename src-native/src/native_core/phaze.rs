@@ -1176,6 +1176,7 @@ mod tests {
                 carrier: "direct UDP",
             };
             let output = |id| evoparseq_host_interop::Output {
+                physical_size: Default::default(),
                 refresh_fields: Default::default(),
                 id,
                 name: format!("Fixture {id}"),

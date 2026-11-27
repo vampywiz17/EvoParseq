@@ -221,6 +221,7 @@ mod tests {
     fn probe_queues_only_the_secondary_and_keeps_its_video_out_of_the_primary() -> Result<()> {
         let now = Instant::now();
         let active = |id, active| Output {
+            physical_size: Default::default(),
             refresh_fields: Default::default(),
             id,
             active,

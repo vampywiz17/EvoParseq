@@ -2,8 +2,15 @@
 
 Tracks [issue #41](https://github.com/vampywiz17/EvoParseq/issues/41).
 
-This is an experimental diagnostic for the second virtual display appearing at
-24 Hz. It is not a verified fix or a production refresh-rate selector.
+The corrected mirror hello requests 60 Hz by default. The earlier implementation
+mistook physical-size words for refresh and sent 10,000 in the actual refresh
+fields, meaning 1 Hz. The opt-in probe now changes the real refresh fields.
+Live verification of the applied Windows mode remains required.
+
+The field layout and Hz × 10,000 representation were corroborated by read-only
+inspection of the installed Phaze 0.14.3 client. See
+[the provenance and field table](NATIVE_REFERENCES.md#phaze-display-descriptor-refresh-fields).
+This is an observed compatibility contract, not a public vendor wire specification.
 The [stock client's documentation](https://help.phaze.app/articles/1046218051-mirroring-displays)
 says mirror mode attempts to match client refresh rates, but it does not document
 the wire fields used by this independent client.
@@ -18,12 +25,24 @@ emit `phaze_display_refresh` events:
   This is logged after the local carrier accepts the startup hello, not after
   host mode confirmation.
 - `observation.kind = reported`: host output ID/name, size, active/primary flags,
-  the two words received at descriptor offsets 28 and 32, and `candidate_hz`.
-  The candidate is word 0 divided by word 1; either zero makes it unknown/null.
-  Raw words are retained even when the ratio is unknown.
-- `field_interpretation_verified` and `os_mode_verified` remain false.
-  These fields are observations for research, not measured Windows display Hz.
-  A host reply may be a snapshot from before a layout change has completed.
+  separate raw physical-size values, and the two independent refresh words at
+  descriptor offsets 44 and 48. Each is Hz multiplied by 10,000; divide each
+  individually, never one by the other.
+- `reported_hz` and `reported_native_hz` decode the independent RefreshRate and
+  NativeRefreshRate fields. A zero word is unknown/null independently of the
+  other field. Raw values remain available in `refresh_scaled` and
+  `native_refresh_scaled`.
+- `schema_version = 2` identifies this corrected interpretation.
+  `field_interpretation_verified` is true for the statically corroborated layout.
+  `os_mode_verified` remains false: a host reply is not proof of Windows' applied
+  mode and can be a snapshot from before a layout change completes.
+- Old schema-1 logs (without `schema_version`) incorrectly labelled physical-size
+  words at offsets 28 and 32 as refresh. Ignore their `candidate_hz` ratio.
+  Observed old pairs such as 600/340 and 60/10 are not Hz ratios.
+
+The existing synthetic physical-size metadata is kept unchanged by the corrected
+rate probe; it is not a measurement of a client's physical monitor. The
+diagnostic records it separately so it cannot be confused with refresh again.
 
 The requested descriptor ID is not assumed to equal a returned host output ID.
 Windows screen numbering and reply order are not used to invent a mapping.
@@ -43,13 +62,14 @@ exactly one entry per requested display. For two displays:
 
 | Value | First requested display | Second requested display |
 | --- | --- | --- |
-| unset | existing 60/1 fields | existing 60/1 fields |
+| unset | corrected 60 Hz request | corrected 60 Hz request |
 | `60,60` | intended 60 Hz | intended 60 Hz |
 | `60,120` | intended 60 Hz | intended 120 Hz |
 | `120,60` | intended 120 Hz | intended 60 Hz |
 
 These are intended requests, not a claim that the driver supports or applies
-those modes at every resolution. The override is not saved in preferences.
+those modes at every resolution. Both current and native rate fields are set to
+the intended value: 60 Hz is encoded as 600,000, and 120 Hz as 1,200,000. The override is not saved in preferences.
 With mirroring off it is ignored, including malformed values. With mirroring on,
 invalid/non-UTF-8 values or the wrong number of entries fail the Phaze connection
 before its display hello rather than silently testing another rate.
@@ -84,11 +104,11 @@ For each session, wait for the layout to settle, then record both the desktop
 mode and active signal mode for **each** virtual display in Windows Advanced
 display settings, plus the time and the client log. Record the initial values
 before changing anything manually in Windows. Compare the baseline and the
-two opposite mixed requests. A reply ratio of 120 with Windows still at 24 Hz
+two opposite mixed requests. A reported refresh of 120 with Windows still at 24 Hz
 is a discrepancy to investigate, not proof of a successful mode change.
 
 Video stream FPS remains a separate setting. Do not use received frames,
-presentation intervals, configured client refresh, or these inferred fields as
+presentation intervals, configured client refresh, or host-reported fields as
 a substitute for observing the host's applied display mode.
 
 Windows/Linux live refresh validation remains pending. Android TV receives the
