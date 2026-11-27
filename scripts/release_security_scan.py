@@ -1,5 +1,6 @@
 """Scan published release assets; never build, install or execute their contents."""
 import hashlib
+import difflib
 import json
 import os
 from pathlib import Path
@@ -81,9 +82,13 @@ class VirusTotal:
         self.key = key
         self.next_request = 0.0
 
-    def request(self, url, file=None):
+    def request(self, url, file=None, *, large_upload=False):
         parsed = urlsplit(url)
-        if (parsed.scheme != "https" or parsed.hostname != "www.virustotal.com"
+        # The large-file API can issue a one-time URL on its dedicated host.
+        bigfiles = (large_upload and file is not None
+                    and parsed.hostname == "bigfiles.virustotal.com"
+                    and re.fullmatch(r"/_ah/upload/[A-Za-z0-9_/%=-]+", parsed.path))
+        if (parsed.scheme != "https" or (parsed.hostname != "www.virustotal.com" and not bigfiles)
                 or parsed.port not in (None, 443) or parsed.username or parsed.password or parsed.fragment):
             raise ScanError("VirusTotal returned an untrusted endpoint")
         for attempt in range(3):
@@ -109,9 +114,18 @@ class VirusTotal:
 
     def scan(self, path, digest):
         url = VT_API + "files"
-        if path.stat().st_size > 32 * 1024 * 1024:
+        large_upload = path.stat().st_size > 32 * 1024 * 1024
+        if large_upload:
             url = self.request(VT_API + "files/upload_url")["data"]
-        analysis_id = self.request(url, file=path)["data"]["id"]
+            # The documented one-time upload URL can use a legacy HTTP scheme.
+            # Upgrade only that endpoint before sending the file or API key.
+            parsed = urlsplit(url)
+            if (parsed.scheme == "http" and parsed.netloc == "www.virustotal.com"
+                    and re.fullmatch(r"/_ah/upload/[A-Za-z0-9_/%=-]+", parsed.path)
+                    and re.fullmatch(r"[A-Za-z0-9_/%=&.-]*", parsed.query)
+                    and "#" not in url):
+                url = parsed._replace(scheme="https").geturl()
+        analysis_id = self.request(url, file=path, large_upload=large_upload)["data"]["id"]
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
             result = self.request(VT_API + "analyses/" + quote(analysis_id, safe=""))
@@ -149,6 +163,42 @@ def flatpak_payload(bundle, directory):
     return path
 
 
+def compare_flatpak_builds(original, rebuilt, output, expected_bundle, expected_elf):
+    """Inspect public build artifacts offline; never install or execute their ELF."""
+    for digest in (expected_bundle, expected_elf):
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ScanError("Comparison requires exact baseline SHA-256 values")
+    if sha256(original) != expected_bundle:
+        raise ScanError("Baseline Flatpak SHA-256 mismatch")
+    output.mkdir()
+    report = {}
+    inspections = {}
+    with tempfile.TemporaryDirectory(prefix="flatpak-compare-") as temporary:
+        for label, bundle in (("original", original), ("rebuilt", rebuilt)):
+            work = Path(temporary) / label
+            work.mkdir()
+            payload = flatpak_payload(bundle, work)
+            digest = sha256(payload)
+            if label == "original" and digest != expected_elf:
+                raise ScanError("Baseline ELF SHA-256 mismatch")
+            # readelf reads metadata without loading dependencies or executing
+            # application code. Do not use ldd on an untrusted executable.
+            inspection = command(["readelf", "--wide", "--file-header", "--program-headers",
+                                  "--section-headers", "--dynamic", "--notes", str(payload)])
+            (output / f"{label}-readelf.txt").write_text(inspection, encoding="utf-8")
+            (output / f"{label}-evoparseq-linux").write_bytes(payload.read_bytes())
+            inspections[label] = inspection.splitlines(keepends=True)
+            report[label] = {"bundle_sha256": sha256(bundle), "elf_sha256": digest,
+                             "elf_size": payload.stat().st_size}
+    report["identical_elf"] = report["original"]["elf_sha256"] == report["rebuilt"]["elf_sha256"]
+    report["application_executed"] = False
+    (output / "comparison.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    (output / "readelf.diff").write_text("".join(difflib.unified_diff(
+        inspections["original"], inspections["rebuilt"], fromfile="original", tofile="rebuilt")),
+        encoding="utf-8")
+    return report
+
+
 def scan_file(scanner, path, name, cache):
     digest = sha256(path)
     row = {"name": name, "size": path.stat().st_size, "sha256": digest,
@@ -160,6 +210,26 @@ def scan_file(scanner, path, name, cache):
     except (ScanError, KeyError, OSError) as error:
         row.update(status="error", error=safe_error(error))
     return row
+
+
+def scan_build_elf(path, expected_hash, output, scanner):
+    """Explicit diagnostic scan of an exact public ELF; no release operations."""
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+        raise ScanError("Build scan requires an exact ELF SHA-256")
+    if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= MAX_SIZE:
+        raise ScanError("Build scan requires a bounded regular file")
+    if sha256(path) != expected_hash:
+        raise ScanError("Build scan ELF SHA-256 mismatch")
+    with path.open("rb") as stream:
+        if stream.read(4) != b"\x7fELF":
+            raise ScanError("Build scan requires an ELF executable")
+    row = scan_file(scanner, path, "files/bin/evoparseq-linux (clean build)", {})
+    report = {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+              "scope": "explicit public build diagnostic; no release publication", "files": [row]}
+    output.mkdir()
+    (output / REPORTS[0]).write_text(markdown(report), encoding="utf-8")
+    (output / REPORTS[1]).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return int(needs_attention(row))
 
 
 def safe_error(error):
@@ -193,7 +263,7 @@ def needs_attention(row):
 
 def markdown(report):
     lines = ["## Release malware scan", "", f"Report generated: {report['generated_at']} (UTC).", "",
-             "Only the release assets listed below and the named Flatpak executable were submitted.",
+             "Only the files listed below were submitted.",
              "ZIP wrappers and external Flatpak runtimes/drivers are not separately scanned.", "",
              "No detection is not a safety guarantee or Google Play Protect approval.",
              "Unsupported engines, errors and timeouts are reported separately, not counted as clean.", "",

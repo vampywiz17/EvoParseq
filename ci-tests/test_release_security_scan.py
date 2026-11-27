@@ -38,6 +38,49 @@ class Fixtures(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
+    def test_offline_comparison_preserves_exact_files_and_reports_differences(self):
+        for same in (True, False):
+            with self.subTest(same=same):
+                original = self.root / "original.flatpak"
+                rebuilt = self.root / "rebuilt.flatpak"
+                first = self.root / "original-elf"
+                second = self.root / "rebuilt-elf"
+                original.write_bytes(b"original wrapper")
+                rebuilt.write_bytes(b"rebuilt wrapper")
+                first.write_bytes(b"\x7fELFsynthetic baseline")
+                second.write_bytes(first.read_bytes() if same else b"\x7fELFsynthetic change")
+                output = self.root / str(same)
+                with patch.object(scan, "flatpak_payload", side_effect=[first, second]), \
+                        patch.object(scan, "command", side_effect=["header A\n", "header A\n" if same else "header B\n"]) as run:
+                    report = scan.compare_flatpak_builds(original, rebuilt, output,
+                                                         scan.sha256(original), scan.sha256(first))
+                self.assertEqual(report["identical_elf"], same)
+                self.assertFalse(report["application_executed"])
+                self.assertEqual(report["original"]["elf_size"], first.stat().st_size)
+                self.assertEqual((output / "original-evoparseq-linux").read_bytes(), first.read_bytes())
+                self.assertEqual((output / "rebuilt-evoparseq-linux").read_bytes(), second.read_bytes())
+                self.assertEqual(json.loads((output / "comparison.json").read_text()), report)
+                self.assertEqual(bool((output / "readelf.diff").read_text()), not same)
+                for call in run.call_args_list:
+                    self.assertEqual(call.args[0][0], "readelf")
+                    self.assertIn("--dynamic", call.args[0])
+
+    def test_offline_comparison_rejects_wrong_baseline_before_inspection(self):
+        original = self.root / "original.flatpak"
+        original.write_bytes(b"fixture")
+        with patch.object(scan, "command") as run, patch.object(scan, "flatpak_payload") as extract:
+            for bundle_hash, elf_hash in [("invalid", HASH), (HASH, "invalid"), (HASH, HASH)]:
+                with self.assertRaises(scan.ScanError):
+                    scan.compare_flatpak_builds(original, original, self.root / "output", bundle_hash, elf_hash)
+            extract.assert_not_called()
+            run.assert_not_called()
+        payload = self.root / "elf"
+        payload.write_bytes(b"synthetic ELF")
+        with patch.object(scan, "command") as run, patch.object(scan, "flatpak_payload", return_value=payload):
+            with self.assertRaisesRegex(scan.ScanError, "Baseline ELF"):
+                scan.compare_flatpak_builds(original, original, self.root / "output", scan.sha256(original), HASH)
+            run.assert_not_called()
+
     def test_commands_do_not_expose_output_on_failure(self):
         with patch.object(scan.subprocess, "run", return_value=Mock(returncode=0, stdout="ok")):
             self.assertEqual(scan.command(["fixture"]), "ok")
@@ -48,6 +91,43 @@ class Fixtures(unittest.TestCase):
                 with self.assertRaises(scan.ScanError) as caught:
                     scan.command(["fixture"])
                 self.assertNotIn("SECRET", str(caught.exception))
+
+    def test_explicit_build_scan_preserves_verdict_without_release_operations(self):
+        path = self.root / "rebuilt-evoparseq-linux"
+        path.write_bytes(b"\x7fELFsynthetic fixture")
+        for flagged in (False, True):
+            with self.subTest(flagged=flagged):
+                result = DONE | {"stats": STATS | {"malicious": int(flagged)}}
+                scanner = Mock()
+                scanner.scan.return_value = result
+                output = self.root / str(flagged)
+                with patch.object(scan, "github") as github, patch.object(scan, "command") as command:
+                    code = scan.scan_build_elf(path, scan.sha256(path), output, scanner)
+                self.assertEqual(code, int(flagged))
+                github.assert_not_called()
+                command.assert_not_called()
+                scanner.scan.assert_called_once_with(path, scan.sha256(path))
+                report = json.loads((output / "SECURITY-SCAN.json").read_text())
+                self.assertEqual(report["files"][0]["stats"]["malicious"], int(flagged))
+                self.assertEqual(report["files"][0]["sha256"], scan.sha256(path))
+                self.assertIn("ATTENTION" if flagged else "Completed", (output / "SECURITY-SCAN.md").read_text())
+        scanner = Mock()
+        scanner.scan.side_effect = scan.ScanError("VirusTotal HTTP 429")
+        self.assertEqual(scan.scan_build_elf(path, scan.sha256(path), self.root / "failed", scanner), 1)
+        self.assertIn('"status": "error"', (self.root / "failed/SECURITY-SCAN.json").read_text())
+
+    def test_explicit_build_scan_validates_file_before_submission(self):
+        path = self.root / "candidate"
+        path.write_bytes(b"not ELF")
+        scanner = Mock()
+        for candidate, digest in [(path, "invalid"), (self.root / "missing", HASH),
+                                  (path, HASH), (path, scan.sha256(path))]:
+            with self.assertRaises(scan.ScanError):
+                scan.scan_build_elf(candidate, digest, self.root / "output", scanner)
+        with patch.object(Path, "is_symlink", return_value=True):
+            with self.assertRaisesRegex(scan.ScanError, "regular file"):
+                scan.scan_build_elf(path, HASH, self.root / "output", scanner)
+        scanner.scan.assert_not_called()
 
     def test_github_uses_structured_input(self):
         with patch.object(scan, "command", return_value='{"ok":true}') as run:
@@ -83,9 +163,25 @@ class Fixtures(unittest.TestCase):
         client = scan.VirusTotal(KEY)
         for url in ["http://www.virustotal.com/x", "https://evil.invalid/x",
                     "https://www.virustotal.com:444/x", "https://user@www.virustotal.com/x",
-                    "https://www.virustotal.com/x#fragment"]:
+                    "https://www.virustotal.com/x#fragment", "https://bigfiles.virustotal.com/upload"]:
             with self.assertRaises(scan.ScanError):
                 client.request(url)
+
+    @patch.object(scan.time, "sleep")
+    def test_documented_bigfiles_host_is_allowed_only_for_https_file_uploads(self, _sleep):
+        client = scan.VirusTotal(KEY)
+        path = self.root / "public-elf"
+        with patch.object(scan, "command", return_value='{"data":1}\n200') as run:
+            self.assertEqual(client.request("https://bigfiles.virustotal.com/_ah/upload/test_token/",
+                                            file=path, large_upload=True), {"data": 1})
+            self.assertIn("--form", run.call_args.args[0])
+            run.reset_mock()
+            for url in ["http://bigfiles.virustotal.com/upload", "https://bigfiles.virustotal.com:444/upload",
+                        "https://user@bigfiles.virustotal.com/upload", "https://bigfiles.virustotal.com/upload#fragment",
+                        "https://bigfiles.virustotal.com.evil.invalid/upload", "https://other.virustotal.com/upload"]:
+                with self.assertRaises(scan.ScanError):
+                    client.request(url, file=path, large_upload=True)
+            run.assert_not_called()
 
     @patch.object(scan.time, "sleep")
     def test_requests_are_throttled_and_key_is_stdin_only(self, sleep):
@@ -130,10 +226,32 @@ class Fixtures(unittest.TestCase):
         path = Mock(suffix=".apk")
         path.stat.return_value.st_size = 33 * 1024 * 1024
         client = scan.VirusTotal(KEY)
-        with patch.object(client, "request", side_effect=[{"data": scan.VT_API + "large"},
-                          {"data": {"id": "analysis"}}, {"data": {"attributes": DONE}}]) as request:
-            client.scan(path, HASH)
-            self.assertEqual(request.call_args_list[1].args[0], scan.VT_API + "large")
+        upload_url = "https://www.virustotal.com/_ah/upload/test_token-1/"
+        bigfiles_url = upload_url.replace("www.", "bigfiles.")
+        for original, expected in ((upload_url, upload_url), ("http" + upload_url[5:], upload_url),
+                                   (bigfiles_url, bigfiles_url)):
+            with self.subTest(original=original), patch.object(scan, "command", side_effect=[
+                    json.dumps({"data": original}) + "\n200",
+                    '{"data":{"id":"analysis"}}\n200',
+                    json.dumps({"data": {"attributes": DONE}}) + "\n200"]) as run:
+                client.scan(path, HASH)
+                upload = run.call_args_list[1].args[0]
+                self.assertEqual(upload[upload.index("--url") + 1], expected)
+                self.assertEqual(upload[upload.index("--proto") + 1], "=https")
+        for original in ("http://evil.invalid/_ah/upload/token/",
+                         "https://bigfiles.virustotal.com/api/v3/files",
+                         "https://bigfiles.virustotal.com.evil.invalid/_ah/upload/token/",
+                         "http://www.virustotal.com/api/v3/files",
+                         "http://www.virustotal.com/_ah/upload/token/#fragment"):
+            with self.subTest(original=original), patch.object(scan, "command", return_value=
+                    json.dumps({"data": original}) + "\n200") as run:
+                with self.assertRaisesRegex(scan.ScanError, "untrusted endpoint"):
+                    client.scan(path, HASH)
+                self.assertEqual(run.call_count, 1)
+        with self.assertRaisesRegex(scan.ScanError, "untrusted endpoint"):
+            client.request(bigfiles_url)
+        with self.assertRaisesRegex(scan.ScanError, "untrusted endpoint"):
+            client.request(bigfiles_url, file=path)
 
     def test_same_hash_scanned_once_and_failures_do_not_turn_green(self):
         path = self.root / "a.exe"

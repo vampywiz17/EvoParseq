@@ -2,6 +2,27 @@ name: EvoParseq Linux Flatpak
 
 on:
   workflow_dispatch:
+    inputs:
+      scan_build_run:
+        description: Optional comparison run ID to scan its rebuilt public ELF only (skips building)
+        type: string
+        default: ''
+      scan_elf_sha256:
+        description: Expected rebuilt ELF SHA-256 (required with scan_build_run)
+        type: string
+        default: ''
+      comparison_run:
+        description: Optional original Flatpak CI run ID for offline comparison
+        type: string
+        default: ''
+      comparison_bundle_sha256:
+        description: Expected original Flatpak SHA-256 (required with comparison_run)
+        type: string
+        default: ''
+      comparison_elf_sha256:
+        description: Expected original ELF SHA-256 (required with comparison_run)
+        type: string
+        default: ''
   pull_request:
     branches: [dev]
     paths: ['ci-tests/wayland-input/**', 'linux/**', '.github/workflows/linux-flatpak.yml', 'src-native/**', 'assets/evoparseq.svg', 'assets/evoparseq.png']
@@ -17,7 +38,56 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  scan-existing-build:
+    if: github.event_name == 'workflow_dispatch' && inputs.scan_build_run != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download the explicitly selected public comparison artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SCAN_RUN: ${{ inputs.scan_build_run }}
+          COMPARISON_RUN: ${{ inputs.comparison_run }}
+        run: |
+          [[ "$SCAN_RUN" =~ ^[0-9]+$ ]]
+          test -z "$COMPARISON_RUN"
+          test "$(gh repo view --json isPrivate --jq .isPrivate)" = false
+          gh run download "$SCAN_RUN" --name EvoParseq-Linux-Offline-Comparison --dir "$RUNNER_TEMP/selected-build"
+      - name: Scan the exact ELF without release publication
+        env:
+          VIRUSTOTAL: ${{ secrets.VIRUSTOTAL }}
+          EXPECTED_ELF: ${{ inputs.scan_elf_sha256 }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          from release_security_scan import VirusTotal, scan_build_elf
+          root = Path(os.environ['RUNNER_TEMP'])
+          result = scan_build_elf(root / 'selected-build/rebuilt-evoparseq-linux',
+                                  os.environ['EXPECTED_ELF'], root / 'build-scan-results',
+                                  VirusTotal(os.environ.get('VIRUSTOTAL', '')))
+          with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as summary:
+              summary.write((root / 'build-scan-results/SECURITY-SCAN.md').read_text())
+          raise SystemExit(result)
+          PY
+      - name: Preserve the scan report including blocking detections
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: EvoParseq-Linux-Build-VirusTotal
+          path: ${{ runner.temp }}/build-scan-results/
+          if-no-files-found: warn
   native-wayland-input:
+    if: github.event_name != 'workflow_dispatch' || inputs.scan_build_run == ''
     name: Native GNOME 46 input lifecycle
     runs-on: ubuntu-24.04
     timeout-minutes: 12
@@ -39,6 +109,9 @@ jobs:
   flatpak:
     needs: native-wayland-input
     runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      actions: read
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -58,7 +131,7 @@ jobs:
       - name: Install Flatpak SDK
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder librsvg2-common
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder librsvg2-common binutils
           dpkg --compare-versions "$(flatpak --version | cut -d ' ' -f 2)" ge 1.15.6
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 org.freedesktop.Sdk.Extension.rust-stable//25.08 org.freedesktop.Sdk.Extension.llvm21//25.08
@@ -72,6 +145,47 @@ jobs:
           flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo "$RUNNER_TEMP/flatpak-repo" "$RUNNER_TEMP/EvoParseq-Linux.flatpak" io.github.vampywiz17.EvoParseq
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' linux/Cargo.toml | head -n1)
           mv "$RUNNER_TEMP/EvoParseq-Linux.flatpak" "$RUNNER_TEMP/EvoParseq-Linux-v${version}-x86_64.flatpak"
+      - name: Compare with the exact original CI artifact without executing it
+        if: github.event_name == 'workflow_dispatch' && inputs.comparison_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE_RUN: ${{ inputs.comparison_run }}
+          BASELINE_BUNDLE_SHA256: ${{ inputs.comparison_bundle_sha256 }}
+          BASELINE_ELF_SHA256: ${{ inputs.comparison_elf_sha256 }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          [[ "$BASELINE_RUN" =~ ^[0-9]+$ ]]
+          baseline_source=$(gh run view "$BASELINE_RUN" --json headSha --jq .headSha)
+          [[ "$baseline_source" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --depth=1 origin "$baseline_source"
+          # Diagnostic code may differ, but every staged build-source path must match.
+          git diff --exit-code "$baseline_source" HEAD -- linux .cargo assets/evoparseq.svg assets/evoparseq.png LICENSE src-native
+          gh run download "$BASELINE_RUN" --name EvoParseq-Linux-Flatpak --dir "$RUNNER_TEMP/original-flatpak"
+          python3 -m unittest discover -s ci-tests -p test_release_security_scan.py
+          python3 - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          from release_security_scan import compare_flatpak_builds
+          root = Path(os.environ['RUNNER_TEMP'])
+          original, = (root / 'original-flatpak').glob('*.flatpak')
+          rebuilt, = root.glob('EvoParseq-Linux-v*-x86_64.flatpak')
+          report = compare_flatpak_builds(original, rebuilt, root / 'flatpak-comparison',
+                                         os.environ['BASELINE_BUNDLE_SHA256'], os.environ['BASELINE_ELF_SHA256'])
+          print(report)
+          PY
+          git rev-parse HEAD > "$RUNNER_TEMP/flatpak-comparison/source.txt"
+          printf '%s\n' "$baseline_source" > "$RUNNER_TEMP/flatpak-comparison/baseline-source.txt"
+          flatpak info --user org.freedesktop.Sdk//25.08 > "$RUNNER_TEMP/flatpak-comparison/sdk.txt"
+          flatpak info --user org.freedesktop.Sdk.Extension.rust-stable//25.08 > "$RUNNER_TEMP/flatpak-comparison/rust-sdk.txt"
+      - name: Preserve offline comparison evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.comparison_run != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: EvoParseq-Linux-Offline-Comparison
+          path: ${{ runner.temp }}/flatpak-comparison/
+          if-no-files-found: error
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: EvoParseq-Linux-Flatpak
