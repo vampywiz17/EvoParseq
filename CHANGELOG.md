@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.9.9-dev.3 — Phaze multi-display and refresh-rate fixes (2026-11-27)
+## v0.9.9-dev.3 — Phaze multi-display and refresh-rate fixes (2026-11-27)
 
 This development preview builds on **EvoParseq v0.9.9-dev.2**. It includes
 Windows x64, the distribution-signed Android TV APK and the experimental Linux
@@ -64,7 +64,7 @@ under its previous name. The ZIPs exclude user settings.
 Android TV: install **EvoParseq-TV.apk** or select the prerelease channel in
 Settings > Updates. The APK uses the existing distribution signing identity.
 
-Linux: install **EvoParseq-Linux-0.9.9-dev.3-x86_64.flatpak**. The application ID
+Linux: install **EvoParseq-Linux-v0.9.9-dev.3-x86_64.flatpak**. The application ID
 and settings directory remain the same.
 
 [Phaze Mirror display](https://github.com/vampywiz17/EvoParseq/pull/23) ·
