@@ -1,5 +1,6 @@
 """Scan published release assets; never build, install or execute their contents."""
 import hashlib
+import difflib
 import json
 import os
 from pathlib import Path
@@ -147,6 +148,42 @@ def flatpak_payload(bundle, directory):
         if stream.read(4) != b"\x7fELF":
             raise ScanError("Flatpak application executable is not ELF")
     return path
+
+
+def compare_flatpak_builds(original, rebuilt, output, expected_bundle, expected_elf):
+    """Inspect public build artifacts offline; never install or execute their ELF."""
+    for digest in (expected_bundle, expected_elf):
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ScanError("Comparison requires exact baseline SHA-256 values")
+    if sha256(original) != expected_bundle:
+        raise ScanError("Baseline Flatpak SHA-256 mismatch")
+    output.mkdir()
+    report = {}
+    inspections = {}
+    with tempfile.TemporaryDirectory(prefix="flatpak-compare-") as temporary:
+        for label, bundle in (("original", original), ("rebuilt", rebuilt)):
+            work = Path(temporary) / label
+            work.mkdir()
+            payload = flatpak_payload(bundle, work)
+            digest = sha256(payload)
+            if label == "original" and digest != expected_elf:
+                raise ScanError("Baseline ELF SHA-256 mismatch")
+            # readelf reads metadata without loading dependencies or executing
+            # application code. Do not use ldd on an untrusted executable.
+            inspection = command(["readelf", "--wide", "--file-header", "--program-headers",
+                                  "--section-headers", "--dynamic", "--notes", str(payload)])
+            (output / f"{label}-readelf.txt").write_text(inspection, encoding="utf-8")
+            (output / f"{label}-evoparseq-linux").write_bytes(payload.read_bytes())
+            inspections[label] = inspection.splitlines(keepends=True)
+            report[label] = {"bundle_sha256": sha256(bundle), "elf_sha256": digest,
+                             "elf_size": payload.stat().st_size}
+    report["identical_elf"] = report["original"]["elf_sha256"] == report["rebuilt"]["elf_sha256"]
+    report["application_executed"] = False
+    (output / "comparison.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    (output / "readelf.diff").write_text("".join(difflib.unified_diff(
+        inspections["original"], inspections["rebuilt"], fromfile="original", tofile="rebuilt")),
+        encoding="utf-8")
+    return report
 
 
 def scan_file(scanner, path, name, cache):

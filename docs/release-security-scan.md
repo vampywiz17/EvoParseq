@@ -74,6 +74,35 @@ positive. If assets change during scanning, stale results are not published.
 
 ## Privacy and limits
 
+### Offline clean-build comparison
+
+The Linux Flatpak workflow supports an optional diagnostic comparison on manual
+dispatch. Set `comparison_run` to the original Linux CI run ID, and supply the
+original wrapper and extracted ELF SHA-256 values as
+`comparison_bundle_sha256` and `comparison_elf_sha256`. The original run must be
+in this repository and contain the `EvoParseq-Linux-Flatpak` artifact. The job
+checks that all staged build-source paths match that run's source commit before
+comparing the artifacts. Use a branch whose only changes are the diagnostic
+workflow/helper/tests/documentation, not application or dependency changes.
+
+The normal workflow builds on a fresh hosted runner with a clean Flatpak builder
+directory and locked offline Cargo sources. This is a clean build, not a promise
+of reproducibility: Flathub SDK/extensions and toolchains may have changed.
+Current SDK commits, both source commits, wrapper/ELF hashes and sizes, static
+`readelf` reports, their diff, and the two exact extracted executables are saved
+in `EvoParseq-Linux-Offline-Comparison`. Temporary OSTree repositories are removed.
+The original payload must match the expected hash before static inspection.
+Neither inspected executable is installed or run; `ldd` is not used.
+
+For the v0.9.9-dev.3 investigation the baseline is run `45985349096`, wrapper
+`9786785df408cd7e4d1cb1ca62d35af00b3b088651972fc783160e35850b4b59`,
+ELF `d1595778fde05e99953892b22fabbb8a15f3f8295d5bb957b77ead17ea4b0bff`.
+An identical ELF establishes byte reproducibility for those two builds; it does
+not establish malware safety. A different ELF requires reviewing toolchain,
+metadata and section differences before attributing the change to application
+behavior. This diagnostic performs no VirusTotal submission, release edit or
+publication and grants only read access to Actions artifacts.
+
 VirusTotal submissions can be shared with its partners and customers. Only public
 release binaries are authorized: never profiles, tokens, signing keys, logs or
 memory dumps. The public API's non-commercial use terms and quota apply.

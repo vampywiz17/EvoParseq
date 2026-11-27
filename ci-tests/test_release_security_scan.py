@@ -38,6 +38,49 @@ class Fixtures(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
+    def test_offline_comparison_preserves_exact_files_and_reports_differences(self):
+        for same in (True, False):
+            with self.subTest(same=same):
+                original = self.root / "original.flatpak"
+                rebuilt = self.root / "rebuilt.flatpak"
+                first = self.root / "original-elf"
+                second = self.root / "rebuilt-elf"
+                original.write_bytes(b"original wrapper")
+                rebuilt.write_bytes(b"rebuilt wrapper")
+                first.write_bytes(b"\x7fELFsynthetic baseline")
+                second.write_bytes(first.read_bytes() if same else b"\x7fELFsynthetic change")
+                output = self.root / str(same)
+                with patch.object(scan, "flatpak_payload", side_effect=[first, second]), \
+                        patch.object(scan, "command", side_effect=["header A\n", "header A\n" if same else "header B\n"]) as run:
+                    report = scan.compare_flatpak_builds(original, rebuilt, output,
+                                                         scan.sha256(original), scan.sha256(first))
+                self.assertEqual(report["identical_elf"], same)
+                self.assertFalse(report["application_executed"])
+                self.assertEqual(report["original"]["elf_size"], first.stat().st_size)
+                self.assertEqual((output / "original-evoparseq-linux").read_bytes(), first.read_bytes())
+                self.assertEqual((output / "rebuilt-evoparseq-linux").read_bytes(), second.read_bytes())
+                self.assertEqual(json.loads((output / "comparison.json").read_text()), report)
+                self.assertEqual(bool((output / "readelf.diff").read_text()), not same)
+                for call in run.call_args_list:
+                    self.assertEqual(call.args[0][0], "readelf")
+                    self.assertIn("--dynamic", call.args[0])
+
+    def test_offline_comparison_rejects_wrong_baseline_before_inspection(self):
+        original = self.root / "original.flatpak"
+        original.write_bytes(b"fixture")
+        with patch.object(scan, "command") as run, patch.object(scan, "flatpak_payload") as extract:
+            for bundle_hash, elf_hash in [("invalid", HASH), (HASH, "invalid"), (HASH, HASH)]:
+                with self.assertRaises(scan.ScanError):
+                    scan.compare_flatpak_builds(original, original, self.root / "output", bundle_hash, elf_hash)
+            extract.assert_not_called()
+            run.assert_not_called()
+        payload = self.root / "elf"
+        payload.write_bytes(b"synthetic ELF")
+        with patch.object(scan, "command") as run, patch.object(scan, "flatpak_payload", return_value=payload):
+            with self.assertRaisesRegex(scan.ScanError, "Baseline ELF"):
+                scan.compare_flatpak_builds(original, original, self.root / "output", scan.sha256(original), HASH)
+            run.assert_not_called()
+
     def test_commands_do_not_expose_output_on_failure(self):
         with patch.object(scan.subprocess, "run", return_value=Mock(returncode=0, stdout="ok")):
             self.assertEqual(scan.command(["fixture"]), "ok")
