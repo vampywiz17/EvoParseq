@@ -199,6 +199,26 @@ def scan_file(scanner, path, name, cache):
     return row
 
 
+def scan_build_elf(path, expected_hash, output, scanner):
+    """Explicit diagnostic scan of an exact public ELF; no release operations."""
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+        raise ScanError("Build scan requires an exact ELF SHA-256")
+    if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= MAX_SIZE:
+        raise ScanError("Build scan requires a bounded regular file")
+    if sha256(path) != expected_hash:
+        raise ScanError("Build scan ELF SHA-256 mismatch")
+    with path.open("rb") as stream:
+        if stream.read(4) != b"\x7fELF":
+            raise ScanError("Build scan requires an ELF executable")
+    row = scan_file(scanner, path, "files/bin/evoparseq-linux (clean build)", {})
+    report = {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+              "scope": "explicit public build diagnostic; no release publication", "files": [row]}
+    output.mkdir()
+    (output / REPORTS[0]).write_text(markdown(report), encoding="utf-8")
+    (output / REPORTS[1]).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return int(needs_attention(row))
+
+
 def safe_error(error):
     return str(error) if isinstance(error, ScanError) else "Incomplete response or unreadable file"
 
@@ -230,7 +250,7 @@ def needs_attention(row):
 
 def markdown(report):
     lines = ["## Release malware scan", "", f"Report generated: {report['generated_at']} (UTC).", "",
-             "Only the release assets listed below and the named Flatpak executable were submitted.",
+             "Only the files listed below were submitted.",
              "ZIP wrappers and external Flatpak runtimes/drivers are not separately scanned.", "",
              "No detection is not a safety guarantee or Google Play Protect approval.",
              "Unsupported engines, errors and timeouts are reported separately, not counted as clean.", "",

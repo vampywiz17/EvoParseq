@@ -103,6 +103,18 @@ metadata and section differences before attributing the change to application
 behavior. This diagnostic performs no VirusTotal submission, release edit or
 publication and grants only read access to Actions artifacts.
 
+For a separately authorized VirusTotal rescan of the exact rebuilt ELF, dispatch
+the Linux workflow with `scan_build_run` set to the comparison run and
+`scan_elf_sha256` to its rebuilt ELF hash. Leave `comparison_run` empty. This
+mode skips building, rejects private repositories, downloads only this
+repository's named comparison artifact, and verifies the file type/size/hash
+before submission. Only the scan step receives `VIRUSTOTAL`; it has no GitHub
+write permission or release-publication code. The explicit upload of the public
+ELF is subject to VirusTotal's sharing and quota rules below. The report artifact
+is `EvoParseq-Linux-Build-VirusTotal`; any detection or analysis error fails the
+diagnostic job. This scans the rebuilt Linux ELF only, not its outer Flatpak,
+the APK or the Windows EXE, and does not replace the release gate.
+
 VirusTotal submissions can be shared with its partners and customers. Only public
 release binaries are authorized: never profiles, tokens, signing keys, logs or
 memory dumps. The public API's non-commercial use terms and quota apply.

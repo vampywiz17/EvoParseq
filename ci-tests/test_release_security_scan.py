@@ -92,6 +92,43 @@ class Fixtures(unittest.TestCase):
                     scan.command(["fixture"])
                 self.assertNotIn("SECRET", str(caught.exception))
 
+    def test_explicit_build_scan_preserves_verdict_without_release_operations(self):
+        path = self.root / "rebuilt-evoparseq-linux"
+        path.write_bytes(b"\x7fELFsynthetic fixture")
+        for flagged in (False, True):
+            with self.subTest(flagged=flagged):
+                result = DONE | {"stats": STATS | {"malicious": int(flagged)}}
+                scanner = Mock()
+                scanner.scan.return_value = result
+                output = self.root / str(flagged)
+                with patch.object(scan, "github") as github, patch.object(scan, "command") as command:
+                    code = scan.scan_build_elf(path, scan.sha256(path), output, scanner)
+                self.assertEqual(code, int(flagged))
+                github.assert_not_called()
+                command.assert_not_called()
+                scanner.scan.assert_called_once_with(path, scan.sha256(path))
+                report = json.loads((output / "SECURITY-SCAN.json").read_text())
+                self.assertEqual(report["files"][0]["stats"]["malicious"], int(flagged))
+                self.assertEqual(report["files"][0]["sha256"], scan.sha256(path))
+                self.assertIn("ATTENTION" if flagged else "Completed", (output / "SECURITY-SCAN.md").read_text())
+        scanner = Mock()
+        scanner.scan.side_effect = scan.ScanError("VirusTotal HTTP 429")
+        self.assertEqual(scan.scan_build_elf(path, scan.sha256(path), self.root / "failed", scanner), 1)
+        self.assertIn('"status": "error"', (self.root / "failed/SECURITY-SCAN.json").read_text())
+
+    def test_explicit_build_scan_validates_file_before_submission(self):
+        path = self.root / "candidate"
+        path.write_bytes(b"not ELF")
+        scanner = Mock()
+        for candidate, digest in [(path, "invalid"), (self.root / "missing", HASH),
+                                  (path, HASH), (path, scan.sha256(path))]:
+            with self.assertRaises(scan.ScanError):
+                scan.scan_build_elf(candidate, digest, self.root / "output", scanner)
+        with patch.object(Path, "is_symlink", return_value=True):
+            with self.assertRaisesRegex(scan.ScanError, "regular file"):
+                scan.scan_build_elf(path, HASH, self.root / "output", scanner)
+        scanner.scan.assert_not_called()
+
     def test_github_uses_structured_input(self):
         with patch.object(scan, "command", return_value='{"ok":true}') as run:
             self.assertEqual(scan.github("repos/a/b", "PATCH", {"body": "a\nb"}), {"ok": True})

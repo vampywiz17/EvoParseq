@@ -3,6 +3,14 @@ name: EvoParseq Linux Flatpak
 on:
   workflow_dispatch:
     inputs:
+      scan_build_run:
+        description: Optional comparison run ID to scan its rebuilt public ELF only (skips building)
+        type: string
+        default: ''
+      scan_elf_sha256:
+        description: Expected rebuilt ELF SHA-256 (required with scan_build_run)
+        type: string
+        default: ''
       comparison_run:
         description: Optional original Flatpak CI run ID for offline comparison
         type: string
@@ -30,7 +38,56 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  scan-existing-build:
+    if: github.event_name == 'workflow_dispatch' && inputs.scan_build_run != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download the explicitly selected public comparison artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SCAN_RUN: ${{ inputs.scan_build_run }}
+          COMPARISON_RUN: ${{ inputs.comparison_run }}
+        run: |
+          [[ "$SCAN_RUN" =~ ^[0-9]+$ ]]
+          test -z "$COMPARISON_RUN"
+          test "$(gh repo view --json isPrivate --jq .isPrivate)" = false
+          gh run download "$SCAN_RUN" --name EvoParseq-Linux-Offline-Comparison --dir "$RUNNER_TEMP/selected-build"
+      - name: Scan the exact ELF without release publication
+        env:
+          VIRUSTOTAL: ${{ secrets.VIRUSTOTAL }}
+          EXPECTED_ELF: ${{ inputs.scan_elf_sha256 }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          from release_security_scan import VirusTotal, scan_build_elf
+          root = Path(os.environ['RUNNER_TEMP'])
+          result = scan_build_elf(root / 'selected-build/rebuilt-evoparseq-linux',
+                                  os.environ['EXPECTED_ELF'], root / 'build-scan-results',
+                                  VirusTotal(os.environ.get('VIRUSTOTAL', '')))
+          with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as summary:
+              summary.write((root / 'build-scan-results/SECURITY-SCAN.md').read_text())
+          raise SystemExit(result)
+          PY
+      - name: Preserve the scan report including blocking detections
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: EvoParseq-Linux-Build-VirusTotal
+          path: ${{ runner.temp }}/build-scan-results/
+          if-no-files-found: warn
   native-wayland-input:
+    if: github.event_name != 'workflow_dispatch' || inputs.scan_build_run == ''
     name: Native GNOME 46 input lifecycle
     runs-on: ubuntu-24.04
     timeout-minutes: 12
