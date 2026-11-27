@@ -462,3 +462,17 @@ fn secondary_video_waits_for_its_own_picture_and_a_closing_slot_discards_frames(
     );
     assert!(!displays.is_open());
 }
+
+/// Only the event log consumes these experimental observations; no GUI status.
+pub fn log_display_refresh(event: &evoparseq_host_interop::display_refresh::Diagnostic<'_>) {
+    crate::event_log::record(
+        "INFO",
+        "phaze_display_refresh",
+        serde_json::json!({
+            "observation": event,
+            "schema_version": 2,
+            "field_interpretation_verified": true,
+            "os_mode_verified": false,
+        }),
+    );
+}

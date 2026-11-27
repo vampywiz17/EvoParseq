@@ -130,6 +130,12 @@ impl<P: Platform> Sink for Client<P> {
     fn display_layout(&self) -> evoparseq_host_interop::display_layout::DisplayLayout {
         self.display_layout
     }
+    fn display_refresh_diagnostic(
+        &mut self,
+        event: &evoparseq_host_interop::display_refresh::Diagnostic<'_>,
+    ) {
+        interop_session::log_display_refresh(event);
+    }
     fn video_config(&self) -> VideoConfig {
         self.state.stream.config()
     }
@@ -345,6 +351,27 @@ mod tests {
                 },
             );
             assert_eq!(client.platform.cursor, Some(vec![1, 2, 3, 255]));
+            let before = client.state.stream.config();
+            Sink::display_refresh_diagnostic(
+                &mut client,
+                &evoparseq_host_interop::display_refresh::Diagnostic::Requested {
+                    slot: 1,
+                    descriptor_id: 0x4556_5032,
+                    size: [1920, 1200],
+                    physical_size: [60, 1],
+                    fields: evoparseq_host_interop::display_refresh::Fields {
+                        refresh_scaled: 1_200_000,
+                        native_refresh_scaled: 1_200_000,
+                    },
+                    intended_hz: 120,
+                    probe_override: true,
+                },
+            );
+            assert_eq!(
+                client.state.stream.config(),
+                before,
+                "display diagnostics must not change encoder requests"
+            );
         }
     }
 

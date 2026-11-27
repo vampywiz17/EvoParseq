@@ -28,6 +28,8 @@ pub struct Output {
     pub height: u32,
     pub active: bool,
     pub primary: bool,
+    pub physical_size: [u32; 2],
+    pub refresh_fields: crate::display_refresh::Fields,
 }
 pub(crate) fn be(b: &[u8], i: usize) -> u32 {
     u32::from_be_bytes(b[i..i + 4].try_into().unwrap())
@@ -62,6 +64,11 @@ pub fn outputs(b: &[u8]) -> Result<Vec<Output>> {
             height: be(b, p + 12),
             active: b[p + 52] != 0,
             primary: b[p + 53] != 0,
+            physical_size: [be(b, p + 28), be(b, p + 32)],
+            refresh_fields: crate::display_refresh::Fields {
+                refresh_scaled: be(b, p + 44),
+                native_refresh_scaled: be(b, p + 48),
+            },
         });
         p += 54;
     }
@@ -117,7 +124,11 @@ pub(crate) fn ack_bandwidth(ack: &[u8]) -> Option<(f64, f64)> {
 
 /// Phaze 0.14.3 layout observed in the client serializer. The option value
 /// was corroborated by a successful stock session and an EvoParseq live test.
-pub(crate) fn hello(raw_audio: bool, layout: DisplayLayout) -> Vec<u8> {
+pub(crate) fn hello_with_refresh(
+    raw_audio: bool,
+    layout: DisplayLayout,
+    refresh: crate::display_refresh::Probe,
+) -> Vec<u8> {
     const CLIENT_DISPLAY_OPTION: u32 = 0x100;
     let mut flags = u32::from(raw_audio);
     if layout.enabled {
@@ -136,22 +147,40 @@ pub(crate) fn hello(raw_audio: bool, layout: DisplayLayout) -> Vec<u8> {
     for (index, resolution) in layout.resolutions().into_iter().take(count).enumerate() {
         let [width, height] = resolution.dimensions();
         const NAME: &[u8] = b"EvoParseq Display";
-        let id = 0x4556_5031u32 + index as u32;
+        let id = crate::display_refresh::descriptor_id(index);
         b.extend(id.to_be_bytes());
         b.extend((NAME.len() as u32).to_be_bytes());
         b.extend(NAME);
         // Arrange displays from left to right, with only the first primary.
-        // x, y, logical size, rotation, pixel size, refresh, capabilities.
-        for word in [left, 0, width, height, 0, width, height, 60, 1, 0, 0] {
+        // x, y, logical size, rotation, native pixels, physical size, data/vendor.
+        let fields = refresh.fields(index);
+        for word in [
+            left,
+            0,
+            width,
+            height,
+            0,
+            width,
+            height,
+            crate::display_refresh::LEGACY_PHYSICAL_SIZE[0],
+            crate::display_refresh::LEGACY_PHYSICAL_SIZE[1],
+            0,
+            0,
+        ] {
             b.extend(word.to_be_bytes());
         }
-        // The serializer scales normalized floating values by 10,000.
-        b.extend(10_000u32.to_be_bytes());
-        b.extend(10_000u32.to_be_bytes());
+        // Independent RefreshRate and NativeRefreshRate floats, in Hz x 10,000.
+        b.extend(fields.refresh_scaled.to_be_bytes());
+        b.extend(fields.native_refresh_scaled.to_be_bytes());
         b.extend([1, u8::from(index == 0)]);
         left += width;
     }
     b
+}
+
+#[cfg(test)]
+fn hello(raw_audio: bool, layout: DisplayLayout) -> Vec<u8> {
+    hello_with_refresh(raw_audio, layout, crate::display_refresh::Probe::default())
 }
 
 pub(crate) fn video_request(
@@ -591,7 +620,9 @@ fn client_display_hello_uses_observed_options_and_one_descriptor() {
     assert_eq!(&hello_with_display[17..name_end], b"EvoParseq Display");
     let tail = &hello_with_display[name_end..];
     assert_eq!(tail.len(), 54);
-    let words = [0, 0, 1920, 1200, 0, 1920, 1200, 60, 1, 0, 0, 10_000, 10_000];
+    let words = [
+        0, 0, 1920, 1200, 0, 1920, 1200, 60, 1, 0, 0, 600_000, 600_000,
+    ];
     for (index, word) in words.into_iter().enumerate() {
         assert_eq!(be(tail, index * 4), word);
     }
@@ -1096,4 +1127,81 @@ mod stream_tests {
         .is_ok());
         Ok(())
     }
+}
+
+#[cfg(test)]
+#[test]
+fn refresh_probe_changes_only_two_hz_words_and_keeps_physical_size_separate() -> Result<()> {
+    use crate::{
+        display_layout::DisplayCount,
+        display_refresh::{Fields, Probe},
+    };
+    let layout = DisplayLayout {
+        enabled: true,
+        count: DisplayCount::Two,
+        ..Default::default()
+    };
+    let probe = Probe::parse(layout, Some(std::ffi::OsStr::new("60,120")))?;
+    let baseline = hello(false, layout);
+    let request = hello_with_refresh(false, layout, probe);
+    assert_eq!(baseline.len(), request.len());
+    let name_len = be(&request, 13) as usize;
+    let stride = 8 + name_len + 54;
+    let second_tail = 17 + name_len + stride;
+    let second_refresh = second_tail + 44;
+    for (index, (&old, &new)) in baseline.iter().zip(&request).enumerate() {
+        if !(second_refresh..second_refresh + 8).contains(&index) {
+            assert_eq!(old, new, "unrelated hello byte {index}");
+        }
+    }
+    assert_eq!(be(&request, second_refresh), 1_200_000);
+    assert_eq!(be(&request, second_refresh + 4), 1_200_000);
+    assert_eq!(be(&request, second_tail + 28), 60);
+    assert_eq!(be(&request, second_tail + 32), 1);
+    let mut reply = Vec::new();
+    reply.extend((request.len() as u32 + 3).to_be_bytes());
+    reply.extend(&request[5..9]);
+    reply.extend(0u32.to_be_bytes());
+    reply.extend(&request[9..]);
+    let second_entry = 12 + stride;
+    reply[second_entry..second_entry + 4].copy_from_slice(&17u32.to_be_bytes());
+    let tail = second_entry + 8 + name_len;
+    // Independent, synthetic native-layout fixture: physical size, data/vendor,
+    // and the two refresh values are deliberately distinguishable.
+    for (offset, value) in [
+        (28, 600u32),
+        (32, 340),
+        (36, 770_000),
+        (40, 880_000),
+        (44, 240_000),
+        (48, 1_200_000),
+    ] {
+        reply[tail + offset..tail + offset + 4].copy_from_slice(&value.to_be_bytes());
+    }
+    let parsed = outputs(&reply)?;
+    assert_eq!(
+        parsed[0].refresh_fields,
+        Fields {
+            refresh_scaled: 600_000,
+            native_refresh_scaled: 600_000
+        }
+    );
+    assert_eq!(parsed[1].id, 17);
+    assert_eq!(parsed[1].physical_size, [600, 340]);
+    assert_eq!(parsed[1].refresh_fields.refresh_hz(), Some(24.));
+    assert_eq!(parsed[1].refresh_fields.native_refresh_hz(), Some(120.));
+    reply[tail + 48..tail + 52].fill(0);
+    let unknown = outputs(&reply)?;
+    assert_eq!(unknown[1].refresh_fields.refresh_hz(), Some(24.));
+    assert_eq!(unknown[1].refresh_fields.native_refresh_hz(), None);
+    reply[tail + 44..tail + 48].fill(0);
+    reply[tail + 48..tail + 52].copy_from_slice(&600_000u32.to_be_bytes());
+    let unknown = outputs(&reply)?;
+    assert_eq!(unknown[1].refresh_fields.refresh_hz(), None);
+    assert_eq!(unknown[1].refresh_fields.native_refresh_hz(), Some(60.));
+    assert_eq!(
+        hello_with_refresh(false, DisplayLayout::default(), probe),
+        hello(false, DisplayLayout::default())
+    );
+    Ok(())
 }
