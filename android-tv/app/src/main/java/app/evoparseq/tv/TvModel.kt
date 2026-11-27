@@ -16,8 +16,9 @@ internal data class Host(val peer: String, val name: String)
 
 /** Retained through Activity recreation. One bounded account request at a time. */
 internal class TvModel(application: Application) : AndroidViewModel(application) {
-    var signedIn by mutableStateOf(false)
+    var signedInService by mutableStateOf("")
         private set
+    val signedIn get() = signedInService.isNotEmpty()
     var busy by mutableStateOf(false)
         private set
     var hosts by mutableStateOf(emptyList<Host>())
@@ -103,14 +104,14 @@ internal class TvModel(application: Application) : AndroidViewModel(application)
             val saved = preferences.getString("requests", "") ?: ""
             val reply = JSONObject(NativeCore.settings(saved, "", 0))
             val diagnosticsReady = runCatching { Diagnostics.configure(application, reply.optJSONObject("settings")?.optBoolean("logging") ?: false) }.getOrDefault(false)
-            var restored = false
+            var restoredService = ""
             var feedback = if (diagnosticsReady) reply.optString("error") else "Diagnostic logging is unavailable."
             try {
                 val token = vault.load()
                 if (token != null) {
                     val auth = try { JSONObject(NativeCore.restoreSession(token)) } finally { token.fill(0) }
-                    restored = auth.optBoolean("ok")
-                    if (!restored) { vault.clear(); feedback = auth.optString("error") }
+                    if (auth.optBoolean("ok")) restoredService = auth.getString("signed_in_service")
+                    else { vault.clear(); feedback = auth.optString("error") }
                 }
             } catch (_: Exception) {
                 runCatching { vault.clear() }
@@ -129,7 +130,8 @@ internal class TvModel(application: Application) : AndroidViewModel(application)
                 feedback = "Saved relay settings could not be restored. Configure the relay again."
             }
             val restoredNetwork = network
-            return@request { if (reply.optBoolean("ok")) settings = reply; signedIn = restored; networkSummary = restoredNetwork; message = feedback; if(previousCrash != null) lastStreamStopReason = previousCrash }
+            val sessionSettings = if (restoredService.isNotEmpty()) JSONObject(NativeCore.settings(saved, "", 0)) else reply
+            return@request { if (sessionSettings.optBoolean("ok")) settings = sessionSettings; signedInService = restoredService; networkSummary = restoredNetwork; message = feedback; if(previousCrash != null) lastStreamStopReason = previousCrash }
         }
     }
 
@@ -150,11 +152,18 @@ internal class TvModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun signIn(email: String, password: String, code: String) = request {
-        val reply = JSONObject(NativeCore.signIn(email, password, code))
+    fun signIn(email: String, password: String, code: String, phaze: Boolean) = request {
+        val reply = JSONObject(NativeCore.signIn(email, password, code, phaze))
         val ok = reply.optBoolean("ok")
+        val service = if (ok) reply.getString("signed_in_service") else ""
         val feedback = if (ok) JSONObject(NativeCore.rememberSession(vault)).optString("error") else reply.optString("error")
-        return@request { signedIn = ok; message = feedback }
+        val current = preferences.getString("requests", "") ?: ""
+        val sessionSettings = if (ok) JSONObject(NativeCore.settings(current, "", 0)) else null
+        return@request {
+            if (sessionSettings?.optBoolean("ok") == true) settings = sessionSettings
+            signedInService = service
+            message = feedback
+        }
     }
 
     fun refresh() = request {
@@ -166,15 +175,20 @@ internal class TvModel(application: Application) : AndroidViewModel(application)
         }
         val expired = reply.optBoolean("expired")
         if (expired) { runCatching { vault.clear() }; NativeCore.signOut() }
+        val current = preferences.getString("requests", "") ?: ""
+        val sessionSettings = if (expired) JSONObject(NativeCore.settings(current, "", 0)) else null
         val error = reply.optString("error")
-        return@request { if (updated != null) hosts = updated; if (expired) { signedIn = false; hosts = emptyList() }; message = error }
+        return@request { if (updated != null) hosts = updated; if (expired) { signedInService = ""; hosts = emptyList() }; if (sessionSettings?.optBoolean("ok") == true) settings = sessionSettings; message = error }
     }
 
     fun signOut() = request {
         val forgotten = runCatching { vault.clear() }.isSuccess
         NativeCore.signOut()
+        val current = preferences.getString("requests", "") ?: ""
+        val sessionSettings = JSONObject(NativeCore.settings(current, "", 0))
         return@request {
-            signedIn = false; hosts = emptyList()
+            if (sessionSettings.optBoolean("ok")) settings = sessionSettings
+            signedInService = ""; hosts = emptyList()
             message = if (forgotten) "" else "Signed out, but local sign-in storage could not be fully cleared."
         }
     }

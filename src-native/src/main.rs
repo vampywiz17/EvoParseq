@@ -19,14 +19,6 @@ mod audio_stream;
 mod audio_windows;
 #[cfg(windows)]
 mod branding;
-#[cfg(all(windows, feature = "bud"))]
-mod bud_attempt;
-#[cfg(all(windows, feature = "bud"))]
-mod bud_ingress;
-#[cfg(all(windows, feature = "bud"))]
-mod bud_media;
-#[cfg(feature = "bud")]
-mod bud_routes;
 mod clipboard_sync;
 mod connection_settings;
 #[cfg(windows)]
@@ -36,6 +28,8 @@ mod control;
 mod crypto_policy_tests;
 #[cfg(windows)]
 mod cursor;
+#[cfg(any(windows, test))]
+mod cursor_pixels;
 #[cfg(test)]
 mod data_only_policy_tests;
 #[cfg(any(windows, test))]
@@ -48,7 +42,7 @@ mod frame_timing;
 mod fullscreen;
 #[cfg(windows)]
 mod gpu_windows;
-#[cfg(all(windows, feature = "bud"))]
+#[cfg(all(windows, feature = "lowlat"))]
 mod hid_input;
 mod hid_policy;
 mod input;
@@ -56,8 +50,21 @@ mod input_state;
 #[cfg(windows)]
 mod input_windows;
 #[cfg(windows)]
+mod interop_session;
+#[cfg(windows)]
 mod keyboard_grab;
 mod lifecycle;
+#[cfg(all(windows, feature = "lowlat"))]
+#[path = "bud_attempt.rs"]
+mod lowlat_attempt;
+#[cfg(all(windows, feature = "lowlat"))]
+mod lowlat_ingress;
+#[cfg(all(windows, feature = "lowlat"))]
+#[path = "bud_media.rs"]
+mod lowlat_media;
+#[cfg(feature = "lowlat")]
+#[path = "bud_routes.rs"]
+mod lowlat_routes;
 mod media_ingress;
 #[cfg(windows)]
 mod media_scheduling;
@@ -101,8 +108,6 @@ mod video_upscale;
 #[cfg(windows)]
 mod video_windows;
 mod viewport;
-#[cfg(windows)]
-mod vsr_runtime;
 #[cfg(windows)]
 mod wake_lock;
 #[cfg(windows)]

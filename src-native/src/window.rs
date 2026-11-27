@@ -40,6 +40,7 @@ pub struct Window {
     settings_active: AtomicBool,
     pub hwnd: AtomicUsize,
     pub closing: AtomicBool,
+    pub(crate) remote_controls: AtomicBool,
     pub events: crate::event_queue::Queue<Event>,
     pub dimensions: Mutex<(i32, i32)>,
 
@@ -54,11 +55,11 @@ pub struct Window {
 
     pub stop: Arc<crate::lifecycle::StopSignal>,
     relative_mouse: AtomicBool,
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     hid_mouse_active: AtomicBool,
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     hid_keyboard_active: AtomicBool,
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     hid_input_acquired: AtomicBool,
     relative_pending: AtomicUsize,
     relative_requested: AtomicBool,
@@ -171,6 +172,7 @@ impl Window {
             settings_active: AtomicBool::new(false),
             hwnd: AtomicUsize::new(0),
             closing: AtomicBool::new(false),
+            remote_controls: AtomicBool::new(true),
             events: crate::event_queue::Queue::input(),
             dimensions: Mutex::new((1024, 720)),
 
@@ -185,11 +187,11 @@ impl Window {
 
             stop: Default::default(),
             relative_mouse: AtomicBool::new(false),
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             hid_mouse_active: AtomicBool::new(false),
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             hid_keyboard_active: AtomicBool::new(false),
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             hid_input_acquired: AtomicBool::new(false),
             relative_pending: AtomicUsize::new(0),
             relative_requested: AtomicBool::new(false),
@@ -293,18 +295,28 @@ impl Window {
     }
 
     pub fn native_input_allowed(&self) -> bool {
-        self.native_menu_allows_input()
-            && self.has_focus.load(Ordering::Acquire)
-            && self.video_ready.load(Ordering::Acquire)
-            && self.video_visible.load(Ordering::Acquire)
-            && !self.settings_open()
-            && !self.input_suspended.load(Ordering::Acquire)
-            && !self.closing.load(Ordering::Acquire)
-            && !self
-                .input_state
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .detached
+        self.native_input_blocker().is_none()
+    }
+    pub(crate) fn native_input_blocker(&self) -> Option<&'static str> {
+        if !self.native_menu_allows_input() {
+            Some("session_panel_open")
+        } else if !self.has_focus.load(Ordering::Acquire) {
+            Some("stream_lacks_keyboard_focus")
+        } else if !self.video_ready.load(Ordering::Acquire) {
+            Some("video_not_ready")
+        } else if !self.video_visible.load(Ordering::Acquire) {
+            Some("video_not_visible")
+        } else if self.settings_open() {
+            Some("settings_open")
+        } else if self.input_suspended.load(Ordering::Acquire) {
+            Some("input_suspended")
+        } else if self.closing.load(Ordering::Acquire) {
+            Some("window_closing")
+        } else if self.input_detached() {
+            Some("input_detached")
+        } else {
+            None
+        }
     }
     #[cfg(feature = "vendor-video")]
     pub fn direct_presentation_allowed(&self) -> bool {
@@ -394,7 +406,11 @@ impl Window {
             self.apply_input_capture();
             self.apply_relative_mouse(false);
             self.show_video_surface();
-            let page = crate::connection_settings_ui::open(self.handle(), manager);
+            let page = if self.session.phaze.load(Ordering::Acquire) {
+                crate::connection_settings_ui::open_phaze(self.handle(), manager)
+            } else {
+                crate::connection_settings_ui::open(self.handle(), manager)
+            };
             self.settings_page.store(page as usize, Ordering::Release);
             if page.is_null() {
                 self.settings_active.store(false, Ordering::Release);
@@ -446,9 +462,9 @@ impl Window {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         *generation = generation.wrapping_add(1);
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         self.hid_mouse_active.store(false, Ordering::Release);
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         self.hid_keyboard_active.store(false, Ordering::Release);
         self.set_video_ready(false);
         *generation
@@ -469,9 +485,9 @@ impl Window {
             .unwrap_or_else(|e| e.into_inner());
         if *generation == expected {
             *generation = generation.wrapping_add(1);
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             self.hid_mouse_active.store(false, Ordering::Release);
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             self.hid_keyboard_active.store(false, Ordering::Release);
             self.set_video_ready(false);
         }
@@ -521,8 +537,23 @@ impl Window {
         Some(viewport)
     }
 
+    pub(crate) fn pointer_in(&self, target: &Self, x: i32, y: i32) -> Option<(i32, i32)> {
+        let mut point = POINT { x, y };
+        unsafe {
+            if ClientToScreen(self.handle(), &mut point) == 0
+                || GetAncestor(WindowFromPoint(point), GA_ROOT) != target.handle()
+                || ScreenToClient(target.handle(), &mut point) == 0
+            {
+                return None;
+            }
+        }
+        let [left, top, right, bottom] = target.presented_viewport()?.rect()?;
+        ((left..right).contains(&point.x) && (top..bottom).contains(&point.y))
+            .then_some((point.x, point.y))
+    }
+
     unsafe fn mouse_button(&self, down: bool, button: i32, x: i32, y: i32) {
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         self.sync_absolute_pointer(x, y, false);
         let bit = 1usize << button;
         if down {
@@ -539,7 +570,7 @@ impl Window {
         }
         self.push(Event::Button(down, button, x, y));
     }
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     unsafe fn sync_absolute_pointer(&self, x: i32, y: i32, screen: bool) {
         if self.hid_mouse_active.load(Ordering::Acquire)
             && !self.relative_mouse.load(Ordering::Acquire)
@@ -550,8 +581,16 @@ impl Window {
             }
         }
     }
-    fn release_buttons(&self) {
+    fn release_buttons(&self, reason: &'static str) {
         let pressed = self.pressed_buttons.swap(0, Ordering::AcqRel);
+        if pressed != 0 && self.session.phaze.load(Ordering::Acquire) && crate::event_log::enabled()
+        {
+            crate::event_log::record(
+                "INFO",
+                "phaze_mouse_capture_released",
+                serde_json::json!({"reason":reason,"held_button_count":pressed.count_ones()}),
+            );
+        }
         for button in 0..5 {
             if pressed & (1 << button) != 0 {
                 self.push(Event::Button(false, button, 0, 0));
@@ -606,6 +645,9 @@ impl Window {
         *self.host_cursor.lock().unwrap_or_else(|e| e.into_inner()) = Some((x, y, relative));
         // When capture is suspended, the input consumer already sees relative=false and
         // may omit its redundant unlock. Do not retain a stale relative request.
+        self.set_host_relative_mouse(relative);
+    }
+    pub(crate) fn set_host_relative_mouse(&self, relative: bool) {
         if relative != self.relative_requested.load(Ordering::Acquire) {
             // A host transition is permanent, including while unfocused.
             self.request_relative_mouse(relative, true);
@@ -792,13 +834,12 @@ impl Window {
                 .detached
     }
     pub fn clipboard_allowed(&self) -> bool {
+        self.clipboard_write_allowed() && unsafe { IsClipboardFormatAvailable(13) != 0 }
+    }
+    pub(crate) fn clipboard_write_allowed(&self) -> bool {
         // GetForegroundWindow is process-independent; GetFocus is UI-thread local.
         self.online
-            && unsafe {
-                GetForegroundWindow() == self.handle()
-                    && IsIconic(self.handle()) == 0
-                    && IsClipboardFormatAvailable(13) != 0
-            }
+            && unsafe { GetForegroundWindow() == self.handle() && IsIconic(self.handle()) == 0 }
             && self.video_ready.load(Ordering::Acquire)
             && self.video_visible.load(Ordering::Acquire)
             && !self.settings_open()
@@ -826,7 +867,7 @@ impl Window {
     }
     unsafe fn apply_input_capture(&self) {
         let allowed = self.input_allowed();
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         self.apply_hid_capture(allowed);
         self.keyboard_grab
             .lock()
@@ -882,14 +923,14 @@ impl Window {
         }
         false
     }
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     pub fn hid_input_generation(&self) -> u64 {
         *self
             .video_generation
             .lock()
             .unwrap_or_else(|e| e.into_inner())
     }
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     pub fn set_hid_input_active(&self, expected: u64, mouse: bool, keyboard: bool) {
         let generation = self
             .video_generation
@@ -917,7 +958,7 @@ impl Window {
             }
         }
     }
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     unsafe fn apply_hid_capture(&self, allowed: bool) {
         let acquired = allowed
             && (self.hid_mouse_active.load(Ordering::Acquire)
@@ -1243,6 +1284,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                     && lp as usize == s.native_session_button.load(Ordering::Acquire)
                     && wp >> 16 == BN_CLICKED as usize) =>
             {
+                if !s.remote_controls.load(Ordering::Acquire) {
+                    return 0;
+                }
                 let manager = s
                     .connection_settings
                     .lock()
@@ -1332,7 +1376,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
             }
             WM_CLOSE => {
                 s.input_suspended.store(true, Ordering::Release);
-                #[cfg(feature = "bud")]
+                #[cfg(feature = "lowlat")]
                 s.apply_hid_capture(false);
                 s.keyboard_grab
                     .lock()
@@ -1397,7 +1441,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                 s.select_client_cursor();
                 return 1;
             }
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             m if m == crate::hid_input::REFRESH => {
                 s.apply_input_capture();
                 return 0;
@@ -1484,6 +1528,15 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
             m if m == WM_APP + 12 => {
                 s.apply_input_capture();
                 s.queue_clipboard();
+                return 0;
+            }
+            #[cfg(test)]
+            m if m == WM_APP + 91 => {
+                // The isolated foreground fixture must restore the UI thread's
+                // actual keyboard focus, not just the foreground HWND. Hosted
+                // Windows test runners can leave focus on an owned popup after
+                // coverage instrumentation creates its test windows.
+                SetFocus(hwnd);
                 return 0;
             }
 
@@ -1577,7 +1630,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                 s.input_suspended.store(true, Ordering::Release);
 
                 s.push(Event::HidInputRelease);
-                #[cfg(feature = "bud")]
+                #[cfg(feature = "lowlat")]
                 s.apply_hid_capture(false);
                 s.apply_input_capture();
             }
@@ -1592,21 +1645,21 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                     .clear();
                 PostMessageW(hwnd, crate::native_core::session_ui::VISIBILITY, 0, 0);
                 s.has_focus.store(false, Ordering::Release);
-                #[cfg(feature = "bud")]
+                #[cfg(feature = "lowlat")]
                 s.apply_hid_capture(false);
                 s.keyboard_grab
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .set(hwnd, false);
                 s.apply_relative_mouse(false);
-                s.release_buttons();
+                s.release_buttons("focus_lost");
                 let mut pressed = s.pressed_keys.lock().unwrap_or_else(|e| e.into_inner());
                 for code in std::mem::take(&mut *pressed) {
                     s.push(Event::Key(false, code, 0));
                 }
                 s.push(Event::Focus(false));
             }
-            WM_CAPTURECHANGED => s.release_buttons(),
+            WM_CAPTURECHANGED => s.release_buttons("capture_changed"),
             WM_MOUSEMOVE if !s.relative_mouse.load(Ordering::Acquire) => {
                 let echo = s.warp_echo.swap(0, Ordering::AcqRel);
                 if let Some(event) = crate::input_windows::motion(lp, echo) {
@@ -1639,7 +1692,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
             // Remote typing follows physical key events and the host layout.
             WM_CHAR => return 0,
             WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
-                #[cfg(feature = "bud")]
+                #[cfg(feature = "lowlat")]
                 {
                     let (x, y) = crate::input_windows::position(lp);
                     s.sync_absolute_pointer(x, y, true);
@@ -1733,7 +1786,7 @@ mod tests {
         assert!(button_release < key_release && key_release < focus_loss);
         assert!(window.pressed_keys.lock().unwrap().is_empty());
     }
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     #[test]
     fn hid_input_desktop_edges_and_local_menu_release() {
         struct Restore {
@@ -1938,6 +1991,48 @@ mod tests {
                 SetForegroundWindow(window.handle());
             }
             wait(|| unsafe { GetForegroundWindow() == window.handle() });
+            // Map a point inside the second HWND back through the source's
+            // client coordinates. Neither the system pointer nor a host is used.
+            unsafe {
+                SetWindowPos(
+                    peer.handle(),
+                    HWND_TOPMOST,
+                    200,
+                    120,
+                    400,
+                    320,
+                    SWP_NOACTIVATE,
+                );
+                SendMessageW(peer.handle(), WM_NULL, 0, 0);
+                let [left, top, right, bottom] = peer.presented_viewport().unwrap().rect().unwrap();
+                let target = ((left + right) / 2, (top + bottom) / 2);
+                let mut point = POINT {
+                    x: target.0,
+                    y: target.1,
+                };
+                assert_ne!(ClientToScreen(peer.handle(), &mut point), 0);
+                assert_ne!(ScreenToClient(window.handle(), &mut point), 0);
+                assert_eq!(window.pointer_in(&peer, point.x, point.y), Some(target));
+                assert!(window.pointer_in(&peer, -32768, -32768).is_none());
+                SetWindowPos(
+                    peer.handle(),
+                    HWND_NOTOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+                );
+                SetWindowPos(
+                    peer.handle(),
+                    HWND_BOTTOM,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+                );
+            }
             // Capture is foreground-owned. Exercise chords in this isolated
             // fixture, not among UI tests whose window teardown can steal focus.
             for (first_down, second_down, first_up, second_up, first, second) in [
@@ -2265,7 +2360,7 @@ mod tests {
                 wire[26..28].copy_from_slice(&540i16.to_be_bytes());
                 let flags: u16 = if rel { 0x100 } else { 0 } | if hidden { 0x200 } else { 0 };
                 wire[32..34].copy_from_slice(&flags.to_be_bytes());
-                let pointer = evoparseq_bud::bud::cursor_message(&wire).unwrap();
+                let pointer = evoparseq_lowlat::lowlat::cursor_message(&wire).unwrap();
                 window.set_host_cursor(
                     i32::from(pointer.update.x),
                     i32::from(pointer.update.y),
@@ -2325,13 +2420,31 @@ mod tests {
                 }
             }
             window.set_input_state(mode(false, false));
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             let hid_modes = [false, true];
-            #[cfg(not(feature = "bud"))]
+            #[cfg(not(feature = "lowlat"))]
             let hid_modes = [false];
             for hid in hid_modes {
-                #[cfg(feature = "bud")]
+                #[cfg(feature = "lowlat")]
                 window.hid_mouse_active.store(hid, Ordering::Release);
+                // This test intentionally checks real Win32 cursor restoration.
+                // Foreground ownership alone does not imply GetFocus()==HWND,
+                // which the application's input_allowed() requires on its UI
+                // thread before performing any cursor warp.
+                unsafe {
+                    SetForegroundWindow(window.handle());
+                    SendMessageW(window.handle(), WM_APP + 91, 0, 0);
+                }
+                wait(|| unsafe {
+                    let mut info = GUITHREADINFO {
+                        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+                        ..Default::default()
+                    };
+                    let thread = GetWindowThreadProcessId(window.handle(), std::ptr::null_mut());
+                    GetForegroundWindow() == window.handle()
+                        && GetGUIThreadInfo(thread, &mut info) != 0
+                        && info.hwndFocus == window.handle()
+                });
                 // Replay the observed hidden-only drag -> visible cursor
                 // transition, with a different HID endpoint from its anchor.
                 let target = if hid { (480, 270) } else { (960, 540) };
@@ -2362,7 +2475,7 @@ mod tests {
                     assert_eq!((actual.x, actual.y), (expected.x, expected.y));
                 }
             }
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             window.hid_mouse_active.store(false, Ordering::Release);
             window.set_host_cursor(960, 540, false, true);
             wait(relative);

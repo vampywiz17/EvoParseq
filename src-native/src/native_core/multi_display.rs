@@ -5,10 +5,16 @@ use crate::{connection_settings::Manager, window::Window};
 use anyhow::{ensure, Result};
 use std::sync::{Arc, Mutex};
 
+use crate::display_stream::DESKTOP_DISPLAYS;
 use crate::display_stream::{enable, STREAMS};
 
 pub unsafe fn add_menu(window: &Window) {
     use windows_sys::Win32::{Foundation::POINT, UI::WindowsAndMessaging::*};
+    let phaze = window
+        .session
+        .phaze
+        .load(std::sync::atomic::Ordering::Acquire);
+    let mut phaze_outputs = Vec::new();
     let menu = CreatePopupMenu();
     if menu.is_null() {
         return;
@@ -19,7 +25,26 @@ pub unsafe fn add_menu(window: &Window) {
             .displays
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        for (stream, output) in displays.outputs.iter().enumerate().take(STREAMS).skip(1) {
+        for (stream, output) in displays.outputs.iter().enumerate() {
+            if phaze {
+                if let Ok(id) = output.id.parse::<u32>() {
+                    if displays.current.as_deref() != Some(&output.id)
+                        && !window.displays.has_phaze_output(id)
+                    {
+                        phaze_outputs.push(id);
+                        AppendMenuW(
+                            menu,
+                            MF_STRING,
+                            phaze_outputs.len(),
+                            super::ui::wide(&output.name).as_ptr(),
+                        );
+                    }
+                }
+                continue;
+            }
+            if !(1..STREAMS).contains(&stream) {
+                continue;
+            }
             let disabled = window.displays.get(stream).is_some()
                 || displays.current.as_deref() == Some(&output.id);
             AppendMenuW(
@@ -42,7 +67,16 @@ pub unsafe fn add_menu(window: &Window) {
         std::ptr::null(),
     );
     DestroyMenu(menu);
-    if (1..STREAMS as i32).contains(&selected) {
+    if phaze {
+        if let Some(output) = (selected as usize)
+            .checked_sub(1)
+            .and_then(|i| phaze_outputs.get(i))
+        {
+            window.events.push(Event::NativeSession(
+                crate::session_controls::Command::AddPhazeDisplay(*output),
+            ));
+        }
+    } else if (1..STREAMS as i32).contains(&selected) {
         window.events.push(Event::NativeSession(
             crate::session_controls::Command::AddDisplay(selected as usize),
         ));
@@ -51,11 +85,12 @@ pub unsafe fn add_menu(window: &Window) {
 
 pub struct Screen {
     pub window: Arc<Window>,
+    pub phaze_output: Option<u32>,
     pub video: Arc<crate::video_windows::Pipeline>,
     pub inspector: Arc<Mutex<crate::video_stream::Inspector>>,
-    ingress: Mutex<crate::bud_ingress::VideoState>,
+    ingress: Mutex<crate::lowlat_ingress::VideoState>,
     input: Mutex<Input>,
-    batch: Mutex<std::collections::VecDeque<Event>>,
+    pub(super) batch: Mutex<std::collections::VecDeque<Event>>,
     pointer: Mutex<Pointer>,
     flags: std::sync::atomic::AtomicI32,
     opened: std::time::Instant,
@@ -64,7 +99,7 @@ pub struct Screen {
 
 #[derive(Default)]
 pub struct Displays {
-    screens: Mutex<[Option<Arc<Screen>>; STREAMS - 1]>,
+    screens: Mutex<[Option<Arc<Screen>>; DESKTOP_DISPLAYS - 1]>,
     primary: Mutex<std::sync::Weak<Window>>,
     focus: std::sync::atomic::AtomicUsize,
     visible_cursor_stream: std::sync::atomic::AtomicUsize,
@@ -153,11 +188,56 @@ impl Displays {
         );
         ensure!(
             !attempt.hid_mouse_enabled()
-                && !(attempt.name() == "BUD" && manager.view().0.hid_keyboard_enabled()),
+                && !(attempt.name() == "lowlat" && manager.view().0.hid_keyboard_enabled()),
             "Additional displays require normal mouse input"
         );
         ensure!(self.get(stream).is_none(), "Display is already open");
+        self.open_window(stream, manager, None, attempt.name() == "lowlat")?;
+        let result = (|| {
+            attempt.send(&crate::control::header(
+                13,
+                stream as i32,
+                self.flags.load(std::sync::atomic::Ordering::Acquire),
+                0,
+            ))?;
+            attempt.send(&enable(stream, true)?)
+        })();
+        if result.is_err() {
+            self.close(stream);
+        }
+        result
+    }
+
+    pub(super) fn open_phaze(
+        &self,
+        stream: usize,
+        output: u32,
+        manager: Arc<Manager>,
+    ) -> Result<()> {
+        self.open_window(stream, manager, Some(output), true)
+    }
+
+    pub(super) fn has_phaze_output(&self, output: u32) -> bool {
+        self.screens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .flatten()
+            .any(|screen| screen.phaze_output == Some(output))
+    }
+
+    fn open_window(
+        &self,
+        stream: usize,
+        manager: Arc<Manager>,
+        phaze_output: Option<u32>,
+        fixed: bool,
+    ) -> Result<()> {
         let window = Window::create_native()?;
+        window
+            .session
+            .phaze
+            .store(phaze_output.is_some(), std::sync::atomic::Ordering::Release);
         window
             .display_stream
             .store(stream, std::sync::atomic::Ordering::Release);
@@ -175,7 +255,7 @@ impl Displays {
         }
         let video = Arc::new(crate::video_windows::Pipeline::start(
             window.clone(),
-            if attempt.name() == "BUD" {
+            if fixed {
                 crate::video_output::DisplayCatchUpPolicy::Fixed
             } else {
                 crate::video_output::DisplayCatchUpPolicy::Adaptive
@@ -192,9 +272,10 @@ impl Displays {
         inspector.enable_hevc(flags & 1 != 0);
         let screen = Arc::new(Screen {
             window,
+            phaze_output,
             video,
             inspector: Arc::new(Mutex::new(inspector)),
-            ingress: Mutex::new(crate::bud_ingress::VideoState::new(
+            ingress: Mutex::new(crate::lowlat_ingress::VideoState::new(
                 flags & 1 != 0,
                 flags & 0x10 != 0,
                 flags & 2 != 0,
@@ -210,19 +291,7 @@ impl Displays {
         });
         self.screens.lock().unwrap_or_else(|e| e.into_inner())[stream - 1] = Some(screen);
         self.changed();
-        let result = (|| {
-            attempt.send(&crate::control::header(
-                13,
-                stream as i32,
-                self.flags.load(std::sync::atomic::Ordering::Acquire),
-                0,
-            ))?;
-            attempt.send(&enable(stream, true)?)
-        })();
-        if result.is_err() {
-            self.close(stream);
-        }
-        result
+        Ok(())
     }
 
     fn changed(&self) {
@@ -259,7 +328,7 @@ impl Displays {
     pub fn clear(&self) {
         self.visible_cursor_stream
             .store(0, std::sync::atomic::Ordering::Release);
-        for stream in 1..STREAMS {
+        for stream in 1..DESKTOP_DISPLAYS {
             self.close(stream);
         }
     }
@@ -326,7 +395,7 @@ impl Displays {
         Ok(())
     }
 
-    pub fn pump_bud(&self, source: &mut evoparseq_bud::bud::MediaSource) -> Result<()> {
+    pub fn pump_lowlat(&self, source: &mut evoparseq_lowlat::lowlat::MediaSource) -> Result<()> {
         for stream in 1..STREAMS {
             let screen = self.get(stream);
             for _ in 0..16 {
@@ -412,7 +481,10 @@ impl Displays {
                         screen.window.toggle_input_detached();
                         screen.window.native_toggle_overlay();
                     }
-                    Event::NativeSession(_) | Event::Shortcut(_) | Event::Clipboard => {}
+                    Event::NativeSession(_)
+                    | Event::PhazeControl(_)
+                    | Event::Shortcut(_)
+                    | Event::Clipboard => {}
                     Event::Focus(false) if self.owns_input() => {
                         *screen.input.lock().unwrap_or_else(|e| e.into_inner()) =
                             Default::default();
@@ -535,6 +607,19 @@ mod tests {
         assert_eq!(second.video.snapshot().frames_decoded, 0);
         assert_eq!(third.video.snapshot().frames_decoded, 0);
 
+        // This fixture injects its own events. Visible windows can enqueue
+        // desktop focus/input while poll() is checking control-only routing.
+        // Finish startup visibility changes and discard those native events;
+        // actual foreground capture has its own isolated lifecycle fixture.
+        for window in [&primary, &second.window, &third.window] {
+            unsafe {
+                use windows_sys::Win32::UI::WindowsAndMessaging::*;
+                ShowWindow(window.handle(), SW_HIDE);
+                SendMessageW(window.handle(), WM_NULL, 0, 0);
+            }
+            window.events.drain();
+        }
+
         let mut input = Input::default();
         displays.synchronize_input(&attempt, &mut input).unwrap();
         assert!(packets().is_empty());
@@ -594,7 +679,11 @@ mod tests {
         assert!(primary_events.iter().any(|event| matches!(event,
             Event::NativeSession(Command::DisplayResolution { stream: 1, resolution: r, size })
                 if *r == resolution && *size == second.window.native_display_size())));
-        assert!(packets().is_empty());
+        let unexpected = packets();
+        assert!(
+            unexpected.is_empty(),
+            "Unexpected fixture commands: {unexpected:?}"
+        );
         second
             .window
             .events

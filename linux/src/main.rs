@@ -16,10 +16,6 @@ mod audio_pipewire;
 mod audio_recovery;
 #[path = "../../src-native/src/audio_stream.rs"]
 pub mod audio_stream;
-#[path = "../../src-native/src/bud_ingress.rs"]
-mod bud_ingress;
-#[path = "../../src-native/src/bud_routes.rs"]
-mod bud_routes;
 #[path = "../../src-native/src/codec_initialization.rs"]
 pub mod codec_initialization;
 mod connection;
@@ -32,6 +28,10 @@ mod host_displays;
 #[path = "../../src-native/src/native_core/host_video.rs"]
 mod host_video;
 mod information_linux;
+#[path = "../../src-native/src/lowlat_ingress.rs"]
+mod lowlat_ingress;
+#[path = "../../src-native/src/bud_routes.rs"]
+mod lowlat_routes;
 #[path = "../../src-native/src/network_settings.rs"]
 mod network_settings;
 #[path = "../../src-native/src/native_core/profile.rs"]
@@ -65,6 +65,9 @@ mod native_core {
 mod clipboard_sync;
 #[path = "../../src-native/src/control.rs"]
 pub mod control;
+mod cursor_linux;
+#[path = "../../src-native/src/cursor_pixels.rs"]
+mod cursor_pixels;
 mod cursor_theme;
 #[path = "../../src-native/src/desktop_input.rs"]
 pub mod desktop_input;
@@ -86,6 +89,11 @@ mod hid_policy;
 pub mod input_handoff;
 #[path = "../../src-native/src/input_state.rs"]
 mod input_state;
+#[path = "../../src-native/src/interop_client.rs"]
+mod interop_client;
+mod interop_linux;
+#[path = "../../src-native/src/interop_session.rs"]
+pub(crate) mod interop_session;
 mod launcher;
 #[path = "../../src-native/src/media_ingress.rs"]
 pub mod media_ingress;
@@ -124,7 +132,7 @@ use zeroize::Zeroizing;
 
 enum Command {
     Restore,
-    SignIn(account::Login, bool),
+    SignIn(account::Login, account::Service, bool),
     Refresh,
     SignOut,
     Stream(
@@ -138,12 +146,13 @@ enum Command {
 enum Reply {
     Hosts {
         hosts: Vec<account::Host>,
+        service: account::Service,
         notice: Option<String>,
     },
     SignedOut,
     StreamEnded(String),
     Error {
-        signed_in: bool,
+        service: Option<account::Service>,
         message: String,
     },
 }
@@ -153,6 +162,7 @@ struct Desktop {
     replies: mpsc::Receiver<Reply>,
     settings: Arc<connection_settings::Manager>,
     remember_login: bool,
+    service: account::Service,
     email: String,
     password: Zeroizing<String>,
     tfa: Zeroizing<String>,
@@ -179,7 +189,7 @@ struct Desktop {
     playback: Option<Arc<playback::Playback>>,
     telemetry: Option<Arc<telemetry::Session>>,
     metrics: telemetry::View,
-    screens: [Option<multi_display::Surface>; display_stream::STREAMS - 1],
+    screens: [Option<multi_display::Surface>; crate::display_stream::DESKTOP_DISPLAYS - 1],
 }
 
 fn account_worker(
@@ -195,7 +205,7 @@ fn account_worker(
             Command::Restore => settings.view().0.native_core.session().map(|saved| {
                 form.session = saved.map(Arc::new);
             }).map_err(|_| anyhow::anyhow!("Could not unlock the saved sign-in. Sign in again or unlock your desktop keyring.")),
-            Command::SignIn(login, remember) => account::login(&login).map(|new_session| {
+            Command::SignIn(login, service, remember) => account::login_service(&login, service).map(|new_session| {
                 form.email = login.email.trim().into();
                 form.remember_login = remember;
                 form.accept(Arc::new(new_session), settings.as_ref(), |reason| {
@@ -215,7 +225,7 @@ fn account_worker(
                 let reply = match result {
                     Ok(message) => Reply::StreamEnded(message),
                     Err(error) => Reply::Error {
-                        signed_in: form.session.is_some(),
+                        service: form.session.as_deref().map(account::Session::service),
                         message: error.to_string(),
                     },
                 };
@@ -233,7 +243,7 @@ fn account_worker(
                         if replies.send(Reply::SignedOut).is_err() { break; }
                     }
                     Err(error) => {
-                        if replies.send(Reply::Error { signed_in: form.session.is_some(), message: error.to_string() }).is_err() { break; }
+                        if replies.send(Reply::Error { service: form.session.as_deref().map(account::Session::service), message: error.to_string() }).is_err() { break; }
                     }
                 }
                 ui.request_repaint();
@@ -241,20 +251,24 @@ fn account_worker(
             }
         };
         let result = result.and_then(|()| {
-            account::hosts(
-                form.session
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("Sign in first."))?,
-            )
+            let session = form
+                .session
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Sign in first."))?;
+            account::hosts(session).map(|hosts| (hosts, session.service()))
         });
         let reply = match result {
-            Ok(hosts) => Reply::Hosts { hosts, notice },
+            Ok((hosts, service)) => Reply::Hosts {
+                hosts,
+                service,
+                notice,
+            },
             Err(error) => {
                 if error.is::<account::ExpiredSession>() {
                     form.expire_saved(settings.as_ref());
                 }
                 Reply::Error {
-                    signed_in: form.session.is_some(),
+                    service: form.session.as_deref().map(account::Session::service),
                     message: error.to_string(),
                 }
             }
@@ -340,7 +354,12 @@ impl eframe::App for Desktop {
             self.telemetry = None;
             self.metrics = Default::default();
             match reply {
-                Reply::Hosts { hosts, notice } => {
+                Reply::Hosts {
+                    hosts,
+                    service,
+                    notice,
+                } => {
+                    self.service = service;
                     self.error = notice;
                     let selected = self
                         .picker
@@ -380,13 +399,16 @@ impl eframe::App for Desktop {
                     eprintln!("{message}");
                     self.badge.open = false;
                 }
-                Reply::Error { signed_in, message } => {
-                    self.signed_in = signed_in;
+                Reply::Error { service, message } => {
+                    self.signed_in = service.is_some();
+                    if let Some(service) = service {
+                        self.service = service;
+                    }
                     let message = video_timing
                         .map_or_else(|| message.clone(), |timing| format!("{message}\n{timing}"));
                     eprintln!("{message}");
                     self.error = Some(message);
-                    if !signed_in {
+                    if !self.signed_in {
                         self.remember_login = false;
                         self.picker = Default::default();
                     }
@@ -473,7 +495,6 @@ impl eframe::App for Desktop {
                         playback.set_input_geometry(source);
                         multi_display::fit(ctx, source, &mut self.fitted_stream);
                     }
-                    self.desktop_input.cursor(ctx, &playback);
                     self.session_overlay(ctx, &playback);
                 } else {
                     self.launcher(ui, ctx);
@@ -485,6 +506,9 @@ impl eframe::App for Desktop {
             self.show_video,
         );
         if let Some(playback) = &self.playback {
+            if !self.show_video {
+                self.desktop_input.cursor(ctx, playback);
+            }
             playback.finish_clipboard(
                 self.desktop_input.enabled
                     && ctx.input(|i| i.focused)
@@ -623,13 +647,14 @@ fn main() -> anyhow::Result<()> {
                         replies,
                         settings: settings.clone(),
                         remember_login: restore,
+                        service: saved.native_core.service,
                         email: saved.native_core.email.clone(),
                         password: Zeroizing::default(),
                         tfa: Zeroizing::default(),
                         picker: Default::default(),
                         peer: saved.native_core.last_peer.clone(),
-                        transport: if saved.bud {
-                            connection::Mode::Bud
+                        transport: if saved.lowlat {
+                            connection::Mode::Lowlat
                         } else {
                             connection::Mode::WebRtc
                         },

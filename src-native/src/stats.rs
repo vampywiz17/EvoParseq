@@ -17,8 +17,9 @@ pub struct MemoryUsage {
 }
 #[derive(Clone)]
 pub struct Sample {
-    #[cfg(feature = "bud")]
-    pub bud: Option<evoparseq_bud::bud::Snapshot>,
+    pub phaze: bool,
+    #[cfg(feature = "lowlat")]
+    pub lowlat: Option<evoparseq_lowlat::lowlat::Snapshot>,
     pub at: Instant,
     pub generation: u64,
     pub state: String,
@@ -34,6 +35,9 @@ pub struct Sample {
     pub received: Option<u64>,
     pub sent: Option<u64>,
     pub audio_bytes: u64,
+    pub video_payload_bytes: Option<u64>,
+    /// Last Phaze request submitted to the carrier (maximum Mbps, FPS).
+    pub phaze_video_request: Option<(u32, u32)>,
     pub audio_ready: bool,
     pub audio_codec: Option<&'static str>,
     pub audio_layout: Option<crate::audio_layout::Layout>,
@@ -50,8 +54,9 @@ pub struct Sample {
 impl Default for Sample {
     fn default() -> Self {
         Self {
-            #[cfg(feature = "bud")]
-            bud: None,
+            phaze: false,
+            #[cfg(feature = "lowlat")]
+            lowlat: None,
             at: Instant::now(),
             generation: 0,
             state: "Waiting for a connection".into(),
@@ -67,6 +72,8 @@ impl Default for Sample {
             received: None,
             sent: None,
             audio_bytes: 0,
+            video_payload_bytes: None,
+            phaze_video_request: None,
             audio_ready: false,
             audio_codec: None,
             audio_layout: None,
@@ -306,9 +313,9 @@ pub async fn network(peer: &RTCPeerConnection) -> Sample {
 }
 impl Sample {
     fn connected(&self) -> bool {
-        #[cfg(feature = "bud")]
-        if let Some(bud) = &self.bud {
-            return bud.connected;
+        #[cfg(feature = "lowlat")]
+        if let Some(lowlat) = &self.lowlat {
+            return lowlat.connected;
         }
         self.state == "connected"
     }
@@ -326,6 +333,7 @@ pub struct Values {
     pub present_fps: Option<f64>,
     pub recent_timing_ms: [Option<f64>; 8],
     pub audio: Option<f64>,
+    pub video_payload_mbps: Option<f64>,
 }
 impl Rates {
     pub fn update(&mut self, sample: &Sample) -> Values {
@@ -350,6 +358,11 @@ impl Rates {
                 };
                 result.incoming = rate(sample.received, old.received, 8.0 / 1e6);
                 result.outgoing = rate(sample.sent, old.sent, 8.0 / 1e6);
+                result.video_payload_mbps = rate(
+                    sample.video_payload_bytes,
+                    old.video_payload_bytes,
+                    8.0 / 1e6,
+                );
                 result.audio = rate(
                     Some(sample.audio_bytes),
                     Some(old.audio_bytes),
@@ -460,14 +473,14 @@ mod tests {
         s.received = Some(1000);
         assert!(rates.update(&s).incoming.is_none());
     }
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     #[test]
-    fn bud_rates_use_native_connection_state_and_existing_decoder_counters() {
+    fn lowlat_rates_use_native_connection_state_and_existing_decoder_counters() {
         let mut rates = Rates::default();
         let mut sample = Sample {
             generation: 1,
-            state: "Connected (BUD)".into(),
-            bud: Some(evoparseq_bud::bud::Snapshot {
+            state: "Connected (LOWLAT)".into(),
+            lowlat: Some(evoparseq_lowlat::lowlat::Snapshot {
                 connected: true,
                 ..Default::default()
             }),
@@ -493,7 +506,7 @@ mod tests {
         assert_eq!(values.audio, Some(128.0));
         assert!((values.outgoing.unwrap() - 0.1).abs() < 1e-12);
         sample.at += std::time::Duration::from_secs(1);
-        sample.bud.as_mut().unwrap().connected = false;
+        sample.lowlat.as_mut().unwrap().connected = false;
         let stopped = rates.update(&sample);
         assert!(stopped.fps.is_none() && stopped.incoming.is_none());
     }

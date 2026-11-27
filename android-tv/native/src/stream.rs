@@ -25,15 +25,15 @@ struct Running {
     controllers: Arc<crate::input_handoff::Inbox>,
 }
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
-struct Request {
-    session: Arc<Session>,
-    peer: String,
-    prefs: Preferences,
-    window: NativeWindow,
-    choices: Choices,
-    audio_inventory: crate::audio_preferences::Inventory,
-    size: (u32, u32),
-    controllers: Arc<crate::input_handoff::Inbox>,
+pub(super) struct Request {
+    pub(super) session: Arc<Session>,
+    pub(super) peer: String,
+    pub(super) prefs: Preferences,
+    pub(super) window: NativeWindow,
+    pub(super) choices: Choices,
+    pub(super) audio_inventory: crate::audio_preferences::Inventory,
+    pub(super) size: (u32, u32),
+    pub(super) controllers: Arc<crate::input_handoff::Inbox>,
 }
 
 pub fn start(
@@ -54,7 +54,7 @@ pub fn start(
         "This device has no declared hardware HEVC decoder"
     );
     ensure!(
-        prefs.video != 2 || choices.main10,
+        prefs.video != 2 || session.service() == crate::account::Service::Phaze || choices.main10,
         "This device has no declared Main 10 decoder"
     );
     let mut slot = RUNNING
@@ -172,6 +172,9 @@ impl Drop for Connection {
     }
 }
 fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result<()> {
+    if request.session.service() == crate::account::Service::Phaze {
+        return crate::interop_android::run(request, stop, status);
+    }
     let Request {
         session,
         peer,
@@ -188,7 +191,7 @@ fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result<()>
     crate::event_log::record(
         "INFO",
         "android_stream_start",
-        json!({"bud":prefs.transport==1,"video_request":prefs.video,"pcm_requested":prefs.audio.pcm,"surround_requested":prefs.audio.surround,"buffer_max_ms":prefs.audio.maximum()}),
+        json!({"lowlat":prefs.transport==1,"video_request":prefs.video,"pcm_requested":prefs.audio.pcm,"surround_requested":prefs.audio.surround,"buffer_max_ms":prefs.audio.maximum()}),
     );
     let socket = Socket::open(&session)?;
     if stop.load(Ordering::Acquire) {

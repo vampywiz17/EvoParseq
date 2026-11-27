@@ -44,10 +44,6 @@ try {
     $taskPackage = Join-Path $taskStaging $taskPackageName
     New-Item -ItemType Directory -Path $taskPackage -Force | Out-Null
     foreach ($taskFile in @('EvoParseq.exe','README.md','LICENSE','CHANGELOG.md','MIGRATION.md')) { Copy-Item -LiteralPath $taskFile -Destination $taskPackage }
-    if ($env:EVOPARSEQ_RTX_VIDEO_SDK) {
-        Copy-Item (Join-Path $env:EVOPARSEQ_RTX_VIDEO_SDK 'NVIDIA_RTX_Video_SDK_License.pdf') (Join-Path $taskPackage 'NVIDIA-RTX-VIDEO-LICENSE.pdf')
-        'Optional NVIDIA RTX Video SDK 1.1.0: NVIDIA RTX technology. Its optional runtime and linked SDK library are proprietary NVIDIA components, excluded from the EvoParseq MIT license. See NVIDIA-RTX-VIDEO-LICENSE.pdf. VSR is off by default and may increase latency, GPU load and memory use. The runtime is downloaded only with consent, checked against pinned archive and DLL SHA-256 values, and stored under %LOCALAPPDATA%/EvoParseq/vsr/1.1.0 without administrator rights. No runtime DLL is embedded in the EXE.' | Set-Content (Join-Path $taskPackage 'NVIDIA-RTX-VIDEO-NOTICE.txt') -Encoding utf8
-    }
     Copy-Item src-native/vendor/webrtc-util-0.12.0/LICENSE-MIT (Join-Path $taskPackage 'WEBRTC-UTIL-LICENSE-MIT.txt')
     Copy-Item src-native/vendor/webrtc-util-0.12.0/LICENSE-APACHE (Join-Path $taskPackage 'WEBRTC-UTIL-LICENSE-APACHE.txt')
     Copy-Item src-native/vendor/webrtc-util-0.12.0/LOCAL-CHANGES.md (Join-Path $taskPackage 'WEBRTC-UTIL-LOCAL-CHANGES.md')
@@ -59,9 +55,9 @@ try {
     Copy-Item src-native/vendor/webrtc-0.14.0/LOCAL-CHANGES.md (Join-Path $taskPackage 'WEBRTC-LOCAL-CHANGES.md')
     Copy-Item src-native/vendor/webrtc-ice-0.14.0/LOCAL-CHANGES.md (Join-Path $taskPackage 'ICE-LOCAL-CHANGES.md')
     Copy-Item src-native/vendor/turn-0.11.0/LOCAL-CHANGES.md (Join-Path $taskPackage 'TURN-LOCAL-CHANGES.md')
-    Copy-Item src-native/crates/bud/vendor/lowlat-client/LICENSE (Join-Path $taskPackage 'LOWLAT-LICENSE.txt')
-    Copy-Item src-native/crates/bud/vendor/lowlat-client/EVOPARSEQ.md (Join-Path $taskPackage 'BUD-LOCAL-CHANGES.md')
-    Copy-Item src-native/crates/bud/vendor/lowlat-net/EVOPARSEQ.md (Join-Path $taskPackage 'BUD-NET-LOCAL-CHANGES.md')
+    Copy-Item src-native/crates/lowlat/vendor/lowlat-client/LICENSE (Join-Path $taskPackage 'LOWLAT-LICENSE.txt')
+    Copy-Item src-native/crates/lowlat/vendor/lowlat-client/EVOPARSEQ.md (Join-Path $taskPackage 'LOWLAT-LOCAL-CHANGES.md')
+    Copy-Item src-native/crates/lowlat/vendor/lowlat-net/EVOPARSEQ.md (Join-Path $taskPackage 'LOWLAT-NET-LOCAL-CHANGES.md')
     Copy-Item src-native/crates/video/LICENSE-lowlat (Join-Path $taskPackage 'GPU-LOWLAT-LICENSE.txt')
     $taskCargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }
     $taskCell = Get-ChildItem -Path (Join-Path $taskCargoHome 'registry/src/*/self_cell-1.3.0') -Directory | Select-Object -First 1
@@ -71,6 +67,10 @@ try {
     if (!$taskOpus) { throw 'Bundled Opus license directory missing' }
     Copy-Item (Join-Path $taskOpus.FullName 'LICENSE') (Join-Path $taskPackage 'LIBOPUS-SYS-LICENSE.txt')
     Copy-Item (Join-Path $taskOpus.FullName 'opus/COPYING') (Join-Path $taskPackage 'OPUS-LICENSE.txt')
+    $taskSymphonia = Get-ChildItem -Path (Join-Path $taskCargoHome 'registry/src/*/symphonia-core-0.6.1') -Directory | Select-Object -First 1
+    if (!$taskSymphonia) { throw 'Symphonia AAC license directory missing' }
+    Copy-Item (Join-Path $taskSymphonia.FullName 'LICENSE') (Join-Path $taskPackage 'SYMPHONIA-MPL-2.0.txt')
+    'Symphonia 0.6.1 AAC decoder, core, common and metadata: Copyright (c) The Project Symphonia Developers. MPL-2.0. Unmodified open-source dependencies; source: https://github.com/pdeljanov/Symphonia/tree/v0.6.1 and https://crates.io/crates/symphonia-codec-aac/0.6.1 (also symphonia-core, symphonia-common and symphonia-metadata at version 0.6.1). See SYMPHONIA-MPL-2.0.txt. No native Phaze code or libraries are included.' | Set-Content (Join-Path $taskPackage 'SYMPHONIA-NOTICE.txt') -Encoding utf8
     if ((Get-ChildItem -LiteralPath $taskPackage -Filter '*.exe').Count -ne 1) { throw 'Single executable package violated' }
     $taskZip = "dist/$taskPackageName.zip"
     Compress-Archive -LiteralPath $taskPackage -DestinationPath $taskZip -Force

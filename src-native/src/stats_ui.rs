@@ -307,7 +307,7 @@ unsafe fn paint(hwnd: HWND, page: &mut Page, dc: HDC) {
     y += 14;
     let footer = presentation.footer;
     // Measure wrapped text using the same font and width as the actual paint.
-    // The BUD explanation can exceed a fixed-height box, especially on resize.
+    // The LOWLAT explanation can exceed a fixed-height box, especially on resize.
     let mut footer_rect = RECT {
         left,
         top: y,
@@ -598,15 +598,15 @@ mod tests {
             RedrawWindow(hwnd, null(), null_mut(), RDW_INVALIDATE | RDW_UPDATENOW);
             SendMessageW(hwnd, WM_VSCROLL, SB_BOTTOM as usize, 0);
             capture(hwnd, "stats-host-timing-bottom");
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             {
                 let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Page;
                 SendMessageW(hwnd, WM_COMMAND, TAB_BASE + 1, 0);
-                (*state).sample.bud = Some(evoparseq_bud::bud::Snapshot::default());
+                (*state).sample.lowlat = Some(evoparseq_lowlat::lowlat::Snapshot::default());
                 RedrawWindow(hwnd, null(), null_mut(), RDW_INVALIDATE | RDW_UPDATENOW);
                 SendMessageW(hwnd, WM_VSCROLL, SB_BOTTOM as usize, 0);
-                capture(hwnd, "stats-bud-bottom");
-                (*state).sample.bud = None;
+                capture(hwnd, "stats-lowlat-bottom");
+                (*state).sample.lowlat = None;
             }
             SetWindowPos(
                 hwnd,

@@ -8,6 +8,8 @@ pub enum Command {
     #[cfg(any(windows, target_os = "linux"))]
     AddDisplay(usize),
     #[cfg(any(windows, target_os = "linux"))]
+    AddPhazeDisplay(u32),
+    #[cfg(any(windows, target_os = "linux"))]
     DisplayResolution {
         stream: usize,
         resolution: crate::session_preferences::Resolution,
@@ -30,8 +32,11 @@ pub enum Status {
     Confirmed,
     Waiting,
     Unconfirmed,
+    RequestSent,
     AttentionSent,
     AttentionFailed,
+    #[cfg(windows)]
+    ControlSent,
 }
 
 impl Status {
@@ -41,8 +46,11 @@ impl Status {
             Self::Failed => "Could not apply or save settings. See the event log.",
             Self::Waiting => "Applying settings...",
             Self::Unconfirmed => "Host did not confirm the requested settings. See the event log.",
+            Self::RequestSent => "Video settings request sent. See Connection stats → Video.",
             Self::AttentionSent => "Ctrl+Alt+Del requested from the host.",
             Self::AttentionFailed => "Could not send Ctrl+Alt+Del. See the event log.",
+            #[cfg(windows)]
+            Self::ControlSent => "Request sent to the host.",
         }
     }
 }

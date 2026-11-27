@@ -12,6 +12,7 @@ pub struct Host {
     pub config: crate::host_video::Config,
     pub outputs: Vec<crate::host_displays::Output>,
     pub pending: bool,
+    pub phaze_output: Option<String>,
     pub status: String,
     pub revision: u64,
     pub outputs_revision: u64,
@@ -189,6 +190,9 @@ impl Control {
         }
         let result = (|| -> Result<()> {
             match command {
+                Command::AddPhazeDisplay(_) => {
+                    anyhow::bail!("Phaze display selection requires a Phaze session")
+                }
                 Command::AddDisplay(stream) => {
                     let host = session.host.lock().unwrap_or_else(|e| e.into_inner());
                     anyhow::ensure!(
@@ -196,7 +200,7 @@ impl Control {
                         "Additional displays require normal mouse input"
                     );
                     anyhow::ensure!(
-                        session.mode != Mode::Bud
+                        session.mode != Mode::Lowlat
                             || !session
                                 .settings
                                 .lock()
@@ -597,19 +601,27 @@ impl View {
             .as_ref()
             .map(|settings| settings.native_video())
             .unwrap_or_default();
-        self.draft =
-            crate::session_preferences::HostVideo::from_report(&observed).panel_video(saved);
+        let phaze = session.mode == Mode::Phaze;
+        self.draft = if phaze {
+            crate::interop_session::supported_video(saved)
+        } else {
+            crate::session_preferences::HostVideo::from_report(&observed).panel_video(saved)
+        };
         self.pending = host.pending;
         self.result = host.status.clone();
         self.displays = host.outputs.clone();
-        self.current_output = host.config.output_id().map(str::to_owned);
+        self.current_output = if phaze {
+            host.phaze_output.clone()
+        } else {
+            host.config.output_id().map(str::to_owned)
+        };
         self.windows = host.windows;
         self.hid_mouse = host.hid_mouse;
         self.host_revision = host.revision;
-        self.config_ready = host.config.ready();
-        self.display = host
-            .config
-            .output_id()
+        self.config_ready = phaze || host.config.ready();
+        self.display = self
+            .current_output
+            .as_deref()
             .and_then(|id| host.outputs.iter().find(|o| o.id == id))
             .map_or_else(
                 || {
@@ -625,11 +637,11 @@ impl View {
             "{} | {}",
             session.mode.label(),
             sample
-                .bud
+                .lowlat
                 .as_ref()
-                .map_or(sample.route, |bud| if !bud.connected {
+                .map_or(sample.route, |lowlat| if !lowlat.connected {
                     "Connecting"
-                } else if bud.relay {
+                } else if lowlat.relay {
                     "TURN relay"
                 } else {
                     "Direct"
@@ -822,7 +834,7 @@ mod tests {
     use super::*;
     #[test]
     fn linux_overlay_receives_framed_host_settings_and_displays() {
-        for mode in [Mode::Bud, Mode::WebRtc] {
+        for mode in [Mode::Lowlat, Mode::WebRtc] {
             for terminated in [true, false] {
                 let session = Session::new(mode);
                 let mut control = Control::default();
@@ -857,7 +869,7 @@ mod tests {
     }
     #[test]
     fn linux_diagnostics_queries_once_and_stops_host_reports_when_hidden() {
-        let session = Session::new(Mode::Bud);
+        let session = Session::new(Mode::Lowlat);
         let mut control = Control::default();
         let mut sent = Vec::new();
         control
@@ -912,7 +924,7 @@ mod command_tests {
         use crate::session_controls::{Command, Status};
         use crate::session_preferences::Resolution;
 
-        for mode in [Mode::Bud, Mode::WebRtc] {
+        for mode in [Mode::Lowlat, Mode::WebRtc] {
             let session = Session::new(mode);
             let mut control = Control::default();
             let ctx = eframe::egui::Context::default();
@@ -1028,7 +1040,7 @@ mod command_tests {
 
     #[test]
     fn linux_overlay_apply_preserves_other_streams_and_invalid_requests_do_not_disconnect() {
-        let session = Session::new(Mode::Bud);
+        let session = Session::new(Mode::Lowlat);
         let mut controls = Control::default();
         let initial = serde_json::json!({"video":[{"hostOS":1,"output":"one","resolutionX":1920,"resolutionY":1080,"encoderFPS":60,"encoderMaxBitrate":20,"fullFPS":true,"rotated":false},{"output":"two","encoderFPS":30}]});
         session
@@ -1088,13 +1100,13 @@ mod command_tests {
         assert!(!session.host.lock().unwrap().pending);
     }
     #[test]
-    fn linux_overview_retains_all_four_cards_for_bud_and_records_unknown_as_unknown() {
+    fn linux_overview_retains_all_four_cards_for_lowlat_and_records_unknown_as_unknown() {
         let mut view = View::default();
         let mut sample = stats::Sample {
             state: "connected".into(),
             ..Default::default()
         };
-        sample.bud = Some(Default::default());
+        sample.lowlat = Some(Default::default());
         view.sample = Some(sample);
         let details = view.build(0);
         assert_eq!(details.cards.len(), 4);

@@ -1,11 +1,11 @@
-//! Explicit BUD lifecycle. RTC attempts never enter this adapter.
-pub(crate) use crate::bud_routes::native_attempt_id;
+//! Explicit LOWLAT lifecycle. RTC attempts never enter this adapter.
+pub(crate) use crate::lowlat_routes::native_attempt_id;
 #[cfg(test)]
-use crate::bud_routes::turn_relays;
-use crate::bud_routes::{relay_route, route};
+use crate::lowlat_routes::turn_relays;
+use crate::lowlat_routes::{relay_route, route};
 use anyhow::{ensure, Context, Result};
-use evoparseq_bud::{
-    bud::{Event, Outcome, Route, Session},
+use evoparseq_lowlat::{
+    lowlat::{Event, Outcome, Route, Session},
     signaling::Signaling,
 };
 use serde_json::{json, Value};
@@ -59,7 +59,7 @@ impl State {
     }
 }
 
-// Keep BUD identity through connecting/disconnected states too. An old worker
+// Keep LOWLAT identity through connecting/disconnected states too. An old worker
 // finishing after reconnect may only publish into its own stats generation.
 struct Statistics {
     shared: Arc<crate::stats::Shared>,
@@ -78,8 +78,8 @@ impl Statistics {
         shared.publish(
             generation,
             crate::stats::Sample {
-                bud: Some(Default::default()),
-                state: "Connecting (BUD)".into(),
+                lowlat: Some(Default::default()),
+                state: "Connecting (LOWLAT)".into(),
                 ..Default::default()
             },
         );
@@ -92,8 +92,8 @@ impl Drop for Statistics {
         self.shared.publish(
             self.generation,
             crate::stats::Sample {
-                bud: Some(Default::default()),
-                state: "Disconnected (BUD)".into(),
+                lowlat: Some(Default::default()),
+                state: "Disconnected (LOWLAT)".into(),
                 ..Default::default()
             },
         );
@@ -163,17 +163,17 @@ impl Attempt {
             cancel.clone(),
         );
         let attempt_id = id.to_owned();
-        let worker = std::thread::Builder::new().name("evoparseq-bud-media".into()).spawn(move || {
+        let worker = std::thread::Builder::new().name("evoparseq-lowlat-media".into()).spawn(move || {
             let mut stage = "start";
             let result = run(&attempt_id, &window, &manager, &worker_state, &worker_session, &worker_audio, &worker_cancel, incoming, &mut stage, hid_input);
 
             if result.is_err() {
                 if !worker_cancel.load(Ordering::Acquire) {
-                    crate::event_log::record("ERROR", "connection_failed", json!({"transport":"BUD","stage":stage,"route":window.stats.read().map(|s|s.route)}));
+                    crate::event_log::record("ERROR", "connection_failed", json!({"transport":"lowlat","stage":stage,"route":window.stats.read().map(|s|s.route)}));
                 }
                 let mut state = worker_state.lock().unwrap_or_else(|e| e.into_inner());
                 if !worker_cancel.load(Ordering::Acquire) {
-                state.failure.get_or_insert("BUD connection or media failed");
+                state.failure.get_or_insert("LOWLAT connection or media failed");
                 // No tokens, AES keys, addresses or server responses in diagnostics.
                 state.events.clear();
                 state.controls.clear();
@@ -244,25 +244,25 @@ impl Attempt {
             return Ok(());
         }
         drop(state);
-        ensure!(text.len() <= 16 * 1024, "BUD signaling exceeds limit");
+        ensure!(text.len() <= 16 * 1024, "LOWLAT signaling exceeds limit");
         if value["action"] == "answer_relay" && value["payload"]["approved"] == true {
             ensure!(
                 value["payload"]["data"].is_object()
                     && value["payload"]["data"]["creds"].is_object(),
-                "malformed BUD answer"
+                "malformed LOWLAT answer"
             );
         }
-        // The BUD worker owns termination, credentials and direct-to-relay retry.
+        // The LOWLAT worker owns termination, credentials and direct-to-relay retry.
         self.commands
             .try_send(text.to_owned())
-            .context("BUD signaling queue unavailable")?;
+            .context("LOWLAT signaling queue unavailable")?;
         self.thread.unpark();
         Ok(())
     }
 
     pub fn send(&self, frame: &[u8]) -> Result<()> {
         let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
-        let session = session.as_mut().context("BUD session unavailable")?;
+        let session = session.as_mut().context("LOWLAT session unavailable")?;
         session.send_frame(frame)
     }
 
@@ -328,7 +328,7 @@ impl Drop for Attempt {
             if worker.is_finished() {
                 let _ = worker.join();
             } else {
-                crate::event_log::record("WARN", "native_bud_shutdown_pending", json!({}));
+                crate::event_log::record("WARN", "native_lowlat_shutdown_pending", json!({}));
             }
         }
     }
@@ -341,16 +341,19 @@ fn send_candidate(state: &Mutex<State>, event: &Event) -> Result<()> {
             .template
             .as_ref()
             .and_then(|v| v["payload"]["to"].as_str())
-            .context("BUD account destination missing")?;
+            .context("LOWLAT account destination missing")?;
         let message = Signaling::new(peer, &state.wire_id)?
             .candidate(event)
-            .context("not a BUD candidate")?;
+            .context("not a LOWLAT candidate")?;
         (
-            state.writer.clone().context("BUD account writer missing")?,
+            state
+                .writer
+                .clone()
+                .context("LOWLAT account writer missing")?,
             serde_json::to_string(&message)?,
         )
     };
-    ensure!(writer(message), "BUD candidate send failed");
+    ensure!(writer(message), "LOWLAT candidate send failed");
     Ok(())
 }
 
@@ -363,27 +366,30 @@ fn switch_offer(state: &Mutex<State>, cancel: &AtomicBool, id: &str, data: Value
         let mut next = state
             .template
             .clone()
-            .context("BUD account offer missing")?;
+            .context("LOWLAT account offer missing")?;
         let mut previous = next.clone();
         previous["action"] = json!("offer_cancel");
         previous["payload"]["attempt_id"] = json!(state.wire_id);
         previous["payload"]["data"] = json!({});
         next["payload"]["attempt_id"] = json!(id);
         next["payload"]["data"] = data.clone();
-        ensure!(state.retired_wires.len() < 32, "BUD relay retry limit");
+        ensure!(state.retired_wires.len() < 32, "LOWLAT relay retry limit");
         let previous_id = std::mem::replace(&mut state.wire_id, id.into());
         state.retired_wires.push(previous_id);
         state.events.clear();
         state.controls.clear();
         (
-            state.writer.clone().context("BUD account writer missing")?,
+            state
+                .writer
+                .clone()
+                .context("LOWLAT account writer missing")?,
             serde_json::to_string(&previous)?,
             serde_json::to_string(&next)?,
         )
     };
     ensure!(
         writer(previous) && writer(next),
-        "BUD relay offer send failed"
+        "LOWLAT relay offer send failed"
     );
     Ok(true)
 }
@@ -416,7 +422,7 @@ fn complete_offer(state: &Mutex<State>, cancel: &AtomicBool, offer: Value) -> Re
     if cancel.load(Ordering::Acquire) {
         return Ok(false);
     }
-    ensure!(!state.output_finished, "BUD offer already completed");
+    ensure!(!state.output_finished, "LOWLAT offer already completed");
     state.output_finished = true;
     let mut message = state
         .template
@@ -437,7 +443,7 @@ fn complete_offer(state: &Mutex<State>, cancel: &AtomicBool, offer: Value) -> Re
 }
 
 fn log_route_attempt(route: &Route) {
-    use evoparseq_bud::bud::RelayTransport;
+    use evoparseq_lowlat::lowlat::RelayTransport;
     let carrier = match route {
         Route::Direct { .. } => None,
         Route::Turn(relay) => Some(match &relay.transport {
@@ -448,7 +454,7 @@ fn log_route_attempt(route: &Route) {
     };
     crate::event_log::record(
         "INFO",
-        "bud_route_attempt",
+        "lowlat_route_attempt",
         json!({"route":if carrier.is_some() {"TURN relay"} else {"Direct"}, "requested_turn_transport":carrier}),
     );
 }
@@ -498,7 +504,7 @@ fn run(
     crate::event_log::record(
         "INFO",
         "video_capabilities_declared",
-        json!({"transport":"BUD","flags":8 | u32::from(hevc_available) | if ten_bit {16} else {0} | if chroma_444 {2} else {0},"hevc":hevc_available,"main10":ten_bit,"chroma_444":chroma_444,"chroma_444_requested":settings.experimental_chroma_444}),
+        json!({"transport":"lowlat","flags":8 | u32::from(hevc_available) | if ten_bit {16} else {0} | if chroma_444 {2} else {0},"hevc":hevc_available,"main10":ten_bit,"chroma_444":chroma_444,"chroma_444_requested":settings.experimental_chroma_444}),
     );
     let hid_generation;
     let (mut media, mut session, statistics) = {
@@ -509,7 +515,7 @@ fn run(
         // Creation only starts the existing workers. Surface/stats generation
         // is serialized against retirement, so a cancelled old attempt cannot
         // hide the next attempt's video or reset its statistics.
-        let (media, session) = crate::bud_media::Media::start_verified(
+        let (media, session) = crate::lowlat_media::Media::start_verified(
             window.clone(),
             hevc_available,
             ten_bit,
@@ -530,7 +536,7 @@ fn run(
             crate::event_log::record(
                 "INFO",
                 "hid_input_enabled",
-                json!({"transport":"BUD","device":device,"experimental":true}),
+                json!({"transport":"lowlat","device":device,"experimental":true}),
             );
         }
     }
@@ -566,7 +572,7 @@ fn run(
             *stage = "establishment_deadline";
         }
         let mut guard = shared_session.lock().unwrap_or_else(|e| e.into_inner());
-        let session = guard.as_mut().context("BUD session retired")?;
+        let session = guard.as_mut().context("LOWLAT session retired")?;
         let mut ended = !established && Instant::now() >= deadline;
         for _ in 0..64 {
             let Ok(text) = incoming.try_recv() else {
@@ -579,11 +585,11 @@ fn run(
             }
             *stage = "native_signal_processing";
             if let Err(error) = signaling.receive(&text, session) {
-                let native = error.downcast_ref::<evoparseq_bud::bud::AnswerFailure>();
+                let native = error.downcast_ref::<evoparseq_lowlat::lowlat::AnswerFailure>();
                 let io = native.and_then(|e| e.io_details());
                 crate::event_log::record(
                     "ERROR",
-                    "bud_signaling_failed",
+                    "lowlat_signaling_failed",
                     json!({
                     "native_error":native.map(|e|e.code()), "io_stage":io.map(|e|e.0),
                     "io_kind":io.map(|e|format!("{:?}",e.1)), "os_error":io.and_then(|e|e.2)}),
@@ -637,7 +643,7 @@ fn run(
                     crate::event_log::record(
                         "WARN",
                         "host_timing_request_failed",
-                        json!({"transport":"BUD"}),
+                        json!({"transport":"lowlat"}),
                     );
                 } else if !desired {
                     timing_active = false;
@@ -701,7 +707,7 @@ fn run(
             }
             ensure!(
                 shared.events.len() < 64 && shared.controls.len() < 64,
-                "BUD application queue full"
+                "LOWLAT application queue full"
             );
             match event {
                 Event::IoFailure {
@@ -711,7 +717,7 @@ fn run(
                 } => {
                     crate::event_log::record(
                         "ERROR",
-                        "bud_transport_failed",
+                        "lowlat_transport_failed",
                         json!({"stage":stage.name(), "io_kind":format!("{kind:?}"), "os_error":os_error}),
                     );
                 }
@@ -720,7 +726,7 @@ fn run(
                     *stage = "transport_established";
                     crate::event_log::record(
                         "INFO",
-                        "bud_connection_established",
+                        "lowlat_connection_established",
                         json!({"route":if transport.relay {"TURN relay"} else {"Direct"},
                             "turn_transport":transport.relay_transport}),
                     );
@@ -736,7 +742,7 @@ fn run(
                     *stage = reason;
                     crate::event_log::record(
                         "WARN",
-                        "bud_connection_ended",
+                        "lowlat_connection_ended",
                         json!({"reason":reason,"host_status":host_status,"attempt_route":if direct_attempt {"Direct"} else {"TURN relay"},"turn_transport":transport.relay_transport}),
                     );
                     ended = true;
@@ -765,17 +771,17 @@ fn run(
                 statistics.generation,
                 crate::stats::Sample {
                     state: if established {
-                        "Connected (BUD)"
+                        "Connected (LOWLAT)"
                     } else {
-                        "Connecting (BUD)"
+                        "Connecting (LOWLAT)"
                     }
                     .into(),
-                    bud: Some(transport.clone()),
+                    lowlat: Some(transport.clone()),
                     rtt_ms: transport.rtt_ms,
                     received: Some(transport.udp_received),
                     sent: Some(transport.udp_sent),
                     dtls: String::new(),
-                    protocol: "BUD / UDP".into(),
+                    protocol: "LOWLAT / UDP".into(),
                     route: if transport.connected {
                         if transport.relay {
                             "TURN relay"
@@ -836,7 +842,7 @@ fn run(
             let relay = relay_routes
                 .as_mut()
                 .and_then(VecDeque::pop_front)
-                .context("BUD configured routes exhausted")?;
+                .context("LOWLAT configured routes exhausted")?;
             direct_attempt = false;
             timing_requests = Default::default();
             timing_active = false;
@@ -859,7 +865,7 @@ fn run(
             // local SDK acceptance does not establish service compatibility.
             wire_id = native_attempt_id()?;
             last_cursor_capture = None;
-            let mut next = crate::bud_media::session(
+            let mut next = crate::lowlat_media::session(
                 hevc_available,
                 ten_bit,
                 chroma_444,
@@ -890,7 +896,7 @@ fn run(
             deadline = Instant::now() + Duration::from_secs(30);
             continue;
         }
-        ensure!(!ended, "BUD transport ended");
+        ensure!(!ended, "LOWLAT transport ended");
         if pumped.more_pending() {
             continue;
         }
@@ -958,7 +964,7 @@ mod tests {
         let bus = std::sync::Arc::new(crate::stats::Shared::default());
         let statistics = super::Statistics::start(bus.clone());
         bus.host_timing.set_requested(statistics.generation, true);
-        let event = evoparseq_bud::bud::Event::ExternalControl {
+        let event = evoparseq_lowlat::lowlat::Event::ExternalControl {
             bytes: crate::frame_timing::tests::packet(1, 0, &[8., 0., 20.]),
         };
         for _ in 0..10_000 {
@@ -972,8 +978,11 @@ mod tests {
                 .count,
             10_000
         );
-        assert!(!statistics
-            .consume_timing(&evoparseq_bud::bud::Event::ExternalControl { bytes: vec![0; 13] }));
+        assert!(
+            !statistics.consume_timing(&evoparseq_lowlat::lowlat::Event::ExternalControl {
+                bytes: vec![0; 13]
+            })
+        );
         let newer = super::Statistics::start(bus.clone());
         bus.host_timing.set_requested(newer.generation, true);
         assert!(statistics.consume_timing(&event));
@@ -985,7 +994,7 @@ mod tests {
     use super::*;
     #[test]
     fn turn_urls_prefer_udp_then_tls_then_tcp80_without_rewriting_ports() {
-        use evoparseq_bud::bud::RelayTransport;
+        use evoparseq_lowlat::lowlat::RelayTransport;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1053,7 +1062,7 @@ mod tests {
         )
     }
     #[test]
-    fn old_bud_shutdown_cannot_replace_new_stats_or_show_webrtc_fields() {
+    fn old_lowlat_shutdown_cannot_replace_new_stats_or_show_webrtc_fields() {
         let shared = Arc::new(crate::stats::Shared::default());
         let old = Statistics::start(shared.clone());
         let current = Statistics::start(shared.clone());
@@ -1062,11 +1071,11 @@ mod tests {
         let sample = shared.read().unwrap();
         assert_eq!(sample.generation, generation);
         assert!(sample.state.starts_with("Connecting"));
-        assert!(sample.bud.is_some());
+        assert!(sample.lowlat.is_some());
         drop(current);
         let sample = shared.read().unwrap();
         assert!(sample.state.starts_with("Disconnected"));
-        assert!(!sample.bud.unwrap().connected);
+        assert!(!sample.lowlat.unwrap().connected);
         assert!(sample.video.is_none());
     }
 
@@ -1196,12 +1205,12 @@ mod tests {
     }
 
     #[test]
-    fn bud_is_explicit_and_default_settings_remain_webrtc() {
+    fn lowlat_is_explicit_and_default_settings_remain_webrtc() {
         let settings: crate::connection_settings::Settings = serde_json::from_str("{}").unwrap();
-        assert!(!settings.bud);
+        assert!(!settings.lowlat);
         let settings: crate::connection_settings::Settings =
             serde_json::from_str(r#"{"bud":true}"#).unwrap();
-        assert!(settings.bud);
+        assert!(settings.lowlat);
     }
 
     #[test]

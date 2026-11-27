@@ -4,7 +4,7 @@
 pub(crate) mod controls;
 use crate::connection_settings::Manager;
 use crate::settings_model::{
-    AiUpscaler, BinaryChoice, Form, InputMode, RouteMode, Tab, VideoFormat,
+    AiUpscaler, BinaryChoice, Feature, Form, InputMode, RouteMode, Tab, VideoFormat,
 };
 use std::{
     ptr::{null, null_mut},
@@ -46,9 +46,13 @@ const FORGET_TOKEN: usize = 4114;
 const STATUS: usize = 4115;
 const GPU: usize = 4116;
 const VIDEO_FORMAT: usize = 4117;
-#[cfg(feature = "bud")]
-const BUD: usize = 4119;
-const BUD_EXTRA: i32 = if cfg!(feature = "bud") { 94 } else { 0 };
+const MIRROR_DISPLAY: usize = 4141;
+const VIRTUAL_DISPLAY_COUNT: usize = 4142;
+const FIRST_VIRTUAL_DISPLAY_RESOLUTION: usize = 4143;
+const LAST_VIRTUAL_DISPLAY_RESOLUTION: usize = 4146;
+#[cfg(feature = "lowlat")]
+const LOWLAT: usize = 4119;
+const LOWLAT_EXTRA: i32 = if cfg!(feature = "lowlat") { 94 } else { 0 };
 #[cfg(feature = "vendor-video")]
 const ZERO_COPY: usize = 4120;
 const BG: u32 = crate::branding::BACKGROUND;
@@ -68,6 +72,7 @@ const TCP_QOS: usize = 4138;
 const AUDIO_TAB: usize = 4124;
 const INPUT_TAB: usize = 4129;
 const INPUT_MODE: usize = 4130;
+const IMMERSIVE: usize = 4140;
 const AUDIO_CUSTOM: usize = 4125;
 const AUDIO_MIN: usize = 4126;
 const AUDIO_MAX: usize = 4127;
@@ -85,6 +90,7 @@ struct Item {
     rect: RECT,
     group: u8,
     tab: Option<Tab>,
+    feature: Feature,
 }
 struct Page {
     window_owned: bool,
@@ -100,6 +106,7 @@ struct Page {
     small: HFONT,
     items: Vec<Item>,
     building_tab: Option<Tab>,
+    building_feature: Feature,
     scroll: i32,
     reflowing: bool,
 }
@@ -149,7 +156,14 @@ pub unsafe fn install_menu(parent: HWND) {
     SetMenu(parent, menu);
     DrawMenuBar(parent);
 }
+/// Reuse the canonical form with the selected service's implemented controls.
+pub unsafe fn open_phaze(parent: HWND, manager: Arc<Manager>) -> HWND {
+    open_mode(parent, manager, true)
+}
 pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
+    open_mode(parent, manager, false)
+}
+unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
     let name = wide("EvoParseqSettings");
     let instance = GetModuleHandleW(null());
     let class = WNDCLASSW {
@@ -161,10 +175,12 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     };
     RegisterClassW(&class);
     let (saved, error) = manager.view();
+    let mut model = Form::new(saved, crate::video_windows::video_gpu_vendor(None));
+    model.phaze = phaze;
     let mut page = Box::new(Page {
         window_owned: false,
         manager,
-        model: Form::new(saved, crate::video_windows::video_gpu_vendor(None)),
+        model,
         gpu_labels: vec!["Automatic (Windows default)".into()],
         ai_upscaler: None,
         ai_hint: null_mut(),
@@ -175,6 +191,7 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         small: font(crate::app_style::settings::SMALL, 400),
         items: Vec::new(),
         building_tab: None,
+        building_feature: Feature::Common,
         scroll: 0,
         reflowing: false,
     });
@@ -291,6 +308,7 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         page.font,
     );
     page.building_tab = Some(Tab::Network);
+    page.building_feature = Feature::ParsecNetwork;
     row(
         hwnd,
         page,
@@ -303,11 +321,12 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         0,
         ES_MULTILINE as u32 | ES_WANTRETURN as u32 | ES_AUTOVSCROLL as u32 | WS_CLIPCHILDREN,
     );
+    page.building_feature = Feature::Common;
     row_label(
         hwnd,
         page,
         crate::app_style::forms::CONNECTION_ROUTE.label,
-        crate::app_style::forms::CONNECTION_ROUTE.help,
+        page.model.route_help(),
         344,
         0,
         40,
@@ -317,14 +336,14 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         page,
         ROUTE_MODE,
         344,
-        &RouteMode::LABELS,
+        page.model.route_labels(),
         RouteMode::current(&s) as usize,
     );
     row_label(
         hwnd,
         page,
         crate::app_style::forms::TURN_PROVIDER.label,
-        crate::app_style::forms::TURN_PROVIDER.help,
+        page.model.provider_help(),
         418,
         0,
         40,
@@ -553,7 +572,7 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         hwnd,
         page,
         crate::app_style::forms::VIDEO_FORMAT.label,
-        crate::app_style::forms::VIDEO_FORMAT.help,
+        page.model.video_format_help(),
         344,
         0,
         48,
@@ -563,8 +582,12 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         page,
         VIDEO_FORMAT,
         344,
-        &VideoFormat::LABELS,
-        VideoFormat::current(&s) as usize,
+        if page.model.phaze {
+            &VideoFormat::LABELS[..2]
+        } else {
+            &VideoFormat::LABELS
+        },
+        (VideoFormat::current(&s) as usize).min(page.model.video_formats().len() - 1),
     );
     row_label(
         hwnd,
@@ -605,7 +628,7 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
             hwnd,
             page,
             crate::app_style::forms::CHROMA.label,
-            crate::app_style::forms::CHROMA.help,
+            page.model.chroma_help(),
             438,
             0,
             60,
@@ -655,8 +678,47 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         page.font,
     );
     controls::combo(ai);
+    if page.model.phaze {
+        use crate::app_style::forms;
+        use evoparseq_host_interop::display_layout::{DisplayCount, Resolution, MIRROR_CHOICES};
+        let display = s.phaze_display_layout;
+        let resolutions = Resolution::labels();
+        for (id, row, labels, selected) in [
+            (
+                MIRROR_DISPLAY,
+                forms::MIRROR_DISPLAY,
+                MIRROR_CHOICES,
+                usize::from(display.enabled),
+            ),
+            (
+                VIRTUAL_DISPLAY_COUNT,
+                forms::VIRTUAL_DISPLAY_COUNT,
+                DisplayCount::LABELS.as_slice(),
+                display.count.index(),
+            ),
+        ] {
+            row_label(hwnd, page, row.label, row.help, row.y, 0, row.help_height);
+            choice(hwnd, page, id, row.y, labels, selected);
+        }
+        for (index, (row, resolution)) in forms::VIRTUAL_DISPLAY_RESOLUTIONS
+            .into_iter()
+            .zip(display.resolutions())
+            .enumerate()
+        {
+            row_label(hwnd, page, row.label, row.help, row.y, 0, row.help_height);
+            choice(
+                hwnd,
+                page,
+                FIRST_VIRTUAL_DISPLAY_RESOLUTION + index,
+                row.y,
+                &resolutions,
+                resolution.index(),
+            );
+        }
+    }
     page.building_tab = Some(Tab::Network);
-    #[cfg(feature = "bud")]
+    page.building_feature = Feature::ParsecNetwork;
+    #[cfg(feature = "lowlat")]
     {
         row_label(
             hwnd,
@@ -674,7 +736,7 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
             "",
             CBS_DROPDOWNLIST as u32 | WS_VSCROLL | WS_TABSTOP,
             crate::app_style::settings::field(crate::app_style::settings::TRANSPORT_Y, 160),
-            BUD,
+            LOWLAT,
             0,
             page.font,
         );
@@ -682,17 +744,18 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
             SendMessageW(transport, CB_ADDSTRING, 0, wide(label).as_ptr() as isize);
         }
         controls::combo(transport);
-        check(hwnd, BUD, s.bud);
+        check(hwnd, LOWLAT, s.lowlat);
     }
     #[cfg(feature = "vendor-video")]
     {
         page.building_tab = Some(Tab::Video);
+        page.building_feature = Feature::Common;
         let y = 532;
         row_label(
             hwnd,
             page,
             crate::app_style::forms::VIDEO_PRESENTATION.label,
-            crate::app_style::forms::VIDEO_PRESENTATION.help,
+            page.model.presentation_help(),
             y,
             0,
             40,
@@ -701,23 +764,25 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         check(hwnd, ZERO_COPY, s.zero_copy);
     }
     page.building_tab = Some(Tab::Network);
+    page.building_feature = Feature::ParsecNetwork;
     row_label(
         hwnd,
         page,
         crate::app_style::forms::TCP_TLS_QOS.label,
         crate::app_style::forms::TCP_TLS_QOS.help,
-        844 + BUD_EXTRA,
+        844 + LOWLAT_EXTRA,
         0,
         60,
     );
-    binary_choice(hwnd, page, TCP_QOS, 844 + BUD_EXTRA);
+    binary_choice(hwnd, page, TCP_QOS, 844 + LOWLAT_EXTRA);
     check(hwnd, TCP_QOS, s.experimental_tcp_qos);
+    page.building_feature = Feature::Common;
     row_label(
         hwnd,
         page,
         crate::app_style::forms::EVENT_LOG.label,
         crate::app_style::forms::EVENT_LOG.help,
-        938 + BUD_EXTRA,
+        938 + LOWLAT_EXTRA,
         0,
         60,
     );
@@ -727,7 +792,7 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         "BUTTON",
         "Enable event logging",
         BS_AUTOCHECKBOX as u32 | WS_TABSTOP,
-        [420, 938 + BUD_EXTRA, 400, 36],
+        [420, 938 + LOWLAT_EXTRA, 400, 36],
         EVENT_LOG,
         0,
         page.font,
@@ -738,7 +803,7 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         hwnd,
         page,
         crate::app_style::forms::PLAYBACK_BUFFER.label,
-        crate::app_style::forms::PLAYBACK_BUFFER.help,
+        page.model.audio_buffer_help(),
         242,
         0,
         48,
@@ -769,17 +834,19 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         0,
         ES_NUMBER as u32,
     );
+    page.building_feature = Feature::RawAudio;
     row_label(
         hwnd,
         page,
         crate::app_style::forms::AUDIO_FORMAT.label,
-        crate::app_style::forms::AUDIO_FORMAT.help,
+        page.model.audio_format_help(),
         532,
         0,
         60,
     );
     binary_choice(hwnd, page, AUDIO_RAW, 532);
     check(hwnd, AUDIO_RAW, s.allow_raw_audio);
+    page.building_feature = Feature::SurroundAudio;
     row_label(
         hwnd,
         page,
@@ -792,6 +859,7 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
     binary_choice(hwnd, page, AUDIO_SURROUND, 630);
     check(hwnd, AUDIO_SURROUND, s.experimental_surround_audio);
     page.building_tab = Some(Tab::Input);
+    page.building_feature = Feature::Hid;
     row_label(
         hwnd,
         page,
@@ -807,17 +875,22 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         INPUT_MODE,
         242,
         &InputMode::LABELS,
-        InputMode::current(&s) as usize,
+        InputMode::for_service(&s, page.model.phaze) as usize,
     );
     row_label(
         hwnd,
         page,
         crate::app_style::forms::HID_REQUIREMENTS.label,
-        crate::app_style::forms::HID_REQUIREMENTS.help,
+        if page.model.phaze {
+            "Allow USB devices from clients on the Phaze host. HID mouse uses the primary display."
+        } else {
+            crate::app_style::forms::HID_REQUIREMENTS.help
+        },
         354,
         0,
         64,
     );
+    page.building_feature = Feature::ParsecNetwork;
     row_label(
         hwnd,
         page,
@@ -828,10 +901,38 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         64,
     );
 
+    page.building_feature = Feature::Common;
+    let capture_y = if page.model.phaze { 466 } else { 580 };
+    row_label(
+        hwnd,
+        page,
+        "Input capture",
+        "Choose which local input remains inside the stream window.",
+        capture_y,
+        0,
+        48,
+    );
+    choice(
+        hwnd,
+        page,
+        IMMERSIVE,
+        capture_y,
+        &crate::input_state::IMMERSIVE_LABELS,
+        crate::input_state::immersive_index(s.native_core.video.immersive),
+    );
     page.building_tab = None;
-    add(hwnd, page, "STATIC",
-        "ICE chooses the route automatically unless Force TURN relay is enabled.\nChanges apply to your next connection.",
-        0, [0, 1056 + BUD_EXTRA, 820, 64], NOTICE, 0, page.small);
+    page.building_feature = Feature::Common;
+    add(
+        hwnd,
+        page,
+        "STATIC",
+        page.model.notice(),
+        0,
+        [0, 1056 + LOWLAT_EXTRA, 820, 64],
+        NOTICE,
+        0,
+        page.small,
+    );
     page.model.feedback = error.unwrap_or_else(|| {
         "Saved in settings.json. Secrets are protected for your Windows user.".into()
     });
@@ -842,7 +943,7 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         "STATIC",
         &status,
         0,
-        [0, 1118 + BUD_EXTRA, 820, 40],
+        [0, 1118 + LOWLAT_EXTRA, 820, 40],
         STATUS,
         0,
         page.small,
@@ -855,7 +956,10 @@ pub unsafe fn open(parent: HWND, manager: Arc<Manager>) -> HWND {
         null_mut(),
         RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW,
     );
-    SetFocus(GetDlgItem(hwnd, STUN as i32));
+    SetFocus(GetDlgItem(
+        hwnd,
+        if page.model.phaze { ROUTE_MODE } else { STUN } as i32,
+    ));
     hwnd
 }
 #[allow(clippy::too_many_arguments)] // Native control descriptors, UI-thread only.
@@ -882,6 +986,7 @@ unsafe fn add(
         },
         group,
         tab: page.building_tab,
+        feature: page.building_feature,
     });
     hwnd
 }
@@ -961,9 +1066,28 @@ unsafe fn layout(hwnd: HWND) {
     GetClientRect(hwnd, &mut client);
     let cloudflare = SendMessageW(GetDlgItem(hwnd, PROVIDER as i32), CB_GETCURSEL, 0, 0) == 1;
     let footer = match page.model.active_tab {
-        Tab::Network => 1056 + BUD_EXTRA,
-        Tab::Audio => 750,
-        Tab::Input => 570,
+        Tab::Network => {
+            if page.model.phaze {
+                860
+            } else {
+                1056 + LOWLAT_EXTRA
+            }
+        }
+        Tab::Audio => {
+            if page.model.phaze {
+                626
+            } else {
+                750
+            }
+        }
+        Tab::Input => {
+            if page.model.phaze {
+                580
+            } else {
+                680
+            }
+        }
+        Tab::Video if page.model.phaze => crate::app_style::forms::PHAZE_VIDEO_FOOTER,
         Tab::Video => 1034,
     };
     let height = footer + 138 + HEADER_EXTRA;
@@ -983,9 +1107,15 @@ unsafe fn layout(hwnd: HWND) {
     GetClientRect(hwnd, &mut client);
     let x = ((client.right - 820) / 2).max(24);
     for item in &page.items {
-        let visible = item.tab.is_none_or(|tab| tab == page.model.active_tab)
+        let visible = page.model.supports(item.feature)
+            && item.tab.is_none_or(|tab| tab == page.model.active_tab)
             && (item.group == 0 || item.group == if cloudflare { CLOUDFLARE } else { CUSTOM });
         let mut r = item.rect;
+        if page.model.phaze && item.tab == Some(Tab::Network) {
+            let top = crate::app_style::settings::phaze_network_y(r.top, LOWLAT_EXTRA);
+            r.bottom += top - r.top;
+            r.top = top;
+        }
         let id = GetDlgCtrlID(item.hwnd) as usize;
         let new_top = match id {
             NOTICE => Some(footer),
@@ -1144,30 +1274,59 @@ unsafe fn choice(hwnd: HWND, page: &mut Page, id: usize, y: i32, labels: &[&str]
     select(hwnd, id, selected);
 }
 unsafe fn binary_choice(hwnd: HWND, page: &mut Page, id: usize, y: i32) {
-    let labels = binary_choice_kind(id)
-        .expect("binary mode binding")
-        .labels();
+    let labels = if id == AUDIO_RAW {
+        page.model.audio_format_labels()
+    } else {
+        binary_choice_kind(id)
+            .expect("binary mode binding")
+            .labels()
+    };
     choice(hwnd, page, id, y, &labels, 0);
 }
 fn mode_combo(id: usize) -> bool {
-    matches!(id, VIDEO_FORMAT | INPUT_MODE | ROUTE_MODE) || binary_choice_kind(id).is_some()
+    matches!(
+        id,
+        VIDEO_FORMAT
+            | INPUT_MODE
+            | ROUTE_MODE
+            | IMMERSIVE
+            | MIRROR_DISPLAY
+            | VIRTUAL_DISPLAY_COUNT
+            | FIRST_VIRTUAL_DISPLAY_RESOLUTION..=LAST_VIRTUAL_DISPLAY_RESOLUTION
+    ) || binary_choice_kind(id).is_some()
 }
-fn mode_label(id: usize, index: u32) -> &'static str {
+fn mode_label(id: usize, index: u32, model: &Form) -> &'static str {
     let index = index as usize;
     if id == VIDEO_FORMAT {
         VideoFormat::LABELS.get(index).copied()
+    } else if id == MIRROR_DISPLAY {
+        evoparseq_host_interop::display_layout::MIRROR_CHOICES
+            .get(index)
+            .copied()
+    } else if id == VIRTUAL_DISPLAY_COUNT {
+        evoparseq_host_interop::display_layout::DisplayCount::LABELS
+            .get(index)
+            .copied()
+    } else if (FIRST_VIRTUAL_DISPLAY_RESOLUTION..=LAST_VIRTUAL_DISPLAY_RESOLUTION).contains(&id) {
+        evoparseq_host_interop::display_layout::Resolution::labels()
+            .get(index)
+            .copied()
     } else if id == INPUT_MODE {
         InputMode::LABELS.get(index).copied()
+    } else if id == IMMERSIVE {
+        crate::input_state::IMMERSIVE_LABELS.get(index).copied()
     } else if id == ROUTE_MODE {
-        RouteMode::LABELS.get(index).copied()
+        model.route_labels().get(index).copied()
+    } else if id == AUDIO_RAW {
+        model.audio_format_labels().get(index).copied()
     } else {
         binary_choice_kind(id).and_then(|kind| kind.labels().get(index).copied())
     }
     .unwrap_or_default()
 }
 fn binary_combo(id: usize) -> bool {
-    #[cfg(feature = "bud")]
-    if id == BUD {
+    #[cfg(feature = "lowlat")]
+    if id == LOWLAT {
         return true;
     }
     binary_choice_kind(id).is_some()
@@ -1205,6 +1364,16 @@ unsafe fn checked(hwnd: HWND, id: usize) -> bool {
 // to the shared model. This runs on user edits/saving, never on a media frame.
 unsafe fn read_options(hwnd: HWND, page: &mut Page) {
     let model = &mut page.model;
+    if let Some(mode) = RouteMode::ALL.get(selection(hwnd, ROUTE_MODE)) {
+        mode.apply(&mut model.values);
+    }
+    model.values.provider =
+        if SendMessageW(GetDlgItem(hwnd, PROVIDER as i32), CB_GETCURSEL, 0, 0) == 1 {
+            "cloudflare"
+        } else {
+            "custom"
+        }
+        .into();
     model.gpu_selection = usize::try_from(SendMessageW(
         GetDlgItem(hwnd, GPU as i32),
         CB_GETCURSEL,
@@ -1212,27 +1381,39 @@ unsafe fn read_options(hwnd: HWND, page: &mut Page) {
         0,
     ))
     .ok();
+    let format = model
+        .video_formats()
+        .get(selection(hwnd, VIDEO_FORMAT))
+        .copied();
     let s = &mut model.values;
-    if let Some(mode) = VideoFormat::ALL.get(selection(hwnd, VIDEO_FORMAT)) {
+    if let Some(mode) = format {
         mode.apply(s);
+    }
+    if model.phaze {
+        use evoparseq_host_interop::display_layout::{DisplayCount, Resolution};
+        let display = &mut s.phaze_display_layout;
+        display.enabled = selection(hwnd, MIRROR_DISPLAY) == 1;
+        if let Some(&count) = DisplayCount::ALL.get(selection(hwnd, VIRTUAL_DISPLAY_COUNT)) {
+            display.count = count;
+        }
+        for (index, id) in
+            (FIRST_VIRTUAL_DISPLAY_RESOLUTION..=LAST_VIRTUAL_DISPLAY_RESOLUTION).enumerate()
+        {
+            if let Some(resolution) = Resolution::from_index(selection(hwnd, id)) {
+                display.set_resolution(index, resolution);
+            }
+        }
     }
     s.experimental_chroma_444 = checked(hwnd, CHROMA_444);
     if let Some(backend) = page.ai_upscaler {
         backend.apply(s, selection(hwnd, AI_UPSCALE));
     }
     s.custom_audio_buffer = checked(hwnd, AUDIO_CUSTOM);
-    if let Some(mode) = RouteMode::ALL.get(selection(hwnd, ROUTE_MODE)) {
-        mode.apply(s);
-    }
-    s.provider = if SendMessageW(GetDlgItem(hwnd, PROVIDER as i32), CB_GETCURSEL, 0, 0) == 1 {
-        "cloudflare"
-    } else {
-        "custom"
-    }
-    .into();
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     {
-        s.bud = checked(hwnd, BUD);
+        if !model.phaze {
+            s.lowlat = checked(hwnd, LOWLAT);
+        }
     }
 }
 unsafe fn update_enabled(hwnd: HWND) {
@@ -1260,11 +1441,11 @@ unsafe fn update_enabled(hwnd: HWND) {
     }
     check(hwnd, CHROMA_444, page.model.values.experimental_chroma_444);
     for (id, on) in [
-        (INPUT_MODE, enabled.bud),
+        (INPUT_MODE, enabled.lowlat || page.model.phaze),
         (AUDIO_MIN, enabled.audio_limits),
         (AUDIO_MAX, enabled.audio_limits),
-        (AUDIO_RAW, enabled.bud),
-        (AUDIO_SURROUND, enabled.bud),
+        (AUDIO_RAW, enabled.lowlat || page.model.phaze),
+        (AUDIO_SURROUND, enabled.lowlat),
         (CHROMA_444, enabled.chroma_444),
         (AI_UPSCALE, enabled.ai_upscale),
         (TCP_QOS, enabled.relay),
@@ -1288,35 +1469,63 @@ unsafe fn update_enabled(hwnd: HWND) {
             i32::from(enabled.zero_copy),
         );
     }
+    if page.model.phaze {
+        let display = page.model.values.phaze_display_layout;
+        EnableWindow(
+            GetDlgItem(hwnd, VIRTUAL_DISPLAY_COUNT as i32),
+            i32::from(display.enabled),
+        );
+        for (index, id) in
+            (FIRST_VIRTUAL_DISPLAY_RESOLUTION..=LAST_VIRTUAL_DISPLAY_RESOLUTION).enumerate()
+        {
+            EnableWindow(
+                GetDlgItem(hwnd, id as i32),
+                i32::from(display.requests(index)),
+            );
+        }
+        for id in [STUN, TCP_QOS] {
+            EnableWindow(GetDlgItem(hwnd, id as i32), 0);
+        }
+        #[cfg(feature = "lowlat")]
+        EnableWindow(GetDlgItem(hwnd, LOWLAT as i32), 0);
+    }
     layout(hwnd);
 }
 unsafe fn save(hwnd: HWND, page: &mut Page) {
     read_options(hwnd, page);
     let model = &mut page.model;
-    let vsr_available =
-        model.ai_upscaler() == AiUpscaler::Nvidia && model.availability().ai_upscale;
     let s = &mut model.values;
-    s.native_core.hide_session_button = checked(hwnd, HIDE_SESSION_BUTTON);
-    s.presentation_mode = crate::connection_settings::PresentationMode::from_index(SendMessageW(
-        GetDlgItem(hwnd, PRESENTATION as i32),
-        CB_GETCURSEL,
-        0,
-        0,
-    ) as usize);
-    s.allow_raw_audio = checked(hwnd, AUDIO_RAW);
-    s.experimental_surround_audio = checked(hwnd, AUDIO_SURROUND);
-    s.event_logging = checked(hwnd, EVENT_LOG);
-    s.experimental_tcp_qos = checked(hwnd, TCP_QOS);
-    #[cfg(feature = "vendor-video")]
     {
-        s.zero_copy = checked(hwnd, ZERO_COPY);
-    }
-    #[cfg(feature = "bud")]
-    {
-        if let Some(mode) = InputMode::ALL.get(selection(hwnd, INPUT_MODE)) {
-            mode.apply(s);
+        s.native_core.video.immersive =
+            crate::input_state::immersive_value(selection(hwnd, IMMERSIVE));
+        s.native_core.hide_session_button = checked(hwnd, HIDE_SESSION_BUTTON);
+        s.presentation_mode = crate::connection_settings::PresentationMode::from_index(
+            SendMessageW(GetDlgItem(hwnd, PRESENTATION as i32), CB_GETCURSEL, 0, 0) as usize,
+        );
+        s.allow_raw_audio = checked(hwnd, AUDIO_RAW);
+        if !model.phaze {
+            s.experimental_surround_audio = checked(hwnd, AUDIO_SURROUND);
+        }
+        s.event_logging = checked(hwnd, EVENT_LOG);
+        if !model.phaze {
+            s.experimental_tcp_qos = checked(hwnd, TCP_QOS);
+        }
+        #[cfg(feature = "vendor-video")]
+        {
+            s.zero_copy = checked(hwnd, ZERO_COPY);
+        }
+        // Phaze USB HID is independent of the optional Parsec LOWLAT backend.
+        if let Some(mode) = InputMode::ALL.get(selection(hwnd, INPUT_MODE)).copied() {
+            if model.phaze {
+                mode.apply_for_service(s, true);
+            }
+            #[cfg(feature = "lowlat")]
+            if !model.phaze {
+                mode.apply_for_service(s, false);
+            }
         }
     }
+    s.event_logging = checked(hwnd, EVENT_LOG);
     s.custom_username = text(hwnd, USERNAME);
     s.turn_key_id = text(hwnd, KEY);
     s.cache_credentials = checked(hwnd, CACHE);
@@ -1329,30 +1538,7 @@ unsafe fn save(hwnd: HWND, page: &mut Page) {
     model.token = zeroize::Zeroizing::new(text(hwnd, TOKEN));
     model.forget_password = checked(hwnd, FORGET_PASSWORD);
     model.forget_token = checked(hwnd, FORGET_TOKEN);
-    let needs_vsr = s.nvidia_vsr != 0 && vsr_available && !crate::vsr_runtime::present();
-    if needs_vsr && s.vsr_runtime_consent != crate::connection_settings::VsrRuntimeConsent::Allowed
-    {
-        let accepted = MessageBoxW(hwnd, wide("The NVIDIA VSR runtime is missing. Allow its verified download from NVIDIA on the next app start? Normal video remains available without it.").as_ptr(), wide("EvoParseq - NVIDIA VSR").as_ptr(), MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES;
-        if accepted {
-            s.vsr_runtime_consent = crate::connection_settings::VsrRuntimeConsent::Allowed;
-        } else {
-            s.nvidia_vsr = 0;
-            PostMessageW(
-                hwnd,
-                WM_COMMAND,
-                AI_UPSCALE | ((CBN_SELCHANGE as usize) << 16),
-                0,
-            );
-            SendMessageW(GetDlgItem(hwnd, AI_UPSCALE as i32), CB_SETCURSEL, 0, 0);
-        }
-    }
     if model.save(&page.manager) {
-        if needs_vsr
-            && model.values.vsr_runtime_consent
-                == crate::connection_settings::VsrRuntimeConsent::Allowed
-        {
-            model.feedback.push_str(crate::vsr_runtime::RESTART_HINT);
-        }
         PostMessageW(
             GetParent(hwnd),
             crate::native_core::session_ui::VISIBILITY,
@@ -1472,7 +1658,7 @@ unsafe extern "system" fn page_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LP
                             .cloned()
                             .unwrap_or_default()
                     } else if mode_combo(draw.CtlID as usize) {
-                        mode_label(draw.CtlID as usize, draw.itemID).into()
+                        mode_label(draw.CtlID as usize, draw.itemID, &page.model).into()
                     } else if draw.CtlID == NETWORK_TAB as u32 {
                         "Network".into()
                     } else if draw.CtlID == VIDEO_TAB as u32 {
@@ -1539,7 +1725,7 @@ unsafe extern "system" fn page_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LP
                     );
                     SetWindowTextW(
                         GetDlgItem(hwnd, NOTICE as i32),
-                        wide(page.model.active_tab.notice()).as_ptr(),
+                        wide(page.model.notice()).as_ptr(),
                     );
                     layout(hwnd);
                     return 0;
@@ -1565,7 +1751,9 @@ unsafe extern "system" fn page_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LP
                     return 0;
                 }
 
-                CHROMA_444 | AI_UPSCALE if (wp >> 16) as u32 == CBN_SELCHANGE => {
+                CHROMA_444 | AI_UPSCALE | MIRROR_DISPLAY | VIRTUAL_DISPLAY_COUNT
+                    if (wp >> 16) as u32 == CBN_SELCHANGE =>
+                {
                     update_enabled(hwnd);
                     return 0;
                 }
@@ -1573,8 +1761,8 @@ unsafe extern "system" fn page_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LP
                     update_enabled(hwnd);
                     return 0;
                 }
-                #[cfg(feature = "bud")]
-                BUD if (wp >> 16) as u32 == CBN_SELCHANGE => {
+                #[cfg(feature = "lowlat")]
+                LOWLAT if (wp >> 16) as u32 == CBN_SELCHANGE => {
                     update_enabled(hwnd);
                     return 0;
                 }
@@ -1717,8 +1905,8 @@ mod tests {
                 GetDlgItem(page, TOKEN as i32),
                 wide("fixture-token").as_ptr(),
             );
-            #[cfg(feature = "bud")]
-            check(page, BUD, true);
+            #[cfg(feature = "lowlat")]
+            check(page, LOWLAT, true);
             SendMessageW(page, WM_COMMAND, VIDEO_TAB, 0);
             assert_eq!(IsWindowVisible(GetDlgItem(page, PROVIDER as i32)), 0);
             assert_ne!(IsWindowVisible(GetDlgItem(page, GPU as i32)), 0);
@@ -1779,16 +1967,16 @@ mod tests {
             SendMessageW(page, WM_COMMAND, INPUT_TAB, 0);
             assert_ne!(IsWindowVisible(GetDlgItem(page, INPUT_MODE as i32)), 0);
             assert_eq!(IsWindowVisible(GetDlgItem(page, GPU as i32)), 0);
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             {
                 update_enabled(page);
                 assert_ne!(IsWindowEnabled(GetDlgItem(page, INPUT_MODE as i32)), 0);
                 select(page, INPUT_MODE, InputMode::HidMouse as usize);
-                check(page, BUD, false);
+                check(page, LOWLAT, false);
                 update_enabled(page);
                 assert_eq!(IsWindowEnabled(GetDlgItem(page, INPUT_MODE as i32)), 0);
                 assert_eq!(selection(page, INPUT_MODE), InputMode::HidMouse as usize);
-                check(page, BUD, true);
+                check(page, LOWLAT, true);
                 update_enabled(page);
             }
             assert_combo_label_visible(page, INPUT_MODE);
@@ -1850,9 +2038,9 @@ mod tests {
             assert_eq!(manager.view().0.audio_max_buffer_ms, 60);
             assert!(manager.view().0.allow_raw_audio);
             assert!(manager.view().0.experimental_surround_audio);
-            #[cfg(feature = "bud")]
-            assert!(manager.view().0.bud);
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
+            assert!(manager.view().0.lowlat);
+            #[cfg(feature = "lowlat")]
             assert!(manager.view().0.hid_mouse_enabled());
             assert_eq!(manager.view().0.stun_urls.len(), 2);
             assert_eq!(manager.view().0.turn_urls.len(), 2);
@@ -1894,7 +2082,7 @@ mod tests {
             #[cfg(feature = "vendor-video")]
             assert!(checked(page, ZERO_COPY));
             assert_ne!(selection(page, VIDEO_FORMAT), VideoFormat::H264 as usize);
-            #[cfg(feature = "bud")]
+            #[cfg(feature = "lowlat")]
             assert_eq!(selection(page, INPUT_MODE), InputMode::HidMouse as usize);
             assert_eq!(
                 SendMessageW(GetDlgItem(page, GPU as i32), CB_GETCURSEL, 0, 0),
@@ -2163,5 +2351,116 @@ mod tests {
         DeleteObject(bitmap);
         DeleteDC(dc);
         (rect.right as u32, rect.bottom as u32, rgba)
+    }
+    #[test]
+    fn phaze_pages_expose_shared_controls_without_parsec_protocol_options() {
+        let directory = std::env::temp_dir().join(format!(
+            "evoparseq-host-interop-network-{}",
+            crate::lowlat_attempt::native_attempt_id().unwrap()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let manager = Manager::open(directory.join("settings.json"));
+        unsafe {
+            let parent = CreateWindowExW(
+                0,
+                wide("STATIC").as_ptr(),
+                wide("Isolated Phaze settings fixture").as_ptr(),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                1000,
+                900,
+                null_mut(),
+                null_mut(),
+                GetModuleHandleW(null()),
+                null(),
+            );
+            assert!(!parent.is_null());
+            let page = open_phaze(parent, manager.clone());
+            assert!(!page.is_null());
+            for id in [STUN, TCP_QOS] {
+                assert_eq!(IsWindowEnabled(GetDlgItem(page, id as i32)), 0);
+            }
+            assert_ne!(IsWindowEnabled(GetDlgItem(page, TURN as i32)), 0);
+            SendMessageW(page, WM_COMMAND, VIDEO_TAB, 0);
+            let state = &*(GetWindowLongPtrW(page, GWLP_USERDATA) as *const Page);
+            assert!(state.model.active_tab == Tab::Video);
+            assert_eq!(
+                SendMessageW(GetDlgItem(page, VIDEO_FORMAT as i32), CB_GETCOUNT, 0, 0),
+                2
+            );
+            assert_ne!(
+                GetWindowLongW(GetDlgItem(page, GPU as i32), GWL_STYLE) as u32 & WS_VISIBLE,
+                0
+            );
+            assert_no_overlaps(page);
+            capture(page, "phaze-video");
+            let resolution = GetDlgItem(page, FIRST_VIRTUAL_DISPLAY_RESOLUTION as i32);
+            let second_resolution = GetDlgItem(page, (FIRST_VIRTUAL_DISPLAY_RESOLUTION + 1) as i32);
+            assert!(!resolution.is_null());
+            assert_eq!(IsWindowEnabled(resolution), 0);
+            select(page, MIRROR_DISPLAY, 1);
+            SendMessageW(
+                page,
+                WM_COMMAND,
+                MIRROR_DISPLAY | ((CBN_SELCHANGE as usize) << 16),
+                0,
+            );
+            assert_ne!(IsWindowEnabled(resolution), 0);
+            assert_eq!(IsWindowEnabled(second_resolution), 0);
+            select(page, VIRTUAL_DISPLAY_COUNT, 1);
+            SendMessageW(
+                page,
+                WM_COMMAND,
+                VIRTUAL_DISPLAY_COUNT | ((CBN_SELCHANGE as usize) << 16),
+                0,
+            );
+            assert_ne!(IsWindowEnabled(second_resolution), 0);
+            SendMessageW(page, WM_COMMAND, AUDIO_TAB, 0);
+            assert_ne!(
+                GetWindowLongW(GetDlgItem(page, AUDIO_CUSTOM as i32), GWL_STYLE) as u32
+                    & WS_VISIBLE,
+                0
+            );
+            assert_ne!(
+                GetWindowLongW(GetDlgItem(page, AUDIO_RAW as i32), GWL_STYLE) as u32 & WS_VISIBLE,
+                0
+            );
+            assert_ne!(IsWindowEnabled(GetDlgItem(page, AUDIO_RAW as i32)), 0);
+            let state = &*(GetWindowLongPtrW(page, GWLP_USERDATA) as *const Page);
+            assert_eq!(mode_label(AUDIO_RAW, 0, &state.model), "AAC-LC");
+            assert_eq!(mode_label(AUDIO_RAW, 1, &state.model), "Uncompressed PCM");
+            assert_eq!(
+                GetWindowLongW(GetDlgItem(page, AUDIO_SURROUND as i32), GWL_STYLE) as u32
+                    & WS_VISIBLE,
+                0
+            );
+            assert_no_overlaps(page);
+            capture(page, "phaze-audio");
+            SendMessageW(page, WM_COMMAND, INPUT_TAB, 0);
+            assert_ne!(
+                GetWindowLongW(GetDlgItem(page, INPUT_MODE as i32), GWL_STYLE) as u32 & WS_VISIBLE,
+                0
+            );
+            assert_ne!(IsWindowEnabled(GetDlgItem(page, INPUT_MODE as i32)), 0);
+            select(page, INPUT_MODE, InputMode::HidBoth as usize);
+            assert_ne!(
+                GetWindowLongW(GetDlgItem(page, IMMERSIVE as i32), GWL_STYLE) as u32 & WS_VISIBLE,
+                0
+            );
+            assert_no_overlaps(page);
+            capture(page, "phaze-input");
+            SendMessageW(page, WM_COMMAND, NETWORK_TAB, 0);
+            assert_no_overlaps(page);
+            capture(page, "phaze-network");
+            check(page, AUDIO_RAW, true);
+            let state = &mut *(GetWindowLongPtrW(page, GWLP_USERDATA) as *mut Page);
+            save(page, state);
+            assert!(manager.view().0.allow_raw_audio);
+            assert_eq!(manager.view().0.phaze_input_mode, InputMode::HidBoth);
+            DestroyWindow(page);
+            DestroyWindow(parent);
+        }
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

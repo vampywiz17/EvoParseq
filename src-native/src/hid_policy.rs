@@ -1,5 +1,5 @@
 //! OS-free native HID normalization and verification gate. Only an explicitly
-//! selected BUD transport may enable this policy; release is always permitted.
+//! selected LOWLAT transport may enable this policy; release is always permitted.
 pub fn absolute_motion(
     frame: &[u8],
     viewport: Option<crate::viewport::Viewport>,

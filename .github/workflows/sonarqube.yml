@@ -51,9 +51,6 @@ jobs:
           Expand-Archive -LiteralPath $archive -DestinationPath $destination
           $destination | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           Install-Module Pester -RequiredVersion 5.7.1 -Repository PSGallery -Scope CurrentUser -Force -AllowClobber
-      - name: Prepare the normal optional vendor SDK
-        shell: pwsh
-        run: ./scripts/fetch-rtx-video-sdk.ps1 -Destination (Join-Path $env:RUNNER_TEMP 'rtx-video-sdk-1.1.0')
       - name: Measure actual Rust test execution
         shell: pwsh
         run: |
@@ -61,16 +58,22 @@ jobs:
           New-Item -ItemType Directory -Path coverage -Force | Out-Null
           cargo llvm-cov clean --workspace --manifest-path src-native/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw 'Instrumented workspace cleanup failed' }
-          cargo llvm-cov --locked --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --no-report -- --test-threads=1
+          # Instrument the host interoperability dependency too: the application
+          # tests exercise it without running tests for a separate package, and
+          # that measured execution must reach Sonar instead of being reported
+          # as unexecuted source.
+          cargo llvm-cov --locked --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --dep-coverage evoparseq-host-interop --no-report -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'Instrumented Rust tests failed' }
           # Foreground fixtures run separately to prevent other windows stealing focus.
           # Merge their actual execution, retaining the normal tests' profiles.
-          cargo llvm-cov --locked --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --no-report -- immersive_native_capture_lifecycle --ignored --test-threads=1
+          cargo llvm-cov --locked --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --dep-coverage evoparseq-host-interop --no-report -- immersive_native_capture_lifecycle --ignored --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'Instrumented foreground cursor fixture failed' }
-          cargo llvm-cov --locked --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --no-report -- additional_display_native_lifecycle --ignored --test-threads=1
+          cargo llvm-cov --locked --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --dep-coverage evoparseq-host-interop --no-report -- additional_display_native_lifecycle --ignored --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'Instrumented additional display fixture failed' }
           cargo llvm-cov report --manifest-path src-native/Cargo.toml --target x86_64-pc-windows-msvc --lcov --output-path coverage/rust-raw.info
           if ($LASTEXITCODE -ne 0) { throw 'Merged Rust coverage export failed' }
+          cargo llvm-cov --locked --manifest-path src-native/crates/host-interop/Cargo.toml --target x86_64-pc-windows-msvc --lcov --output-path coverage/host-interop-raw.info -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'Instrumented host interoperability tests failed' }
           # The package must contain the normal executable, never an instrumented build.
           cargo clean --manifest-path src-native/Cargo.toml --release -p libopus_sys
           if ($LASTEXITCODE -ne 0) { throw 'Release Opus cache reset failed' }
@@ -105,24 +108,28 @@ jobs:
           for line in lines:
               ET.SubElement(measured, 'lineToCover', lineNumber=line.attrib['nr'], covered=str(int(line.get('ci', '0')) > 0).lower())
           ET.ElementTree(generic).write('coverage/powershell.xml', encoding='utf-8', xml_declaration=True)
-          output = []
-          keep = False
-          for line in Path('coverage/rust-raw.info').read_text(encoding='utf-8').splitlines():
-              if line.startswith('SF:'):
-                  source = Path(line[3:])
-                  if not source.is_absolute():
-                      source = root / source
-                  try:
-                      relative = source.resolve().relative_to(root).as_posix()
-                  except ValueError:
-                      keep = False
-                      continue
-                  line = 'SF:' + relative
-                  keep = True
-              if keep:
-                  output.append(line)
-          assert any(line.startswith('SF:src-native/src/') for line in output), 'Missing native Rust coverage'
-          Path('coverage/rust.info').write_text('\n'.join(output) + '\n', encoding='utf-8')
+          def normalize_lcov(raw, report, required_source_prefix):
+              output = []
+              keep = False
+              for line in Path(raw).read_text(encoding='utf-8').splitlines():
+                  if line.startswith('SF:'):
+                      source = Path(line[3:])
+                      if not source.is_absolute():
+                          source = root / source
+                      try:
+                          relative = source.resolve().relative_to(root).as_posix()
+                      except ValueError:
+                          keep = False
+                          continue
+                      line = 'SF:' + relative
+                      keep = True
+                  if keep:
+                      output.append(line)
+              assert any(line.startswith('SF:' + required_source_prefix) for line in output), 'Missing measured Rust coverage'
+              Path(report).write_text('\n'.join(output) + '\n', encoding='utf-8')
+
+          normalize_lcov('coverage/rust-raw.info', 'coverage/rust.info', 'src-native/src/')
+          normalize_lcov('coverage/host-interop-raw.info', 'coverage/host-interop.info', 'src-native/crates/host-interop/src/')
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'Measured coverage conversion failed' }
       - name: Measure release scanner offline tests
@@ -175,9 +182,45 @@ jobs:
             -Dsonar.qualitygate.wait=true
             -Dsonar.qualitygate.timeout=600
             -Dsonar.coverageReportPaths=coverage/powershell.xml
-            -Dsonar.rust.lcov.reportPaths=coverage/rust.info
+            -Dsonar.rust.lcov.reportPaths=coverage/rust.info,coverage/host-interop.info
             -Dsonar.python.coverage.reportPaths=coverage/python.xml
             -Dsonar.tests=ci-tests
             -Dsonar.exclusions=ci-tests/**,coverage/**
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      # Keep the real Quality Gate enforced; log the failed metrics without
+      # changing thresholds or exposing the SONAR_TOKEN credential.
+      - name: Explain failed pull-request Quality Gate
+        if: failure() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          response="$(mktemp)"
+          trap 'rm -f "$response"' EXIT
+          if curl --fail --silent --show-error --max-time 30 \
+            -u "$SONAR_TOKEN:" \
+            --get 'https://sonarcloud.io/api/qualitygates/project_status' \
+            --data-urlencode 'projectKey=vampywiz17_EvoParseq' \
+            --data-urlencode "pullRequest=$PR_NUMBER" \
+            --output "$response"; then
+            python - "$response" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as file:
+              gate = json.load(file)["projectStatus"]
+          print("PR Quality Gate:", gate.get("status"))
+          for condition in gate.get("conditions", []):
+              print(" - {metricKey}: {status} actual={actualValue} threshold={errorThreshold}".format(**{
+                  "metricKey": condition.get("metricKey"),
+                  "status": condition.get("status"),
+                  "actualValue": condition.get("actualValue"),
+                  "errorThreshold": condition.get("errorThreshold"),
+              }))
+          PY
+          else
+            echo 'Could not retrieve SonarQube PR gate metrics; original scanner failure remains enforced.'
+          fi

@@ -188,6 +188,52 @@ pub struct NativeReceiver {
     state: Arc<Mutex<State>>,
 }
 
+/// Input for audio that the session protocol already decoded.
+#[cfg(not(windows))]
+pub struct DecodedPcm {
+    receiver: NativeReceiver,
+    budget: usize,
+}
+
+#[cfg(not(windows))]
+impl DecodedPcm {
+    pub fn stereo(maximum_ms: u32) -> Self {
+        Self {
+            receiver: NativeReceiver {
+                state: Arc::new(Mutex::new(State::default())),
+            },
+            budget: maximum_ms.clamp(1, 500) as usize * 96,
+        }
+    }
+
+    pub fn receiver(&self) -> NativeReceiver {
+        self.receiver.clone()
+    }
+
+    pub fn submit(&self, samples: &[i16], codec: &'static str) {
+        if samples.is_empty() || samples.len() > PCM_SAMPLES || !samples.len().is_multiple_of(2) {
+            return;
+        }
+        let mut state = self
+            .receiver
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut buffer = state
+            .callback
+            .as_mut()
+            .and_then(|callback| callback.recycled())
+            .or_else(|| state.free_pcm.pop())
+            .unwrap_or_default();
+        buffer.clear();
+        buffer.extend_from_slice(samples);
+        state.report.layout = Some(Layout::STEREO);
+        state.report.codec = Some(codec);
+        state.report.packets_decoded += 1;
+        stage_pcm(&mut state, buffer, self.budget);
+    }
+}
+
 fn snapshot(shared: &Mutex<State>) -> Snapshot {
     let state = shared.lock().unwrap_or_else(|e| e.into_inner());
     let mut report = state.report.clone();
@@ -564,6 +610,23 @@ impl Drop for Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_decoded_phaze_audio_uses_the_existing_callback_and_keeps_its_codec() {
+        let pcm = DecodedPcm::stereo(100);
+        let receiver = pcm.receiver();
+        let mut callback = receiver.callback_reader().unwrap();
+        pcm.submit(&[42, -42, 73, -73], "AAC-LC");
+        pcm.submit(&[1], "PCM s16le");
+        let mut output = [0; 4];
+        assert_eq!(callback.render(&mut output).frames, 2);
+        assert_eq!(output, [42, -42, 73, -73]);
+        let snapshot = receiver.snapshot();
+        assert_eq!(snapshot.codec, Some("AAC-LC"));
+        assert_eq!(snapshot.packets_decoded, 1);
+        assert_eq!(snapshot.layout, Some(Layout::STEREO));
+    }
 
     #[test]
     fn recovery_barrier_retires_staged_and_inflight_audio_without_stopping_decoder() {

@@ -72,7 +72,7 @@ Windows Presentation API timing; no host changes or custom host messages are use
   the same per-request HTTP worker, endpoint, validation and timeouts. Sign-in,
   two-factor authentication and protected-session storage remain unchanged.
 - `native_core/signaling.rs` and `transport.rs`: authenticated session signaling
-  and explicit BUD/WebRTC selection. Failure never silently changes transport.
+  and explicit lowlat/WebRTC selection. Failure never silently changes transport.
 - `native_core/session.rs`: session coordination uses desktop/runtime interfaces
   for fullscreen, input capture requests, cancellation, wake locks, clipboard,
   events and existing backend operations. Common event payloads live in
@@ -99,7 +99,7 @@ Windows Presentation API timing; no host changes or custom host messages are use
 - `attempt.rs`: native ICE/DTLS/SCTP and data channels for WebRTC.
   The worker-completion condition variable is retained; obsolete test receive
   wrappers and their unobserved receipt notifications have been removed.
-- `crates/bud`: isolated BUD carrier, protocol and compressed-media handoff.
+- `crates/lowlat`: isolated lowlat carrier, protocol and compressed-media handoff.
   Both transports use the same native video/audio workers and input handling.
 - `crates/video`: GPU decoder backends and original-surface presentation.
   H.264 uses Media Foundation. Normal HEVC uses NVIDIA direct D3D11, AMD AMF (4:2:0), or Intel VPL (4:2:0/4:4:4), at 8 or 10 bits. Media Foundation is the compatibility fallback.
@@ -109,11 +109,11 @@ Windows Presentation API timing; no host changes or custom host messages are use
   Presentation API and explicit surface leases.
 - `audio_stream.rs` and `audio_windows.rs`: bounded decoded PCM queues, reusable
   buffers and native WASAPI playback. Stereo Opus works on both transports;
-  BUD can also request raw PCM and experimental 5.1/7.1 audio. Multichannel
+  lowlat can also request raw PCM and experimental 5.1/7.1 audio. Multichannel
   support has synthetic test coverage only.
 - `window.rs`, `input_state.rs`, `native_core/session_ui.rs`: Win32/GDI UI,
   immersive capture, relative camera input and local controls. GPU video remains
-  separate from UI painting. HID mouse/keyboard share one bounded BUD device
+  separate from UI painting. HID mouse/keyboard share one bounded lowlat device
   lifecycle; ordinary Parsec input for a selected HID device is suppressed.
 - `native_core/session_model.rs`: window-API-independent Session commands and
   shared host-video/display/pending state. The Win32 panel reads typed host
@@ -157,7 +157,7 @@ UI thread's window reference instead of leaving it blocked in GetMessage.
 ## Validation scope
 
 CI runs native unit/integration tests, GPU surface ownership/metadata tests,
-BUD control/HID regressions and Win32 UI captures. Offline/synthetic tests do
+lowlat control/HID regressions and Win32 UI captures. Offline/synthetic tests do
 not establish physical GPU capability, screen scanout, HDR or host compatibility.
 Current live validation is summarized below and in the root README.
 
@@ -166,7 +166,7 @@ Current live validation is summarized below and in the root README.
 The WebRTC account adapter uses the native Rust ICE/DTLS/SCTP
 engine and its pinned channel/initialization contract, using native signaling.
 It still needs live direct, TURN/UDP, TURN/TLS and TURN/TCP verification in this
-independent build. BUD-only HID and raw/multichannel audio stay BUD-only.
+independent build. LOWLAT-only HID and raw/multichannel audio stay LOWLAT-only.
 
 Prefer 4:4:4 is available on NVIDIA and Intel client GPUs (experimental).
 Intel 8-bit and combined 10-bit 4:4:4 playback are not live-validated. Intel now uses VPL AYUV/Y410 output, while NVIDIA uses direct D3D11.
@@ -179,13 +179,13 @@ video copy. This mode uses normal GPU rendering, not original-NV12 zero copy;
 The two preferences can be combined; the host remains responsible for the
 actual stream format. A 10-bit 4:4:4 surface uses the same single processor
 write directly into the RGB10 swapchain, with no intermediate RGB texture.
-Live 1920x1080 BUD/TURN-UDP playback of this combined mode was confirmed on
+Live 1920x1080 lowlat/TURN-UDP playback of this combined mode was confirmed on
 NVIDIA GeForce RTX 3060 on 2026-10-25: both request flags were declared
 (`flags=27`), decoded output was 10-bit 4:4:4 and RGB output was 10-bit SDR,
 with no decoder fallback/error recorded in that attempt. This validates that
 configuration, not other GPUs/transports, physical panel depth or HDR. A rejected Y410/RGB10
 conversion is an error, rather than a silent retry in RGB8. The host can still send
-4:2:0; actual decoded chroma is shown separately in Connection stats. Live BUD
+4:2:0; actual decoded chroma is shown separately in Connection stats. Live lowlat
 8-bit 4:4:4 decoding/presentation has been confirmed on NVIDIA GeForce RTX 3060.
 The tested AMD Radeon 780M driver rejects the Main444 profile query with
 `0x80070057`, so that configuration advertises 4:2:0 only. This is not a blanket
@@ -216,7 +216,7 @@ only when needed. A size change alone does not disable vendor decoding or
 zero-copy, and does not consume the decoder-error retry limit. Live validation
 with remote hosts and the affected GPU paths is still required.
 
-Full-chroma requests are retained on BUD per-stream encoder updates as well as
+Full-chroma requests are retained on lowlat per-stream encoder updates as well as
 initialization and native keyframe requests. Capability logs distinguish
 `chroma_444_requested` from the effective `chroma_444` declaration. When a
 requested AYUV path is unavailable, `video_chroma_444_unavailable` records the
@@ -246,7 +246,7 @@ hotplug; a missing/invalid list leaves the stream running. Output IDs are neithe
 persisted as client preferences nor written to the event log.
 
 This selects one existing stream, not simultaneous multiple stream windows or
-creation of virtual displays. BUD and WebRTC reuse their existing reliable
+creation of virtual displays. lowlat and WebRTC reuse their existing reliable
 control path and unchanged GPU decoding/presentation. No new dependency, image
 copy, frame readback or per-frame display query is introduced. Live physical and
 virtual multi-output switching still needs validation against a stock host.
@@ -274,7 +274,7 @@ the host or the operating system's cursor confinement during a game. No
 relative-desktop or normal-injection fallback is introduced.
 
 
-An announced BUD encoder rebuild (metadata or an encoder-generation change)
+An announced lowlat encoder rebuild (metadata or an encoder-generation change)
 retires the old compressed queue, decoder and cached codec parameters before the
 new keyframe. H.264/HEVC changes across this boundary can reuse the video worker
 and presentation window; unannounced codec changes remain rejected. This does
@@ -440,7 +440,7 @@ Earlier hardware observations do not validate the current extended VPL paths.
 ## Windows multi-display development build
 
 The session overlay's **Add screen** menu requests a second or third host display
-on the existing connection (BUD or WebRTC). The initial implementation exposes
+on the existing connection (lowlat or WebRTC). The initial implementation exposes
 the host's stream slots 1/2, corresponding to its second/third listed outputs.
 Use extended host displays and normal Parsec mouse/keyboard input. Already-open
 outputs are not opened twice. Live Windows tests have verified two-screen

@@ -18,6 +18,8 @@ Describe 'Native release packaging' {
                 $executables[0].Name | Should -Be "$product.exe"
                 @($zip.Entries | Where-Object Name -eq 'settings.json').Count | Should -Be 0
                 @($zip.Entries | Where-Object Name -eq 'MIGRATION.md').Count | Should -Be 1
+                @($zip.Entries | Where-Object Name -eq 'SYMPHONIA-MPL-2.0.txt').Count | Should -Be 1
+                @($zip.Entries | Where-Object Name -eq 'SYMPHONIA-NOTICE.txt').Count | Should -Be 1
                 $stream = $executables[0].Open()
                 try {
                     [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)) | Should -Be $expected

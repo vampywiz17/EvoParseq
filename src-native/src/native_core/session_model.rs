@@ -13,6 +13,8 @@ use std::sync::{
 #[derive(Clone, Debug)]
 pub enum Event {
     NativeSession(Command),
+    #[cfg(windows)]
+    PhazeControl(evoparseq_host_interop::ClientControl),
     Shortcut(crate::input::Shortcut),
     // Resize is a notification; the view supplies current dimensions.
     Size,
@@ -29,7 +31,7 @@ pub enum Event {
     Key(bool, &'static str, i32),
     Scroll(i32, i32),
     Fullscreen(bool),
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     HidInputRelease,
 }
 
@@ -62,8 +64,8 @@ impl Event {
 pub use crate::session_controls::{Command, Status};
 
 pub use crate::session_preferences::{
-    current_choice, resolution_text, PanelFields, BANDWIDTH_CHOICES, FPS_CHOICES, HOST_RESOLUTION,
-    RESOLUTION_CHOICES,
+    current_choice, resolution_text, PanelFields, FPS_CHOICES, HOST_RESOLUTION,
+    PARSEC_BANDWIDTH_CHOICES, PHAZE_BANDWIDTH_CHOICES, RESOLUTION_CHOICES,
 };
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Notification {
@@ -110,18 +112,33 @@ pub use crate::session_preferences::HostVideo;
 /// Keeps the existing lock/atomic boundaries; no new queue, worker or polling.
 #[derive(Default)]
 pub struct State {
+    pub phaze: AtomicBool,
+    #[cfg(windows)]
+    pub phaze_peers: Mutex<PhazePeers>,
     pub host_video: Mutex<HostVideo>,
     pub display_resolution: Mutex<crate::session_preferences::Resolution>,
     pub displays: Mutex<Displays>,
     pub video_pending: AtomicBool,
     pub hid_primary_ready: AtomicBool,
 }
+
+pub use crate::interop_session::PhazePeers;
+
 impl State {
+    pub fn supported_video(&self, video: Video) -> Video {
+        if self.phaze.load(Ordering::Acquire) {
+            crate::interop_session::supported_video(video)
+        } else {
+            video
+        }
+    }
     pub fn panel_video(&self, saved: Video) -> Video {
-        self.host_video
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .panel_video(saved)
+        self.supported_video(
+            self.host_video
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .panel_video(saved),
+        )
     }
 }
 
@@ -129,6 +146,67 @@ impl State {
 mod tests {
     use super::*;
     use crate::native_core::profile::Resolution;
+
+    #[cfg(windows)]
+    #[test]
+    fn phaze_actions_require_current_admin_and_host_targets() {
+        use evoparseq_host_interop::ClientControl;
+        let mut peers = PhazePeers {
+            local_id: Some(1),
+            state: serde_json::from_value(serde_json::json!({
+                "guests": [
+                    {"id":1,"user_name":"Admin","admin":true,"has_control":true},
+                    {"id":2,"user_name":"Guest","admin":false,"has_control":false}
+                ],
+                "offers":[{"attempt_id":"offer","user_name":"Pending"}]
+            }))
+            .unwrap(),
+            ..Default::default()
+        };
+        assert!(peers.allows(&ClientControl::SecureAttention));
+        assert!(peers.allows(&ClientControl::SetControl(2)));
+        assert!(peers.allows(&ClientControl::SetControl(0)));
+        assert!(!peers.allows(&ClientControl::SetControl(55)));
+        assert!(!peers.allows(&ClientControl::RemoveGuest(1)));
+        assert!(peers.allows(&ClientControl::RemoveGuest(2)));
+        assert!(peers.allows(&ClientControl::RespondToOffer {
+            attempt_id: "offer".into(),
+            accept: true
+        }));
+        assert!(!peers.allows(&ClientControl::RespondToOffer {
+            attempt_id: "old".into(),
+            accept: true
+        }));
+        peers.local_id = Some(2);
+        assert!(!peers.allows(&ClientControl::SecureAttention));
+        peers.local_id = None;
+        assert!(!peers.allows(&ClientControl::SetControl(1)));
+    }
+
+    #[test]
+    fn service_switch_keeps_local_controls_without_reusing_unsupported_host_options() {
+        let state = State::default();
+        let saved = Video {
+            resolution: Resolution::Fixed(2560, 1440),
+            constant_fps: Some(true),
+            rotated: Some(true),
+            fps: Some(144),
+            bandwidth_mbps: Some(40),
+            parsec_bandwidth_mbps: None,
+            immersive: 2,
+            fullscreen: true,
+        };
+        assert_eq!(state.supported_video(saved.clone()), saved);
+        state.phaze.store(true, Ordering::Release);
+        let panel = state.panel_video(saved.clone());
+        assert_eq!(panel.resolution, Resolution::Host);
+        assert_eq!(panel.constant_fps, None);
+        assert_eq!(panel.rotated, None);
+        assert_eq!(panel.fps, saved.fps);
+        assert_eq!(panel.bandwidth_mbps, saved.bandwidth_mbps);
+        assert_eq!(panel.immersive, saved.immersive);
+        assert_eq!(panel.fullscreen, saved.fullscreen);
+    }
 
     #[test]
     fn session_fields_keep_resolution_aliases_boundaries_and_local_preferences() {
@@ -147,9 +225,9 @@ mod tests {
                 immersive: 3,
                 fullscreen: true,
             };
-            let video = fields.parse().unwrap();
+            let video = fields.parse_for_service(true).unwrap();
             assert_eq!(video.resolution, resolution_value);
-            assert_eq!(video.bandwidth_mbps, Some(MAX_BANDWIDTH_MBPS));
+            assert_eq!(video.requested_bandwidth(true), Some(MAX_BANDWIDTH_MBPS));
             assert_eq!(video.fps, Some(MAX_FPS));
             assert_eq!(video.constant_fps, Some(true));
             assert_eq!(video.rotated, Some(false));
@@ -222,6 +300,7 @@ mod tests {
         let saved = Video {
             resolution: Resolution::Fixed(1920, 1080),
             bandwidth_mbps: Some(50),
+            parsec_bandwidth_mbps: None,
             fps: Some(60),
             constant_fps: Some(true),
             rotated: Some(false),

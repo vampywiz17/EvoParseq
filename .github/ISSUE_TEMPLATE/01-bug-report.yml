@@ -40,7 +40,7 @@ body:
       description: Share what you know; leave out anything unrelated or unknown.
       placeholder: |
         Windows version and GPU:
-        WebRTC or BUD; direct or TURN:
+        WebRTC or LOWLAT; direct or TURN:
         Relevant settings (codec, Zero copy, HID, etc.):
   - type: textarea
     id: logs

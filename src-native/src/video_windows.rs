@@ -561,9 +561,9 @@ impl Pipeline {
         }
         accepted
     }
-    /// Called only at an explicit BUD encoder-generation boundary. The worker
+    /// Called only at an explicit LOWLAT encoder-generation boundary. The worker
     /// owns GPU teardown; the network consumer never touches a decoded frame.
-    #[cfg(feature = "bud")]
+    #[cfg(feature = "lowlat")]
     pub fn encoder_rebuilt(&self) {
         self.shared
             .0
@@ -1034,7 +1034,7 @@ fn run(
                 renderer.rotation = frame.rotation;
                 if vsr_disabled {
                     renderer.vsr_status =
-                        Some("Disabled after processing backlog; normal GPU rendering");
+                        Some("Disabled for this connection; normal GPU rendering");
                 }
                 if !verify_synthetic_pixels && vsr_quality != 0 && !vsr_disabled {
                     shared
@@ -1046,6 +1046,12 @@ fn run(
                     unsafe {
                         renderer.configure_vsr(vsr_quality);
                     }
+                    // A failed optional effect setup can take time. Do not retry after
+                    // every decoder rebuild: that would starve the video queue
+                    // and cause a black/flashing image until reconnect.
+                    if renderer.vsr.is_none() {
+                        vsr_disabled = true;
+                    }
                     shared
                         .0
                         .lock()
@@ -1056,7 +1062,7 @@ fn run(
                         "video_vsr_setup_finished",
                         serde_json::json!({"elapsed_ms":began.elapsed().as_secs_f64()*1000.0,
                             "vendor":renderer.vsr.as_ref().map(|v| v.vendor()),
-                            "available":renderer.vsr.as_ref().map(|v| v.initial_capability()).unwrap_or(Some(false))}),
+                            "available":if renderer.vsr.is_some() { None } else { Some(false) }}),
                     );
                 }
             }
@@ -2270,11 +2276,143 @@ fn presentation_status(status: windows::core::HRESULT) -> Result<Presentation> {
     })
 }
 
+fn nvidia_vsr_eligible(nvidia: bool, upscale: bool, format: DXGI_FORMAT) -> bool {
+    nvidia && upscale && matches!(format, DXGI_FORMAT_NV12 | DXGI_FORMAT_P010)
+}
+
+#[cfg(feature = "vendor-video")]
+fn intel_output_region((width, height): (u32, u32)) -> D3D11_BOX {
+    D3D11_BOX {
+        left: 0,
+        top: 0,
+        front: 0,
+        right: width,
+        bottom: height,
+        back: 1,
+    }
+}
+
+type ProcessorKey = (u32, u32, u32, u32, DXGI_FORMAT, u32, bool);
+
+struct ProcessorFrame {
+    source_size: (u32, u32),
+    rect: [i32; 4],
+    upscale: bool,
+    key: ProcessorKey,
+}
+
+impl ProcessorFrame {
+    fn new(
+        texture: &D3D11_TEXTURE2D_DESC,
+        visible: (u32, u32),
+        rotation: u8,
+        client: (u32, u32),
+        color: u32,
+        nvidia: bool,
+    ) -> Result<Self> {
+        let source_size = display_extents(visible.0, visible.1, rotation);
+        let rect = crate::viewport::Viewport {
+            source: source_size,
+            client,
+        }
+        .rect()
+        .ok_or_else(|| unavailable("video-viewport"))?;
+        let [left, top, right, bottom] = rect;
+        let upscale =
+            (right - left) as u32 > source_size.0 && (bottom - top) as u32 > source_size.1;
+        let nvidia_vsr = nvidia_vsr_eligible(nvidia, upscale, texture.Format);
+        let key = (
+            texture.Width,
+            texture.Height,
+            client.0,
+            client.1,
+            texture.Format,
+            color,
+            nvidia_vsr,
+        );
+        Ok(Self {
+            source_size,
+            rect,
+            upscale,
+            key,
+        })
+    }
+
+    fn inactive_vsr(&self, effect_configured: bool, nvidia: bool) -> Option<&'static str> {
+        if effect_configured && !self.upscale {
+            Some("Inactive: viewport does not upscale the video")
+        } else if nvidia && !self.key.6 {
+            Some("Inactive: NVIDIA driver VSR requires NV12 or P010 video")
+        } else {
+            None
+        }
+    }
+}
+
+enum NvidiaVsrRequest {
+    Skipped,
+    Accepted,
+    Rejected(windows::core::Error),
+}
+
+impl NvidiaVsrRequest {
+    fn configure(
+        eligible: bool,
+        mut auto_processing: impl FnMut(bool),
+        request: impl FnOnce() -> windows::core::Result<()>,
+        device_status: impl FnOnce() -> windows::core::Result<()>,
+    ) -> Result<Self> {
+        auto_processing(eligible);
+        if !eligible {
+            return Ok(Self::Skipped);
+        }
+        match request() {
+            Ok(()) => {
+                crate::event_log::record(
+                    "INFO",
+                    "video_vsr_driver_request_accepted",
+                    serde_json::json!({"vendor":"NVIDIA","hardware_activation_verified":false}),
+                );
+                Ok(Self::Accepted)
+            }
+            Err(error) => {
+                api("video-processor-vsr", device_status())?;
+                auto_processing(false);
+                Ok(Self::Rejected(error))
+            }
+        }
+    }
+}
+
+const VSR_RETRY: &str = "video-processor-vsr-retry";
+
+fn vsr_blt_result(
+    result: windows::core::Result<()>,
+    driver_requested: bool,
+    device_status: impl FnOnce() -> windows::core::Result<()>,
+) -> Result<()> {
+    let stage = if result.is_err() && driver_requested {
+        api("video-processor-blt", device_status())?;
+        VSR_RETRY
+    } else {
+        "video-processor-blt"
+    };
+    api(stage, result)
+}
+
+fn retry_rejected_vsr<T>(mut present: impl FnMut(Option<Failure>) -> Result<T>) -> Result<T> {
+    match present(None) {
+        Err(error) if error.stage == VSR_RETRY => present(Some(error)),
+        result => result,
+    }
+}
+
 struct ProcessorCache {
     rotation_set: bool,
     enumeration: ID3D11VideoProcessorEnumerator,
     processor: ID3D11VideoProcessor,
-    key: (u32, u32, u32, u32, DXGI_FORMAT, u32),
+    key: ProcessorKey,
+    nvidia_vsr_requested: bool,
     inputs: Vec<(ID3D11Texture2D, u32, ID3D11VideoProcessorInputView)>,
     outputs: Vec<(ID3D11Texture2D, ID3D11VideoProcessorOutputView)>,
 }
@@ -2485,7 +2623,7 @@ impl Renderer {
         if quality == 0 {
             return;
         }
-        match crate::video_upscale::Effect::new(&self.device, quality) {
+        match crate::video_upscale::Effect::new(&self.device) {
             Ok(vsr) => {
                 self.vsr_status = Some(vsr.ready_status());
                 self.vsr = Some(vsr);
@@ -2845,7 +2983,15 @@ impl Renderer {
         _window: &crate::window::Window,
     ) -> Result<Presentation> {
         self.ten_bit_attempted = false;
-        let result = self.present_frame(texture, subresource, source, color, shared);
+        let result = retry_rejected_vsr(|rejection| {
+            if let Some(error) = rejection {
+                // The failed frame has released its backbuffer references.
+                self.disable_vsr(error.hresult.as_deref().unwrap_or(error.stage));
+                self.processor = None;
+                update(shared, |s| s.vsr_status = self.vsr_status);
+            }
+            self.present_frame(texture, subresource, source, color, shared)
+        });
         // Retry only a rejected 10-bit output operation, never a lost device or
         // decoder error. The decoded P010 surface is retained; no re-decode/copy.
         match result {
@@ -2893,7 +3039,14 @@ impl Renderer {
             (rect.right - rect.left).max(1) as u32,
             (rect.bottom - rect.top).max(1) as u32,
         );
-        let key = (td.Width, td.Height, size.0, size.1, td.Format, color);
+        let nvidia = matches!(self.vsr, Some(crate::video_upscale::Effect::Nvidia));
+        let frame = ProcessorFrame::new(&td, (width, height), self.rotation, size, color, nvidia)?;
+        let ProcessorFrame {
+            source_size,
+            rect: [left, top, right, bottom],
+            upscale,
+            key,
+        } = frame;
         if self.processor.as_ref().is_none_or(|p| p.key != key) {
             let desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
                 InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
@@ -2915,10 +3068,7 @@ impl Renderer {
                 "video-processor-enumerate",
                 self.video_device.CreateVideoProcessorEnumerator(&desc),
             )?;
-            let mut output_format = self
-                .vsr
-                .as_ref()
-                .map_or(DXGI_FORMAT_B8G8R8A8_UNORM, |v| v.format());
+            let mut output_format = DXGI_FORMAT_B8G8R8A8_UNORM;
             if td.Format == DXGI_FORMAT_Y410
                 || (td.Format == DXGI_FORMAT_P010 && self.ten_bit_fallback.is_none())
             {
@@ -2965,8 +3115,19 @@ impl Renderer {
                 "video-processor-create",
                 self.video_device.CreateVideoProcessor(&enumeration, 0),
             )?;
-            self.video_context
-                .VideoProcessorSetStreamAutoProcessingMode(&processor, 0, false);
+            let request = NvidiaVsrRequest::configure(
+                key.6,
+                |enabled| {
+                    self.video_context
+                        .VideoProcessorSetStreamAutoProcessingMode(&processor, 0, enabled)
+                },
+                || crate::nvidia_vsr::request(&self.video_context, &processor),
+                || self.device.GetDeviceRemovedReason(),
+            )?;
+            let nvidia_vsr_requested = matches!(request, NvidiaVsrRequest::Accepted);
+            if let NvidiaVsrRequest::Rejected(error) = request {
+                self.disable_vsr(error);
+            }
             update(shared, |s| {
                 s.auto_processing_disabled = !self
                     .video_context
@@ -2975,6 +3136,7 @@ impl Renderer {
             });
             self.processor = Some(ProcessorCache {
                 rotation_set: false,
+                nvidia_vsr_requested,
                 enumeration,
                 processor,
                 key,
@@ -2984,18 +3146,16 @@ impl Renderer {
         }
         self.ten_bit_attempted |= self.output_format == DXGI_FORMAT_R10G10B10A2_UNORM;
         let back: ID3D11Texture2D = api("video-backbuffer", self.swap.GetBuffer(0))?;
-        let [left, top, right, bottom] = crate::viewport::Viewport {
-            source: display_extents(width, height, self.rotation),
-            client: size,
+        if let Some(status) = frame.inactive_vsr(self.vsr.is_some(), nvidia) {
+            self.vsr_status = Some(status);
         }
-        .rect()
-        .ok_or_else(|| unavailable("video-viewport"))?;
-        let source_size = display_extents(width, height, self.rotation);
-        let upscale =
-            (right - left) as u32 > source_size.0 && (bottom - top) as u32 > source_size.1;
+        #[cfg(feature = "vendor-video")]
         let mut vsr_output = None;
+        #[cfg(not(feature = "vendor-video"))]
+        let vsr_output: Option<ID3D11Texture2D> = None;
+        #[cfg(feature = "vendor-video")]
         let conversion_target = if upscale {
-            if let Some(vsr) = &mut self.vsr {
+            if let Some(crate::video_upscale::Effect::Intel(vsr)) = &mut self.vsr {
                 let setup = vsr.needs_setup(source_size, size, [left, top, right, bottom]);
                 if setup {
                     shared
@@ -3005,7 +3165,6 @@ impl Renderer {
                         .optional_setup(true);
                 }
                 let result = vsr.prepare(
-                    &self.device,
                     source_size,
                     size,
                     [left, top, right, bottom],
@@ -3032,11 +3191,10 @@ impl Renderer {
                 back.clone()
             }
         } else {
-            if self.vsr.is_some() {
-                self.vsr_status = Some("Inactive: viewport does not upscale the video");
-            }
             back.clone()
         };
+        #[cfg(not(feature = "vendor-video"))]
+        let conversion_target = back.clone();
         let cached = self.processor.as_mut().unwrap();
         let enumeration = &cached.enumeration;
         let processor = &cached.processor;
@@ -3192,15 +3350,16 @@ impl Renderer {
             std::slice::from_ref(&stream),
         );
         ManuallyDrop::drop(&mut stream.pInputSurface);
-        api("video-processor-blt", result)?;
-        if let Some(vsr_output) = vsr_output {
-            let target = crate::viewport::Viewport {
-                source: source_size,
-                client: size,
-            }
-            .rect()
-            .unwrap();
-            let warming = self.vsr.as_ref().unwrap().warming();
+        let driver_vsr = cached.nvidia_vsr_requested;
+        vsr_blt_result(result, driver_vsr, || self.device.GetDeviceRemovedReason())?;
+        if driver_vsr {
+            self.vsr_status = Some("Requested: NVIDIA driver VSR; verify in NVIDIA App");
+        }
+        #[cfg(feature = "vendor-video")]
+        if let (Some(vsr_output), Some(crate::video_upscale::Effect::Intel(vsr))) =
+            (vsr_output, &mut self.vsr)
+        {
+            let warming = vsr.warming();
             if warming {
                 shared
                     .0
@@ -3208,7 +3367,7 @@ impl Renderer {
                     .unwrap_or_else(|e| e.into_inner())
                     .optional_setup(true);
             }
-            let result = self.vsr.as_mut().unwrap().evaluate(&self.cleanup.0, target);
+            let result = vsr.evaluate(&self.cleanup.0);
             if warming {
                 shared
                     .0
@@ -3225,15 +3384,21 @@ impl Renderer {
                 // the normal format on the next frame. No decoder reset.
                 return Ok(Presentation::Busy);
             }
-            self.vsr
-                .as_ref()
-                .unwrap()
-                .copy_output(&self.cleanup.0, &back, &vsr_output, size);
+            self.cleanup.0.CopySubresourceRegion(
+                &back,
+                0,
+                0,
+                0,
+                0,
+                &vsr_output,
+                0,
+                Some(&intel_output_region(size)),
+            );
             if self.vsr_status != Some("Active: GPU processing; may increase latency") {
                 crate::event_log::record(
                     "INFO",
                     "video_vsr_active",
-                    serde_json::json!({"vendor":self.vsr.as_ref().unwrap().vendor(),"app_cpu_pixel_copy":false,"gpu_output_copy":true,"source_width":source_size.0,"source_height":source_size.1}),
+                    serde_json::json!({"vendor":"Intel","app_cpu_pixel_copy":false,"gpu_output_copy":true,"source_width":source_size.0,"source_height":source_size.1}),
                 );
             }
             self.vsr_status = Some("Active: GPU processing; may increase latency");
@@ -3285,6 +3450,174 @@ pub(crate) fn display_extents(width: u32, height: u32, rotation: u8) -> (u32, u3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nvidia_vsr_requests_only_upscaled_nv12_or_p010() {
+        for format in [DXGI_FORMAT_NV12, DXGI_FORMAT_P010] {
+            assert!(nvidia_vsr_eligible(true, true, format));
+            assert!(!nvidia_vsr_eligible(false, true, format));
+            assert!(!nvidia_vsr_eligible(true, false, format));
+        }
+        assert!(!nvidia_vsr_eligible(true, true, DXGI_FORMAT_Y410));
+    }
+
+    #[test]
+    fn processor_frame_keys_track_rotation_crop_and_letterbox_upscale() {
+        let mut texture = D3D11_TEXTURE2D_DESC {
+            Width: 640,
+            Height: 368,
+            Format: DXGI_FORMAT_NV12,
+            ..Default::default()
+        };
+        let frame = ProcessorFrame::new(&texture, (640, 360), 1, (1000, 1280), 0, true).unwrap();
+        assert_eq!(frame.source_size, (360, 640));
+        assert_eq!(frame.rect, [140, 0, 860, 1280]);
+        assert!(frame.upscale);
+        assert_eq!(frame.key, (640, 368, 1000, 1280, DXGI_FORMAT_NV12, 0, true));
+        assert!(frame.inactive_vsr(true, true).is_none());
+
+        // Same texture, surface and color, different visible aperture. Reusing
+        // the old key would keep the driver request enabled on a downscale.
+        let large_texture = D3D11_TEXTURE2D_DESC {
+            Width: 1920,
+            Height: 1088,
+            ..texture
+        };
+        let cropped =
+            ProcessorFrame::new(&large_texture, (640, 360), 0, (1000, 720), 0, true).unwrap();
+        let full =
+            ProcessorFrame::new(&large_texture, (1920, 1080), 0, (1000, 720), 0, true).unwrap();
+        assert!(cropped.key.6);
+        assert!(!full.key.6);
+        assert!(!full.upscale);
+        assert_eq!(
+            full.inactive_vsr(true, false),
+            Some("Inactive: viewport does not upscale the video")
+        );
+        assert!(full.inactive_vsr(false, false).is_none());
+
+        texture.Format = DXGI_FORMAT_Y410;
+        let y410 = ProcessorFrame::new(&texture, (640, 360), 1, (1000, 1280), 0, true).unwrap();
+        assert!(!y410.key.6);
+        assert!(y410.upscale);
+        assert_eq!(
+            y410.inactive_vsr(true, true),
+            Some("Inactive: NVIDIA driver VSR requires NV12 or P010 video")
+        );
+        assert!(ProcessorFrame::new(&texture, (640, 360), 1, (0, 1280), 0, true).is_err());
+    }
+
+    #[cfg(feature = "vendor-video")]
+    #[test]
+    fn intel_output_copy_uses_visible_client_pixels_not_texture_alignment() {
+        let frame = intel_output_region((1279, 719));
+        assert_eq!([frame.left, frame.top, frame.front], [0, 0, 0]);
+        assert_eq!([frame.right, frame.bottom, frame.back], [1279, 719, 1]);
+    }
+
+    #[test]
+    fn processor_restores_auto_processing_on_rejection_and_preserves_device_loss() {
+        use windows::Win32::Foundation::E_INVALIDARG;
+        let mut auto = Vec::new();
+        let skip = NvidiaVsrRequest::configure(
+            false,
+            |enabled| auto.push(enabled),
+            || unreachable!(),
+            || unreachable!(),
+        )
+        .unwrap();
+        assert!(matches!(skip, NvidiaVsrRequest::Skipped));
+        assert_eq!(auto, [false]);
+
+        auto.clear();
+        let accept = NvidiaVsrRequest::configure(
+            true,
+            |enabled| auto.push(enabled),
+            || Ok(()),
+            || unreachable!(),
+        )
+        .unwrap();
+        assert!(matches!(accept, NvidiaVsrRequest::Accepted));
+        assert_eq!(auto, [true]);
+
+        auto.clear();
+        let reject = NvidiaVsrRequest::configure(
+            true,
+            |enabled| auto.push(enabled),
+            || Err(E_INVALIDARG.into()),
+            || Ok(()),
+        )
+        .unwrap();
+        assert!(
+            matches!(reject, NvidiaVsrRequest::Rejected(error) if error.code() == E_INVALIDARG)
+        );
+        assert_eq!(auto, [true, false]);
+
+        auto.clear();
+        let removed = NvidiaVsrRequest::configure(
+            true,
+            |enabled| auto.push(enabled),
+            || Err(E_INVALIDARG.into()),
+            || Err(DXGI_ERROR_DEVICE_REMOVED.into()),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(removed.stage, "video-processor-vsr");
+        assert_eq!(removed.hresult.as_deref(), Some("0x887A0005"));
+        assert_eq!(auto, [true]);
+    }
+
+    #[test]
+    fn nvidia_vsr_blit_preserves_device_loss_and_normal_errors() {
+        use windows::Win32::Foundation::E_INVALIDARG;
+
+        vsr_blt_result(Ok(()), true, || {
+            panic!("healthy blit must not query the device")
+        })
+        .unwrap();
+        let rejected = || Err(E_INVALIDARG.into());
+        let normal_error = vsr_blt_result(rejected(), false, || panic!("normal blit")).unwrap_err();
+        assert_eq!(normal_error.stage, "video-processor-blt");
+
+        let retry = vsr_blt_result(rejected(), true, || Ok(())).unwrap_err();
+        assert_eq!(retry.stage, VSR_RETRY);
+        assert_eq!(retry.hresult, normal_error.hresult);
+
+        let removed =
+            vsr_blt_result(rejected(), true, || Err(DXGI_ERROR_DEVICE_REMOVED.into())).unwrap_err();
+        assert_eq!(removed.stage, "video-processor-blt");
+        assert_eq!(removed.hresult.as_deref(), Some("0x887A0005"));
+    }
+
+    #[test]
+    fn nvidia_vsr_retries_only_a_rejected_vsr_frame() {
+        let mut calls = 0;
+        let frame = retry_rejected_vsr(|rejection| {
+            calls += 1;
+            if calls == 1 {
+                assert!(rejection.is_none());
+                Err(unavailable(VSR_RETRY))
+            } else {
+                assert_eq!(rejection.unwrap().stage, VSR_RETRY);
+                Ok(42)
+            }
+        })
+        .unwrap();
+        assert_eq!((frame, calls), (42, 2));
+
+        for (stage, expected_calls) in
+            [("video-processor-blt", 1), ("video-processor-vsr-retry", 2)]
+        {
+            let mut calls = 0;
+            let error = retry_rejected_vsr::<()>(|_| {
+                calls += 1;
+                Err(unavailable(stage))
+            })
+            .unwrap_err();
+            assert_eq!((error.stage, calls), (stage, expected_calls));
+        }
+    }
+
     #[test]
     fn vrr_creation_falls_back_in_order_without_hiding_device_loss() {
         let wait = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32;

@@ -1,32 +1,6 @@
 use std::{env, fs, path::PathBuf, process::Command};
 fn main() {
-    println!("cargo:rustc-check-cfg=cfg(nvidia_vsr_sdk)");
     println!("cargo:rustc-check-cfg=cfg(feature, values(\"desktop-telemetry\"))");
-    println!("cargo:rerun-if-env-changed=EVOPARSEQ_RTX_VIDEO_SDK");
-    if env::var("TARGET").unwrap_or_default() == "x86_64-pc-windows-msvc" {
-        if let Some(root) = env::var_os("EVOPARSEQ_RTX_VIDEO_SDK") {
-            let root = fs::canonicalize(root).expect("RTX Video SDK folder missing");
-            let runtime = root.join("bin/Windows/x64/rel/nvngx_vsr.dll");
-            assert!(runtime.is_file(), "RTX VSR release runtime missing");
-            assert!(
-                root.join("lib/Windows/x64/nvsdk_ngx_s.lib").is_file(),
-                "RTX Video static library missing"
-            );
-            println!("cargo:rustc-cfg=nvidia_vsr_sdk");
-            println!(
-                "cargo:rustc-link-search=native={}",
-                root.join("lib/Windows/x64").display()
-            );
-            println!("cargo:rustc-link-lib=static=nvsdk_ngx_s");
-            for library in [
-                "advapi32", "shell32", "ole32", "shlwapi", "version", "wintrust", "crypt32",
-                "dxgi", "d3d11",
-            ] {
-                println!("cargo:rustc-link-lib={library}");
-            }
-        }
-    }
-
     println!("cargo:rerun-if-changed=../assets/evoparseq.ico");
     if !env::var("TARGET")
         .unwrap_or_default()

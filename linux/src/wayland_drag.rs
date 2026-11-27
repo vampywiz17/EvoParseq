@@ -54,7 +54,7 @@ struct State {
     icon: Option<DragIcon>,
 }
 struct Destination {
-    surfaces: [Option<wl_surface::WlSurface>; crate::display_stream::STREAMS],
+    surfaces: [Option<wl_surface::WlSurface>; crate::display_stream::DESKTOP_DISPLAYS],
     gesture: Option<Gesture>,
     image: Option<wayland_cursor::CursorImageBuffer>,
     zoom: f64,
@@ -118,7 +118,10 @@ impl Destination {
         } else {
             g.inside_video = false;
         }
-        let show = !g.inside_video;
+        // Parsec embeds the pointer in video; Phaze needs local feedback.
+        let show = !g.inside_video
+            || (target.local_cursor.load(Ordering::Acquire)
+                && !target.phaze_cursor_hidden.load(Ordering::Acquire));
         self.show_icon(show);
     }
     fn end(&mut self, cancelled: bool) {
@@ -336,7 +339,7 @@ impl Drag {
         let observer: Observer = Arc::new(move |id, window, _event| {
             if let Some(drag) = weak.upgrade() {
                 let mut d = drag.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(stream) = (0..crate::display_stream::STREAMS).find(|s| {
+                if let Some(stream) = (0..crate::display_stream::DESKTOP_DISPLAYS).find(|s| {
                     id == if *s == 0 {
                         egui::ViewportId::ROOT
                     } else {
@@ -516,7 +519,7 @@ impl Drag {
         );
         let root = origin.primary().context("No primary display")?;
         anyhow::ensure!(
-            (1..crate::display_stream::STREAMS).any(|s| root.display(s).is_some()),
+            (1..crate::display_stream::DESKTOP_DISPLAYS).any(|s| root.display(s).is_some()),
             "No peer display"
         );
         let pointer = origin.desktop_pointer(point, 1).context("Outside video")?;
@@ -575,6 +578,10 @@ impl Drag {
             icon_visible: false,
             icon_positioned: false,
         });
+        destination.show_icon(
+            origin.local_cursor.load(Ordering::Acquire)
+                && !origin.phaze_cursor_hidden.load(Ordering::Acquire),
+        );
         if let Err(error) = self.connection.flush() {
             destination.end(true);
             destination.clear();

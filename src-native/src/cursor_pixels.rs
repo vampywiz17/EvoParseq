@@ -1,0 +1,180 @@
+//! Bounded host cursor pixels, independent of window and video backends.
+use anyhow::{bail, Result};
+use evoparseq_host_interop::{CursorFormat, CursorImage};
+
+pub(crate) const MAX_SIDE: u32 = 256;
+const MAX_ENCODED: usize = 1024 * 1024;
+
+pub(crate) struct Pixels {
+    pub size: (u32, u32),
+    pub hotspot: (u32, u32),
+    pub rgba: Vec<u8>,
+}
+
+pub(crate) fn png(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
+    if bytes.len() > MAX_ENCODED {
+        bail!("encoded cursor exceeds limit");
+    }
+    let mut reader =
+        image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Png);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_SIDE);
+    limits.max_image_height = Some(MAX_SIDE);
+    limits.max_alloc = Some(2 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader.decode()?.into_rgba8();
+    let (width, height) = image.dimensions();
+    Ok((image.into_raw(), width, height))
+}
+
+impl Pixels {
+    pub fn decode(image: CursorImage<'_>) -> Result<Self> {
+        let (width, height) = image.size;
+        if !(1..=MAX_SIDE).contains(&width) || !(1..=MAX_SIDE).contains(&height) {
+            bail!("cursor dimensions exceed limit");
+        }
+        let count = (width * height) as usize;
+        let rgba = match image.format {
+            CursorFormat::Png => {
+                let (bytes, w, h) = png(image.bytes)?;
+                if (w, h) != image.size {
+                    bail!("cursor PNG dimensions mismatch");
+                }
+                bytes
+            }
+            CursorFormat::Rgba => {
+                if image.bytes.len() != count * 4 {
+                    bail!("cursor pixel length mismatch");
+                }
+                image.bytes.to_vec()
+            }
+            CursorFormat::Monochrome => return Self::monochrome(image),
+        };
+        Ok(Self {
+            size: image.size,
+            hotspot: (
+                image.hotspot.0.min(width - 1),
+                image.hotspot.1.min(height - 1),
+            ),
+            rgba,
+        })
+    }
+    fn monochrome(image: CursorImage<'_>) -> Result<Self> {
+        let (width, height) = image.size;
+        let count = (width * height) as usize;
+        let mask = count.div_ceil(8);
+        if image.bytes.len() != mask * 2 {
+            bail!("cursor mask length mismatch");
+        }
+        let bits = |i: usize| {
+            let bit = 0x80 >> (i % 8);
+            (
+                image.bytes[i / 8] & bit != 0,
+                image.bytes[mask + i / 8] & bit != 0,
+            )
+        };
+        // RGBA cannot invert the desktop. Outline inverse pixels in white
+        // and draw their centres black, so both light and dark video retain
+        // a visible cursor without reading back any decoded video.
+        let border = u32::from((0..count).any(|i| bits(i) == (true, true)));
+        let size = (width + border * 2, height + border * 2);
+        let mut rgba = vec![0; (size.0 * size.1 * 4) as usize];
+        if border != 0 {
+            for i in (0..count).filter(|&i| bits(i) == (true, true)) {
+                let (x, y) = (i as u32 % width, i as u32 / width);
+                for dy in 0..3 {
+                    for dx in 0..3 {
+                        let offset = (((y + dy) * size.0 + x + dx) * 4) as usize;
+                        rgba[offset..offset + 4].copy_from_slice(&[255; 4]);
+                    }
+                }
+            }
+        }
+        for i in 0..count {
+            let (and, xor) = bits(i);
+            if and && !xor {
+                continue;
+            }
+            let value = if xor && !and { 255 } else { 0 };
+            let (x, y) = (i as u32 % width + border, i as u32 / width + border);
+            let offset = ((y * size.0 + x) * 4) as usize;
+            rgba[offset..offset + 4].copy_from_slice(&[value, value, value, 255]);
+        }
+        Ok(Self {
+            size,
+            hotspot: (
+                image.hotspot.0.min(width - 1) + border,
+                image.hotspot.1.min(height - 1) + border,
+            ),
+            rgba,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn decode(format: CursorFormat, size: (u32, u32), bytes: &[u8]) -> Result<Pixels> {
+        Pixels::decode(CursorImage {
+            format,
+            size,
+            hotspot: (99, 99),
+            bytes,
+        })
+    }
+    #[test]
+    fn linux_cursor_pixels_validate_dimensions_lengths_and_hotspot() {
+        for size in [(0, 1), (1, 0), (257, 1), (1, 257)] {
+            assert!(decode(CursorFormat::Rgba, size, &[]).is_err());
+        }
+        assert!(decode(CursorFormat::Rgba, (1, 1), &[1; 3]).is_err());
+        let p = decode(CursorFormat::Rgba, (1, 1), &[1, 2, 3, 4]).unwrap();
+        assert_eq!(p.rgba, [1, 2, 3, 4]);
+        assert_eq!(p.hotspot, (0, 0));
+        assert_eq!(p.size, (1, 1));
+        let p = Pixels::decode(CursorImage {
+            format: CursorFormat::Rgba,
+            size: (2, 2),
+            hotspot: (1, 0),
+            bytes: &[0; 16],
+        })
+        .unwrap();
+        assert_eq!(p.hotspot, (1, 0));
+    }
+    #[test]
+    fn linux_cursor_monochrome_preserves_masks_and_partial_bytes() {
+        // black, white, transparent, inverse; masks are MSB first.
+        let p = decode(CursorFormat::Monochrome, (4, 1), &[0x30, 0x50]).unwrap();
+        assert_eq!(p.size, (6, 3));
+        assert_eq!(p.hotspot, (4, 1));
+        let pixel = |x: usize, y: usize| &p.rgba[(y * 6 + x) * 4..(y * 6 + x + 1) * 4];
+        assert_eq!(pixel(1, 1), [0, 0, 0, 255]);
+        assert_eq!(pixel(2, 1), [255; 4]);
+        assert_eq!(pixel(4, 1), [0, 0, 0, 255]);
+        assert_eq!(pixel(3, 0), [255; 4]);
+        assert_eq!(pixel(5, 2), [255; 4]);
+        assert_eq!(pixel(0, 0), [0; 4]);
+        assert!(decode(CursorFormat::Monochrome, (9, 1), &[0; 3]).is_err());
+        let p = decode(CursorFormat::Monochrome, (9, 1), &[0xff, 0x80, 0, 0]).unwrap();
+        assert_eq!(p.rgba.len(), 36);
+        assert!(p.rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 0));
+    }
+    #[test]
+    fn linux_cursor_png_is_bounded_and_matches_declared_geometry() {
+        use image::ImageEncoder;
+        let mut bytes = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut bytes)
+            .write_image(&[7, 8, 9, 255], 1, 1, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        let p = decode(CursorFormat::Png, (1, 1), &bytes).unwrap();
+        assert_eq!(p.rgba, [7, 8, 9, 255]);
+        assert!(decode(CursorFormat::Png, (2, 1), &bytes).is_err());
+        assert!(decode(CursorFormat::Png, (1, 1), b"not PNG").is_err());
+        assert!(png(&vec![0; MAX_ENCODED + 1]).is_err());
+        let mut oversized = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut oversized)
+            .write_image(&vec![0; 257 * 4], 257, 1, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        assert!(png(&oversized).is_err());
+    }
+}

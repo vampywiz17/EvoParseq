@@ -14,14 +14,16 @@ use std::{
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     WebRtc,
-    Bud,
+    Lowlat,
+    Phaze,
 }
 
 impl Mode {
     pub fn label(self) -> &'static str {
         match self {
             Self::WebRtc => "WebRTC",
-            Self::Bud => "BUD",
+            Self::Lowlat => "lowlat",
+            Self::Phaze => "Phaze",
         }
     }
 }
@@ -45,13 +47,18 @@ pub fn run_stream(
         "connection_started",
         serde_json::json!({"transport":mode.label()}),
     );
+    if session.service() == account::Service::Phaze {
+        return crate::interop_linux::run(session, peer, playback, telemetry, settings);
+    }
+    ensure!(mode != Mode::Phaze, "Sign in with a Phaze account first.");
     let socket = Socket::open(session)?;
     let mut nonce = [0u8; 16];
     getrandom::fill(&mut nonce).map_err(|_| anyhow::anyhow!("Could not generate connection ID"))?;
     let id: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
     let result = match mode {
         Mode::WebRtc => run_webrtc(&socket, peer, &id, playback, telemetry, settings),
-        Mode::Bud => run_bud(&socket, peer, &id, playback, telemetry, settings),
+        Mode::Lowlat => run_lowlat(&socket, peer, &id, playback, telemetry, settings),
+        Mode::Phaze => unreachable!("Phaze handled before Parsec signaling"),
     };
     (socket.writer)(
         native_wire::envelope("offer_cancel", peer, &id, serde_json::json!({})).to_string(),
@@ -295,7 +302,7 @@ mod tests {
     }
 }
 
-fn run_bud(
+fn run_lowlat(
     socket: &Socket,
     peer: &str,
     id: &str,
@@ -303,8 +310,8 @@ fn run_bud(
     telemetry: &Arc<crate::telemetry::Session>,
     settings: &Arc<crate::connection_settings::Manager>,
 ) -> Result<String> {
-    use evoparseq_bud::{
-        bud::{Event, Route},
+    use evoparseq_lowlat::{
+        lowlat::{Event, Route},
         signaling::Signaling,
     };
 
@@ -312,9 +319,12 @@ fn run_bud(
         .enable_all()
         .build()?;
     let (route, mut relays, preferences) = runtime.block_on(async {
-        tokio::time::timeout(Duration::from_secs(15), crate::bud_routes::route(settings))
-            .await
-            .context("BUD route resolution timed out")?
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            crate::lowlat_routes::route(settings),
+        )
+        .await
+        .context("LOWLAT route resolution timed out")?
     })?;
     let layout = if preferences.experimental_surround_audio {
         crate::audio_device::default_layout().unwrap_or(crate::audio_layout::Layout::STEREO)
@@ -337,7 +347,7 @@ fn run_bud(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .hid_mouse = hid.mouse;
-    let mut session = crate::bud_ingress::session(
+    let mut session = crate::lowlat_ingress::session(
         playback.hevc(),
         playback.ten_bit(),
         false,
@@ -352,19 +362,19 @@ fn run_bud(
     let mut signaling = Signaling::new(peer, &wire_id)?;
     ensure!(
         (socket.writer)(signaling.offer(&credentials).to_string()),
-        "Could not send BUD offer"
+        "Could not send LOWLAT offer"
     );
     let audio = audio_stream::Pipeline::start_with_layout(Some(audio_config.maximum_ms), layout);
     let sender = audio.sender().context("Audio pipeline unavailable")?;
     let mut ingress =
-        crate::bud_ingress::VideoState::new(playback.hevc(), playback.ten_bit(), false);
+        crate::lowlat_ingress::VideoState::new(playback.hevc(), playback.ten_bit(), false);
     let mut established = false;
     let mut input = Input::default();
     let mut hid_previous = [(false, 0); 2];
     let mut diagnostics = crate::telemetry::Control::default();
     diagnostics.hid_mouse = hid.mouse;
     let result = observe(
-        Mode::Bud,
+        Mode::Lowlat,
         audio.native_receiver(),
         playback,
         telemetry,
@@ -397,7 +407,7 @@ fn run_bud(
                 if let Some(candidate) = signaling.candidate(&event) {
                     ensure!(
                         (socket.writer)(candidate.to_string()),
-                        "Could not send BUD candidate"
+                        "Could not send LOWLAT candidate"
                     );
                 }
                 match event {
@@ -420,11 +430,15 @@ fn run_bud(
                         }
                     }
                     Event::Ended { outcome } => {
-                        ensure!(!established, "BUD connection ended: {outcome:?}");
+                        ensure!(!established, "LOWLAT connection ended: {outcome:?}");
                         ended = true;
                     }
                     Event::IoFailure { stage, kind, .. } => {
-                        ensure!(!established, "BUD IO failed: {} ({kind:?})", stage.name());
+                        ensure!(
+                            !established,
+                            "LOWLAT IO failed: {} ({kind:?})",
+                            stage.name()
+                        );
                         ended = true;
                     }
                     _ => {}
@@ -436,15 +450,15 @@ fn run_bud(
                     || (direct
                         && answered_at.is_some_and(|at| at.elapsed() >= Duration::from_secs(4))))
             {
-                ensure!(retries < 32, "BUD configured route attempts exhausted");
+                ensure!(retries < 32, "LOWLAT configured route attempts exhausted");
                 if relays.is_none() {
                     relays = Some(runtime.block_on(async {
                         tokio::time::timeout(
                             Duration::from_secs(15),
-                            crate::bud_routes::relay_route(settings, &preferences),
+                            crate::lowlat_routes::relay_route(settings, &preferences),
                         )
                         .await
-                        .context("BUD relay resolution timed out")?
+                        .context("LOWLAT relay resolution timed out")?
                     })?);
                 }
                 if playback.stopped() {
@@ -453,7 +467,7 @@ fn run_bud(
                 let route = relays
                     .as_mut()
                     .and_then(|routes| routes.pop_front())
-                    .context("BUD configured routes exhausted")?;
+                    .context("LOWLAT configured routes exhausted")?;
                 session.close();
                 ensure!(
                     (socket.writer)(
@@ -465,10 +479,10 @@ fn run_bud(
                         )
                         .to_string()
                     ),
-                    "Could not withdraw BUD offer"
+                    "Could not withdraw LOWLAT offer"
                 );
-                wire_id = crate::bud_routes::native_attempt_id()?;
-                session = crate::bud_ingress::session(
+                wire_id = crate::lowlat_routes::native_attempt_id()?;
+                session = crate::lowlat_ingress::session(
                     playback.hevc(),
                     playback.ten_bit(),
                     false,
@@ -483,7 +497,7 @@ fn run_bud(
                 signaling = Signaling::new(peer, &wire_id)?;
                 ensure!(
                     (socket.writer)(signaling.offer(&credentials).to_string()),
-                    "Could not send BUD relay offer"
+                    "Could not send LOWLAT relay offer"
                 );
                 direct = false;
                 retries += 1;
@@ -495,36 +509,36 @@ fn run_bud(
                 ingress.wait_for_keyframe();
                 if !session.request_keyframe_format(false) {
                     playback.keyframe_request_failed(generation);
-                    anyhow::bail!("BUD could not request a video resume keyframe");
+                    anyhow::bail!("LOWLAT could not request a video resume keyframe");
                 }
             }
             diagnostics.update(established, telemetry, |bytes| session.send_frame(&bytes))?;
             if telemetry.sample_due() {
-                let bud = session.snapshot();
+                let lowlat = session.snapshot();
                 let framing = ingress.snapshot();
                 let mut sample = crate::stats::Sample {
-                    state: if bud.connected {
+                    state: if lowlat.connected {
                         "connected"
                     } else {
                         "connecting"
                     }
                     .into(),
-                    rtt_ms: bud.rtt_ms,
-                    received: Some(bud.udp_received),
-                    sent: Some(bud.udp_sent),
-                    audio_bytes: bud.channels[2].bytes,
+                    rtt_ms: lowlat.rtt_ms,
+                    received: Some(lowlat.udp_received),
+                    sent: Some(lowlat.udp_sent),
+                    audio_bytes: lowlat.channels[2].bytes,
                     codec: framing.codec,
                     profile: framing.sps_profile_idc,
                     hevc_advertised: playback.hevc(),
                     ..Default::default()
                 };
-                sample.bud = Some(bud);
+                sample.lowlat = Some(lowlat);
                 telemetry.bus.publish(telemetry.generation, sample);
             }
             telemetry
                 .displays
                 .poll(playback, |bytes| session.send_frame(bytes))?;
-            let more_displays = telemetry.displays.bud(&mut source)?;
+            let more_displays = telemetry.displays.lowlat(&mut source)?;
             let session_ref = std::cell::RefCell::new(&mut session);
             let hid_active = if hid.mouse || hid.keyboard {
                 session_ref.borrow().hid_input_state()
@@ -578,7 +592,7 @@ fn run_bud(
                 },
             )?;
             let pumped =
-                crate::bud_ingress::pump(&mut source, &mut ingress, playback.as_ref(), &sender)?;
+                crate::lowlat_ingress::pump(&mut source, &mut ingress, playback.as_ref(), &sender)?;
             Ok((
                 established,
                 ingress.snapshot(),
@@ -610,7 +624,7 @@ fn observe(
     let mut signaling_closed = false;
     let mut keyframe_received = false;
     let mut connected = false;
-    let bud = mode == Mode::Bud;
+    let lowlat = mode == Mode::Lowlat;
     let mode = mode.label();
     let mut ready_at = None;
     loop {
@@ -626,7 +640,7 @@ fn observe(
         }
         keyframe_received |= ready && video.parameter_sets_and_idr_observed;
         if !keyframe_received
-            && if bud {
+            && if lowlat {
                 ready_at.is_some_and(|at| now.duration_since(at) >= Duration::from_secs(20))
             } else {
                 now >= deadline
@@ -725,7 +739,7 @@ impl Input {
         let _ = playback;
     }
     fn cursor_frame(&mut self, bytes: &[u8], primary: &crate::playback::Playback) {
-        let Ok(cursor) = evoparseq_bud::bud::cursor_message(bytes) else {
+        let Ok(cursor) = evoparseq_lowlat::lowlat::cursor_message(bytes) else {
             return;
         };
         let update = cursor.update;

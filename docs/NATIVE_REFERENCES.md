@@ -1,12 +1,14 @@
 # EvoParseq development references
 
-EvoParseq is an independent implementation for compatible Parsec hosts. External
-projects are research inputs, not compatibility guarantees.
+EvoParseq is an independent client for compatible Parsec and Phaze hosts.
+See [interoperability and source provenance](INTEROPERABILITY.md) for the
+research methods and distinction between local test authorization and vendor
+approval.
 
 ## lowlat
 
 [nomi-san/lowlat](https://github.com/nomi-san/lowlat), MIT, provides the pinned
-protocol, parser, GPU-driver and BUD transport components identified in the local
+parser, GPU-driver and compatible transport components identified in the local
 `EVOPARSEQ.md` provenance notices. Original copyrights and licenses are retained.
 Only the components required by this application are included; no lowlat SDK,
 host, capture stack or second application/session implementation is embedded.
@@ -36,7 +38,7 @@ that every compressed stream will decode successfully.
   retain their upstream licenses and document changes in `EVOPARSEQ.md`.
   The DTLS 0.13 patch upgrades its NIST curve dependencies without replacing
   the protocol engine; see `src-native/vendor/dtls-0.13.0/EVOPARSEQ.md` for the
-  exact scope and omitted, unused binary state export/import. The pinned BUD
+  exact scope and omitted, unused binary state export/import. The pinned lowlat
   crypto subset retains its credentials and ring record code while omitting
   lowlat's unrelated browser-certificate generator; see its `EVOPARSEQ.md`.
 - Vendor codec documentation and runtime capability queries. Device vendor
@@ -206,3 +208,48 @@ output-list response or local window is not proof that the host accepted an
 additional encoder: validate an actual secondary keyframe/picture. The installed
 VDD, owner/account policy, driver state and extended desktop remain host-side
 requirements. There is no new VDD-creation feature in the client from this review.
+
+## Experimental Phaze-compatible adapter
+
+The [adapter](../src-native/crates/host-interop/README.md) is EvoParseq's Rust
+implementation for compatible Phaze hosts. Its message layouts were derived from
+observations on maintainer-controlled test systems. Authentication, DTLS and
+wire parsing use EvoParseq code and open-source Rust dependencies. The crate
+README records the scope of validation. Windows reuses the existing video
+inspector, decoder and renderer.
+
+## Phaze display descriptor refresh fields
+
+Read-only inspection of the installed Phaze 0.14.3 `phzapp.exe`, SHA-256
+`8e803f904fa4e03004800cc1d9c3b21434050d244e4c63d8a097739e42325d7f`,
+corroborated the display structure field order through its embedded Cgo type
+metadata and the serializer/deserializer instructions. No vendor binary bytes,
+headers, SDK or implementation were copied into EvoParseq.
+
+Offsets below are relative to the fixed 54-byte tail after the variable display
+name, not to the start of the application message:
+
+| Offset | Observed field | Encoding |
+| --- | --- | --- |
+| 28, 32 | PhysWidth, PhysHeight | two big-endian integers; physical size, not refresh |
+| 36, 40 | Data, Vendor | two big-endian integers |
+| 44 | RefreshRate | one big-endian integer, Hz × 10,000 |
+| 48 | NativeRefreshRate | a separate big-endian integer, Hz × 10,000 |
+| 52, 53 | Active, Primary | individual bytes |
+
+The native structure has stride 0xBC; its two float32 refresh members are at
+native offsets 0xB0 and 0xB4. Serializer RVAs 0x4B6BA1–0x4B6BE2 read these,
+multiply by the 10,000.0 float constant at RVA 0x9BE3B0 and write tail words
+0x2C/0x30. Decoder RVAs 0x4B7841–0x4B7891 read those words and divide each by
+10,000.0 into the corresponding independent native float. The physical-size
+members are separately mapped at serializer RVAs 0x4B6B61–0x4B6B7E.
+
+The earlier assumption that words 28/32 formed a refresh fraction was wrong.
+The earlier trailing 10,000/10,000 values were 1 Hz requests, not scale factors.
+Synthetic regressions distinguish physical-size values, Data/Vendor sentinels,
+24/60/120 Hz, fractional refresh, unknown zeros and the two independent rates.
+
+This establishes the observed Phaze 0.14.3 encoding. It does not establish that
+the host or virtual-display driver applied a requested mode, explain every
+fallback choice, or guarantee a future vendor format. Compare host-reported
+values with Windows desktop and active signal modes during live validation.

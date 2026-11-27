@@ -7,6 +7,8 @@ mod display_windows;
 pub(crate) mod host_displays;
 mod host_video;
 mod input;
+#[path = "phaze.rs"]
+mod interop;
 pub(crate) mod multi_display;
 mod picker;
 mod pointer;
@@ -39,7 +41,7 @@ fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args == ["--version"] {
         println!(
-            "EvoParseq {} / native Rust core (BUD/WebRTC)",
+            "EvoParseq {} / native Rust core (LOWLAT/WebRTC)",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -71,9 +73,8 @@ fn run() -> Result<()> {
     crate::event_log::record(
         "INFO",
         "native_core_started",
-        serde_json::json!({"transport":if settings.view().0.bud {"BUD"} else {"WebRTC"}}),
+        serde_json::json!({"transport":if settings.view().0.lowlat {"lowlat"} else {"WebRTC"}}),
     );
-    prepare_vsr_runtime(&settings);
     let mut session = None;
     loop {
         let Some(selection) = ui::choose(settings.clone(), session.take())? else {
@@ -82,9 +83,12 @@ fn run() -> Result<()> {
         let preferences = settings.view().0;
         let requested_main10 = preferences.prefer_hevc && preferences.experimental_ten_bit;
         let policy = transport::Policy {
-            bud: preferences.bud,
+            lowlat: preferences.lowlat,
         };
         let result = (|| {
+            if selection.session.service() == account::Service::Phaze {
+                return interop::run(&selection.session, &selection.peer, settings.clone());
+            }
             let socket = signaling::Socket::open(&selection.session)?;
             let platform = session_platform::Windows::create(settings.clone())?;
             session::run(
@@ -110,73 +114,5 @@ fn run() -> Result<()> {
             }
         }
         session = Some(selection.session);
-    }
-}
-
-fn prepare_vsr_runtime(settings: &crate::connection_settings::Manager) {
-    use crate::connection_settings::VsrRuntimeConsent;
-    if !cfg!(nvidia_vsr_sdk) || settings.view().1.is_some() {
-        return;
-    }
-    let data = settings.directory();
-    if crate::vsr_runtime::reuse_previous(&data).unwrap_or(false) {
-        return;
-    }
-    if !crate::gpu_windows::enumerate()
-        .is_ok_and(|gpus| gpus.iter().any(|g| g.preference.vendor_id == 0x10de))
-    {
-        return;
-    }
-    let mut preferences = settings.view().0;
-    if preferences.vsr_runtime_consent == VsrRuntimeConsent::Ask {
-        let text: Vec<u16> = crate::vsr_runtime::PROMPT
-            .encode_utf16()
-            .chain(Some(0))
-            .collect();
-        let title: Vec<u16> = "EvoParseq - optional NVIDIA VSR"
-            .encode_utf16()
-            .chain(Some(0))
-            .collect();
-        let accepted = unsafe {
-            windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
-                std::ptr::null_mut(),
-                text.as_ptr(),
-                title.as_ptr(),
-                windows_sys::Win32::UI::WindowsAndMessaging::MB_YESNO
-                    | windows_sys::Win32::UI::WindowsAndMessaging::MB_DEFBUTTON2
-                    | windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONQUESTION,
-            )
-        } == windows_sys::Win32::UI::WindowsAndMessaging::IDYES;
-        preferences.vsr_runtime_consent = if accepted {
-            VsrRuntimeConsent::Allowed
-        } else {
-            VsrRuntimeConsent::Declined
-        };
-        if settings
-            .update_vsr_consent(preferences.vsr_runtime_consent)
-            .is_err()
-        {
-            crate::event_log::record(
-                "WARN",
-                "vsr_runtime_consent_save_failed",
-                serde_json::json!({}),
-            );
-            unsafe {
-                ui::message_box(std::ptr::null_mut(), "The VSR download permission could not be saved beside settings.json. No download was started; normal GPU video remains available.");
-            }
-            return;
-        }
-    }
-    if preferences.vsr_runtime_consent == VsrRuntimeConsent::Allowed {
-        if let Err(error) = crate::vsr_runtime::install() {
-            crate::event_log::record(
-                "WARN",
-                "vsr_runtime_install_failed",
-                serde_json::json!({"reason":error.to_string()}),
-            );
-            unsafe {
-                ui::message_box(std::ptr::null_mut(), "The optional NVIDIA VSR runtime could not be downloaded or verified. Normal GPU video remains available. See the event log.");
-            }
-        }
     }
 }

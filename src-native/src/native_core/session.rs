@@ -30,7 +30,7 @@ pub(super) trait Runtime: Desktop {
         &self,
         id: &str,
         peer: &str,
-        writer: crate::bud_attempt::SignalingWrite,
+        writer: crate::lowlat_attempt::SignalingWrite,
         manager: Arc<crate::connection_settings::Manager>,
         policy: transport::Policy,
     ) -> Result<transport::Attempt>;
@@ -189,7 +189,7 @@ pub(super) fn run(
     manager: Arc<crate::connection_settings::Manager>,
     policy: transport::Policy,
 ) -> Result<()> {
-    let id = crate::bud_attempt::native_attempt_id()?;
+    let id = crate::lowlat_attempt::native_attempt_id()?;
     let attempt =
         platform.start_attempt(&id, peer, socket.writer.clone(), manager.clone(), policy)?;
     let mut batch = VecDeque::new();
@@ -206,7 +206,7 @@ pub(super) fn run(
     let view = platform;
     let mut host_settings = session_video::HostSettings::new(&local.video, view);
     while platform.running() {
-        // The service can close its signaling socket after the BUD path is up.
+        // The service can close its signaling socket after the LOWLAT path is up.
         for _ in 0..64 {
             match socket.next() {
                 Ok(Some(text)) => {
@@ -422,6 +422,7 @@ pub(super) fn run(
                             view.notify(Notification::Status(Status::Failed));
                         }
                     }
+                    session_model::Command::AddPhazeDisplay(_) => view.result(false),
                     session_model::Command::Disconnect => platform.stop(),
                     session_model::Command::HideButton => {
                         if manager

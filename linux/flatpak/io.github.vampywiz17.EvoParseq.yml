@@ -41,7 +41,7 @@ modules:
       - >-
         cargo test --manifest-path linux/Cargo.toml --bin evoparseq-linux linux_ --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
       - >-
-        cargo test --manifest-path linux/Cargo.toml --bin evoparseq-linux bud_ingress::tests --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
+        cargo test --manifest-path linux/Cargo.toml --bin evoparseq-linux lowlat_ingress::tests --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
       - >-
         cargo test --manifest-path linux/Cargo.toml --bin evoparseq-linux sign_in::tests --target $(rustc -vV | sed -n 's/^host: //p') --target-dir target --locked --offline --release
       - >-
@@ -64,7 +64,9 @@ modules:
       - install -Dm644 linux/vendor/egui-wgpu/LICENSE-APACHE /app/share/licenses/evoparseq/egui-wgpu-APACHE
       - install -Dm644 linux/vendor/wgpu-hal/LICENSE.MIT /app/share/licenses/evoparseq/wgpu-hal-MIT
       - install -Dm644 linux/vendor/wgpu-hal/LICENSE.APACHE /app/share/licenses/evoparseq/wgpu-hal-APACHE
-      - install -Dm644 src-native/crates/bud/vendor/lowlat-client/LICENSE /app/share/licenses/evoparseq/LOWLAT-LICENSE
+      - install -Dm644 src-native/crates/lowlat/vendor/lowlat-client/LICENSE /app/share/licenses/evoparseq/LOWLAT-LICENSE
+      - install -Dm644 vendor/symphonia-core-0.6.1/LICENSE /app/share/licenses/evoparseq/SYMPHONIA-MPL-2.0.txt
+      - install -Dm644 src-native/crates/host-interop/SYMPHONIA-NOTICE.txt /app/share/licenses/evoparseq/SYMPHONIA-NOTICE.txt
     sources:
       - type: dir
         path: ../..

@@ -7,7 +7,7 @@ Flatpak. All three clients report **0.9.8**.
 ## What's new and improved
 
 - **Windows and Linux multi-display:** open up to three host-reported outputs
-  over one WebRTC or BUD connection, with one decoder per display and one
+  over one WebRTC or lowlat connection, with one decoder per display and one
   shared audio pipeline. Each additional display has independent resolution,
   fullscreen and input controls. Resolution changes refresh the host settings
   before updating the selected display, preserving other outputs' settings.
@@ -24,14 +24,14 @@ Flatpak. All three clients report **0.9.8**.
 - **Linux desktop and audio:** shared launcher, Settings, session overlay and
   connection statistics, with secure remembered sign-in through the Secret
   portal. PipeWire provides local volume and mute, automatic device recovery,
-  stereo Opus and BUD PCM or supported 5.1/7.1 output. Normal keyboard and mouse,
-  opt-in BUD HID, focused text clipboard and controllers with rumble are wired.
+  stereo Opus and lowlat PCM or supported 5.1/7.1 output. Normal keyboard and mouse,
+  opt-in lowlat HID, focused text clipboard and controllers with rumble are wired.
 - **Linux networking and session controls:** shared STUN, custom TURN and
   Cloudflare TURN settings, direct-only and Force TURN modes, and optional
   DSCP/socket-priority hints. The overlay exposes display, resolution, bitrate,
   frame-rate and frame-pacing requests. Vulkan adaptive presentation is available
   when supported.
-- **Windows reliability:** fix a BUD teardown deadlock that could freeze the
+- **Windows reliability:** fix a lowlat teardown deadlock that could freeze the
   client and remove duplicate scrollbars from information pages.
 - **Desktop sign-in:** accept spaced six-digit authenticator codes and show clearer
   messages for rejected fields, confirmation requirements and rate limits.

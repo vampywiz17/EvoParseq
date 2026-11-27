@@ -1,23 +1,25 @@
 [package]
 name = "evoparseq-linux"
-version = "0.9.8"
+version = "0.9.9-dev.3"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 license = "MIT"
 publish = false
 
 [features]
-default = ["bud", "desktop-telemetry"]
-bud = []
-desktop-telemetry = ["bud"]
+default = ["lowlat", "desktop-telemetry"]
+lowlat = []
+desktop-telemetry = ["lowlat"]
 
 # Shared source names are recognized, not enabled: Linux has no Windows VSR SDK.
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("vendor-video"))', 'cfg(nvidia_vsr_sdk)'] }
 
 [dependencies]
+evoparseq-host-interop = { path = "../src-native/crates/host-interop" }
 evoparseq-socket-qos = { path = "../src-native/crates/socket-qos" }
 libc = "0.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
 log = "=0.4.35"
 anyhow = "1"
 xcursor = "=0.3.11"
@@ -30,7 +32,7 @@ lowlat-decode = { git = "https://github.com/nomi-san/lowlat", rev = "5f8db5689e5
 bytes = "1"
 futures-util = { version = "0.3", features = ["sink"] }
 getrandom = "0.3"
-evoparseq-bud = { path = "../src-native/crates/bud" }
+evoparseq-lowlat = { path = "../src-native/crates/lowlat" }
 pipewire = { version = "=0.8.0", features = ["v0_3_49"] }
 libopus_sys = { version = "=0.3.3", features = ["bundled", "static"] }
 rtrb = "=0.4.1"
@@ -40,6 +42,7 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["c
 webrtc = "=0.14.0"
 eframe = { version = "=0.33.3", default-features = false, features = ["default_fonts", "wayland", "wgpu"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+rustls-native-certs = "0.8"
 serde_json = "1"
 wgpu = { version = "27.0.1", default-features = false, features = ["vulkan"] }
 zeroize = "1"
@@ -64,8 +67,8 @@ webrtc = { path = "../src-native/vendor/webrtc-0.14.0" }
 webrtc-ice = { path = "../src-native/vendor/webrtc-ice-0.14.0" }
 turn = { path = "../src-native/vendor/turn-0.11.0" }
 [patch."https://github.com/nomi-san/lowlat"]
-lowlat-core = { path = "../src-native/crates/bud/vendor/lowlat-core" }
-lowlat-crypto = { path = "../src-native/crates/bud/vendor/lowlat-crypto" }
+lowlat-core = { path = "../src-native/crates/lowlat/vendor/lowlat-core" }
+lowlat-crypto = { path = "../src-native/crates/lowlat/vendor/lowlat-crypto" }
 
 lowlat-drivers = { path = "../src-native/vendor/lowlat-drivers" }
 

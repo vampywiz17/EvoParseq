@@ -26,21 +26,7 @@ pub struct SettingRow {
     pub group: u8,
     pub label: &'static str,
     pub help: &'static str,
-    #[cfg_attr(
-        windows,
-        expect(
-            dead_code,
-            reason = "Consumed by the Linux adapter; Win32 reads label/help from this shared descriptor"
-        )
-    )]
     pub y: i32,
-    #[cfg_attr(
-        windows,
-        expect(
-            dead_code,
-            reason = "Consumed by the Linux adapter; Win32 reads label/help from this shared descriptor"
-        )
-    )]
     pub help_height: i32,
     #[cfg_attr(
         windows,
@@ -67,6 +53,8 @@ pub struct SettingRow {
     )]
     pub control_text: &'static str,
 }
+pub const ADD_SCREEN: &str = "Add screen";
+pub const PHAZE_ADD_SCREEN_RECT: [i32; 4] = [294, 164, 100, 28];
 pub const STUN_SERVERS:SettingRow=SettingRow{tab:0,group:0,label:"STUN servers",help:"Discover a direct route. One stun: URL per line.\nLeave blank to use the default discovery server.",y:242,help_height:48,field_height:76,kind:Kind::Edit,control_text:""};
 pub const CONNECTION_ROUTE:SettingRow=SettingRow{tab:0,group:0,label:"Connection route",help:"Choose automatic routing, direct-only or TURN relay.\nDirect-only is intended for LAN or VPN connections.",y:344,help_height:40,field_height:32,kind:Kind::Choice,control_text:""};
 pub const TURN_PROVIDER: SettingRow = SettingRow {
@@ -160,6 +148,46 @@ pub const VIDEO_GPU: SettingRow = SettingRow {
     control_text: "",
 };
 pub const VIDEO_FORMAT:SettingRow=SettingRow{tab:1,group:0,label:"Video format",help:"HEVC and 10-bit require compatible host encoding.\nThe host may select H.264; reconnect after changing.",y:344,help_height:48,field_height:32,kind:Kind::Choice,control_text:""};
+pub const MIRROR_DISPLAY: SettingRow = SettingRow {
+    tab: 1,
+    group: 0,
+    label: evoparseq_host_interop::display_layout::MIRROR_LABEL,
+    help: evoparseq_host_interop::display_layout::MIRROR_HELP,
+    y: 1034,
+    help_height: 48,
+    field_height: 32,
+    kind: Kind::Choice,
+    control_text: "",
+};
+pub const VIRTUAL_DISPLAY_COUNT: SettingRow = SettingRow {
+    tab: 1,
+    group: 0,
+    label: evoparseq_host_interop::display_layout::DISPLAY_COUNT_LABEL,
+    help: evoparseq_host_interop::display_layout::DISPLAY_COUNT_HELP,
+    y: 1130,
+    help_height: 48,
+    field_height: 32,
+    kind: Kind::Choice,
+    control_text: "",
+};
+pub const VIRTUAL_DISPLAY_RESOLUTIONS: [SettingRow; 4] = [
+    virtual_display_resolution("Display 1 resolution", 1226),
+    virtual_display_resolution("Display 2 resolution", 1322),
+    virtual_display_resolution("Display 3 resolution", 1418),
+    virtual_display_resolution("Display 4 resolution", 1514),
+];
+
+const fn virtual_display_resolution(label: &'static str, y: i32) -> SettingRow {
+    SettingRow {
+        label,
+        help: evoparseq_host_interop::display_layout::RESOLUTION_HELP,
+        y,
+        ..VIRTUAL_DISPLAY_COUNT
+    }
+}
+
+pub const PHAZE_VIDEO_FOOTER: i32 = 1610;
+
 pub const DISPLAY_TIMING: SettingRow = SettingRow {
     tab: 1,
     group: 0,
@@ -212,7 +240,7 @@ pub const AI_UPSCALING_EXPERIMENTAL: SettingRow = SettingRow {
     kind: Kind::Choice,
     control_text: "",
 };
-pub const TRANSPORT:SettingRow=SettingRow{tab:0,group:0,label:"Transport",help:"WebRTC or BUD: direct UDP or TURN over UDP/TLS/TCP.\nUses the TURN URLs above. Reconnect after changing.",y:844,help_height:40,field_height:32,kind:Kind::Choice,control_text:""};
+pub const TRANSPORT:SettingRow=SettingRow{tab:0,group:0,label:"Transport",help:"WebRTC or LOWLAT: direct UDP or TURN over UDP/TLS/TCP.\nUses the TURN URLs above. Reconnect after changing.",y:844,help_height:40,field_height:32,kind:Kind::Choice,control_text:""};
 pub const VIDEO_PRESENTATION: SettingRow = SettingRow {
     tab: 1,
     group: 0,
@@ -248,16 +276,16 @@ pub const PLAYBACK_BUFFER: SettingRow = SettingRow {
 };
 pub const MINIMUM_BUFFER_MS:SettingRow=SettingRow{tab:2,group:0,label:"Minimum buffer (ms)",help:"PCM reserve before starting or refilling playback.\nSmaller values can increase audible gaps.",y:344,help_height:48,field_height:36,kind:Kind::Edit,control_text:""};
 pub const MAXIMUM_BUFFER_MS:SettingRow=SettingRow{tab:2,group:0,label:"Maximum buffer (ms)",help:"Local PCM plus audio queued on the Windows device.\n0 <= minimum <= maximum <= 500; maximum above zero.",y:438,help_height:48,field_height:36,kind:Kind::Edit,control_text:""};
-pub const AUDIO_FORMAT:SettingRow=SettingRow{tab:2,group:0,label:"Audio format",help:"RAW: BUD only; host must also enable RAW.\n48 kHz stereo PCM uses about 1.54 Mbps before overhead.\nThe actual codec is shown in Connection stats.",y:532,help_height:60,field_height:32,kind:Kind::Choice,control_text:""};
-pub const SPEAKER_LAYOUT:SettingRow=SettingRow{tab:2,group:0,label:"Speaker layout",help:"Experimental: match the Windows output's 5.1 or 7.1 layout.\nSynthetic tests only; no live host/client validation.\nBUD only; stereo fallback. Reconnect to apply.",y:630,help_height:68,field_height:32,kind:Kind::Choice,control_text:""};
+pub const AUDIO_FORMAT:SettingRow=SettingRow{tab:2,group:0,label:"Audio format",help:"RAW: LOWLAT only; host must also enable RAW.\n48 kHz stereo PCM uses about 1.54 Mbps before overhead.\nThe actual codec is shown in Connection stats.",y:532,help_height:60,field_height:32,kind:Kind::Choice,control_text:""};
+pub const SPEAKER_LAYOUT:SettingRow=SettingRow{tab:2,group:0,label:"Speaker layout",help:"Experimental: match the Windows output's 5.1 or 7.1 layout.\nSynthetic tests only; no live host/client validation.\nLOWLAT only; stereo fallback. Reconnect to apply.",y:630,help_height:68,field_height:32,kind:Kind::Choice,control_text:""};
 pub const INPUT_MODE: SettingRow = SettingRow {
     tab: 3,
     group: 0,
     label: "Input mode",
     help: if cfg!(target_os = "linux") {
-        "Standard input or experimental USB HID over BUD.\nMouse and keyboard can be selected independently."
+        "Standard input or experimental USB HID over LOWLAT.\nMouse and keyboard can be selected independently."
     } else {
-        "Standard input or USB HID over BUD.\nMouse and keyboard can be selected independently."
+        "Standard input or USB HID over LOWLAT.\nMouse and keyboard can be selected independently."
     },
     y: 242,
     help_height: 48,
@@ -285,6 +313,12 @@ pub const SETTINGS: &[SettingRow] = &[
     CHROMA,
     SESSION_MENU,
     AI_UPSCALING_EXPERIMENTAL,
+    MIRROR_DISPLAY,
+    VIRTUAL_DISPLAY_COUNT,
+    VIRTUAL_DISPLAY_RESOLUTIONS[0],
+    VIRTUAL_DISPLAY_RESOLUTIONS[1],
+    VIRTUAL_DISPLAY_RESOLUTIONS[2],
+    VIRTUAL_DISPLAY_RESOLUTIONS[3],
     TRANSPORT,
     VIDEO_PRESENTATION,
     TCP_TLS_QOS,
@@ -310,7 +344,7 @@ pub const STAT_SECURITY: &str = "SECURITY";
 pub const STAT_DTLS_STATE: &str = "DTLS state";
 pub const STAT_ENCRYPTION: &str = "Encryption";
 pub const STAT_HOST_ENCODE_TIME: &str = "Host encode time";
-pub const STAT_BUD_DELIVERY: &str = "BUD DELIVERY";
+pub const STAT_LOWLAT_DELIVERY: &str = "LOWLAT DELIVERY";
 pub const STAT_DUPLICATE_FRAGMENTS: &str = "Duplicate fragments";
 pub const STAT_OUTSIDE_RECEIVE_WINDOW: &str = "Outside receive window";
 pub const STAT_COMPRESSED_VIDEO_BACKLOG: &str = "Compressed video backlog";
@@ -353,6 +387,7 @@ pub const STAT_TIMING_SCOPE: &str = "Timing scope";
 pub const STAT_AUDIO: &str = "AUDIO";
 pub const STAT_CHANNELS: &str = "Channels";
 pub const STAT_MEASURED_AUDIO_TRAFFIC: &str = "Measured audio traffic";
+pub const STAT_AUDIO_PAYLOAD_BITRATE: &str = "Audio payload bitrate";
 pub const STAT_PLAYBACK_CHANNELS: &str = "Playback channels";
 pub const STAT_PLAYBACK_BUFFER: &str = "Playback buffer";
 pub const STAT_BUFFER_LIMITS: &str = "Buffer limits";

@@ -12,21 +12,21 @@ pub enum AiUpscaler {
 impl AiUpscaler {
     pub fn for_vendor(vendor: Option<u32>) -> Self {
         match vendor {
-            Some(0x10de) if cfg!(nvidia_vsr_sdk) => Self::Nvidia,
+            Some(0x10de) if cfg!(windows) => Self::Nvidia,
             Some(0x8086) if cfg!(feature = "vendor-video") => Self::Intel,
             _ => Self::Unavailable,
         }
     }
     pub fn labels(self) -> &'static [&'static str] {
         match self {
-            Self::Nvidia => &["Off", "Low", "Medium", "High", "Ultra"],
+            Self::Nvidia => &["Off", "On"],
             Self::Intel => &["Off", "On"],
             Self::Unavailable => &["Unavailable for selected GPU"],
         }
     }
     pub fn hint(self) -> &'static str {
         match self {
-            Self::Nvidia => "Experimental NVIDIA RTX VSR; normal GPU rendering.\nAdds GPU work/memory and may increase latency.\nActivates when upscaling; reconnect after changing.",
+            Self::Nvidia => "Request RTX VSR from the NVIDIA driver when upscaling.\nEnable Super Resolution and select quality in NVIDIA App.\nGPU processing may increase latency. Reconnect after changing.",
             Self::Intel => "Experimental Intel VPL AI; hardware support unverified.\n8-bit SDR, normal GPU rendering; may increase latency.\nRequires driver support; reconnect after changing.",
             Self::Unavailable => "AI upscaling is unavailable for the selected GPU.\nNVIDIA RTX and supported Intel GPU/driver combinations only.\nNormal GPU rendering remains available.",
         }
@@ -40,7 +40,7 @@ impl AiUpscaler {
     }
     pub fn selection(self, settings: &Settings) -> usize {
         match self {
-            Self::Nvidia => usize::from(settings.nvidia_vsr.min(4)),
+            Self::Nvidia => usize::from(settings.nvidia_vsr != 0),
             Self::Intel => usize::from(settings.intel_ai_vsr),
             Self::Unavailable => 0,
         }
@@ -78,9 +78,20 @@ impl Tab {
             Self::Network => crate::network_settings::NOTICE,
             Self::Video => "Video options are requests/preferences, not guaranteed results; compatibility fallback may apply.\nCheck Connection stats for the actual stream format, decoder and fallback.\nVideo changes apply to your next connection.",
             Self::Audio => "Audio changes apply on your next connection.",
-            Self::Input => "Enable BUD on the Network tab to use HID input.\nInput changes apply to your next connection.",
+            Self::Input => "Enable LOWLAT on the Network tab to use HID input.\nInput changes apply to your next connection.",
         }
     }
+}
+
+/// Settings rows whose protocol support differs between services.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum Feature {
+    #[default]
+    Common,
+    ParsecNetwork,
+    RawAudio,
+    SurroundAudio,
+    Hid,
 }
 
 pub use crate::connection_settings::BinaryChoice;
@@ -89,7 +100,7 @@ pub use crate::connection_settings::RouteMode;
 pub use crate::connection_settings::VideoFormat;
 
 pub struct Availability {
-    pub bud: bool,
+    pub lowlat: bool,
     pub audio_limits: bool,
     pub ai_upscale: bool,
     pub chroma_444: bool,
@@ -101,6 +112,7 @@ pub struct Availability {
 
 // Deliberately no Debug/Serialize: plaintext replacement secrets are transient.
 pub struct Form {
+    pub phaze: bool,
     pub active_tab: Tab,
     pub values: Settings,
     pub gpu_choices: Vec<Option<GpuPreference>>,
@@ -120,6 +132,7 @@ pub struct Form {
 impl Form {
     pub fn new(values: Settings, default_gpu_vendor: Option<u32>) -> Self {
         Self {
+            phaze: false,
             active_tab: Tab::Network,
             audio_min: values.audio_min_buffer_ms.to_string(),
             audio_max: values.audio_max_buffer_ms.to_string(),
@@ -135,6 +148,94 @@ impl Form {
             forget_password: false,
             forget_token: false,
             feedback: String::new(),
+        }
+    }
+    pub fn supports(&self, feature: Feature) -> bool {
+        !self.phaze
+            || matches!(feature, Feature::Common | Feature::RawAudio)
+            || (cfg!(any(windows, target_os = "linux")) && feature == Feature::Hid)
+    }
+    pub fn notice(&self) -> &'static str {
+        if self.phaze {
+            match self.active_tab {
+                Tab::Network => "Phaze: Force TURN uses the configured relay. Other modes use direct UDP.",
+                Tab::Video => "Video changes apply on your next connection. Check Connection stats for the actual format and decoder.",
+                Tab::Audio => "Phaze supports stereo AAC-LC or PCM. Audio changes apply on your next connection.",
+                Tab::Input if cfg!(any(windows, target_os = "linux")) => "USB HID is experimental and requires permission on the Phaze host. Reconnect after changing the input mode.",
+                Tab::Input => "Phaze supports keyboard, mouse and scrolling.",
+            }
+        } else {
+            self.active_tab.notice()
+        }
+    }
+    pub fn video_formats(&self) -> &'static [VideoFormat] {
+        if self.phaze {
+            &VideoFormat::ALL[..2]
+        } else {
+            &VideoFormat::ALL
+        }
+    }
+    pub fn video_format_help(&self) -> &'static str {
+        if self.phaze {
+            "Request H.264 or HEVC 8-bit.\nThe host may select H.264; reconnect after changing."
+        } else {
+            crate::app_style::forms::VIDEO_FORMAT.help
+        }
+    }
+    pub fn chroma_help(&self) -> &'static str {
+        if self.phaze {
+            "HEVC 8-bit; requires compatible host and GPU.\nNormal GPU rendering; host may send 4:2:0 instead."
+        } else {
+            crate::app_style::forms::CHROMA.help
+        }
+    }
+    pub fn presentation_help(&self) -> &'static str {
+        if self.phaze {
+            "HEVC 4:2:0: original NV12 (8-bit) surfaces.\nDriver support required; reconnect after changing."
+        } else {
+            crate::app_style::forms::VIDEO_PRESENTATION.help
+        }
+    }
+    pub fn audio_buffer_help(&self) -> &'static str {
+        if self.phaze {
+            "Default: 50 / 100 ms.\nCustom limits apply only when enabled."
+        } else {
+            crate::app_style::forms::PLAYBACK_BUFFER.help
+        }
+    }
+    pub fn audio_format_labels(&self) -> [&'static str; 2] {
+        if self.phaze {
+            crate::app_style::settings::PHAZE_AUDIO_FORMATS
+        } else {
+            BinaryChoice::AudioCodec.labels()
+        }
+    }
+    pub fn audio_format_help(&self) -> &'static str {
+        if self.phaze {
+            "48 kHz stereo: AAC-LC or uncompressed PCM.\nPCM uses about 1.54 Mbps before overhead.\nThe actual codec is shown in Connection stats."
+        } else {
+            crate::app_style::forms::AUDIO_FORMAT.help
+        }
+    }
+    pub fn route_labels(&self) -> &'static [&'static str] {
+        if self.phaze {
+            &crate::app_style::settings::PHAZE_ROUTES
+        } else {
+            &RouteMode::LABELS
+        }
+    }
+    pub fn route_help(&self) -> &'static str {
+        if self.phaze {
+            "Choose direct UDP or explicitly force TURN.\nThere is no automatic direct/relay fallback."
+        } else {
+            crate::app_style::forms::CONNECTION_ROUTE.help
+        }
+    }
+    pub fn provider_help(&self) -> &'static str {
+        if self.phaze {
+            "Used only with Force TURN relay.\nThe host-facing relay connection remains UDP."
+        } else {
+            crate::app_style::forms::TURN_PROVIDER.help
         }
     }
     pub fn cloudflare(&self) -> bool {
@@ -160,12 +261,12 @@ impl Form {
         }
         let relay = !self.values.stun_only;
         Availability {
-            bud: {
-                #[cfg(feature = "bud")]
+            lowlat: !self.phaze && {
+                #[cfg(feature = "lowlat")]
                 {
-                    self.values.bud
+                    self.values.lowlat
                 }
-                #[cfg(not(feature = "bud"))]
+                #[cfg(not(feature = "lowlat"))]
                 {
                     false
                 }
@@ -186,16 +287,18 @@ impl Form {
         settings.nvidia_vsr = settings.nvidia_vsr.min(4);
         // Preserve the existing parse order and validation even for inactive
         // numeric fields. Domain/secret validation remains in Manager::save.
-        crate::network_settings::apply_audio_fields(
-            &mut settings,
-            &self.audio_min,
-            &self.audio_max,
-        )?;
-        settings.video_gpu = self
-            .gpu_selection
-            .and_then(|i| self.gpu_choices.get(i))
-            .context("Choose Automatic or an available video GPU")?
-            .clone();
+        {
+            crate::network_settings::apply_audio_fields(
+                &mut settings,
+                &self.audio_min,
+                &self.audio_max,
+            )?;
+            settings.video_gpu = self
+                .gpu_selection
+                .and_then(|i| self.gpu_choices.get(i))
+                .context("Choose Automatic or an available video GPU")?
+                .clone();
+        }
         crate::network_settings::apply_fields(
             &mut settings,
             &self.stun_urls,
@@ -305,7 +408,7 @@ mod tests {
         let mut form = form();
         form.values.allow_raw_audio = true;
         form.values.experimental_surround_audio = true;
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         {
             form.values.hid_mouse = true;
             form.values.hid_keyboard = true;
@@ -325,7 +428,7 @@ mod tests {
                 assert_eq!(enabled.custom_turn, !stun_only && !cloudflare);
                 assert_eq!(enabled.cloudflare_turn, !stun_only && cloudflare);
                 assert!(!enabled.audio_limits);
-                assert!(!enabled.bud);
+                assert!(!enabled.lowlat);
             }
         }
         form.values.custom_audio_buffer = true;
@@ -335,10 +438,10 @@ mod tests {
         assert!(!form.values.force_relay);
         RouteMode::Automatic.apply(&mut form.values);
         assert!(!form.values.force_relay); // No implicit re-enable.
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         {
-            form.values.bud = true;
-            assert!(form.availability().bud);
+            form.values.lowlat = true;
+            assert!(form.availability().lowlat);
             assert!(form.values.hid_mouse);
             assert!(form.values.hid_keyboard);
         }
@@ -485,7 +588,7 @@ mod tests {
             mode.apply(&mut s);
             assert_eq!(VideoFormat::current(&s), mode);
         }
-        #[cfg(feature = "bud")]
+        #[cfg(feature = "lowlat")]
         for mode in InputMode::ALL {
             let mut s = Settings::default();
             mode.apply(&mut s);
@@ -515,7 +618,7 @@ mod vsr_tests {
             let allowed = vendor == 0x8086 && cfg!(feature = "vendor-video");
             assert_eq!(
                 available.ai_upscale,
-                (cfg!(nvidia_vsr_sdk) && vendor == 0x10de)
+                (cfg!(windows) && vendor == 0x10de)
                     || (cfg!(feature = "vendor-video") && vendor == 0x8086)
             );
             assert_eq!(available.zero_copy, !allowed);
@@ -525,18 +628,19 @@ mod vsr_tests {
             );
         }
         // The rendered backend owns the edit even if the GPU selector has just
-        // changed. Switching providers must not turn NVIDIA Ultra into Intel On.
+        // changed. Switching providers preserves each provider's preferences.
         settings.nvidia_vsr = 4;
-        AiUpscaler::Nvidia.apply(&mut settings, 3);
+        assert_eq!(AiUpscaler::Nvidia.selection(&settings), 1);
+        AiUpscaler::Nvidia.apply(&mut settings, 1);
         assert!(settings.intel_ai_vsr);
         AiUpscaler::Intel.apply(&mut settings, 0);
-        assert_eq!(settings.nvidia_vsr, 3);
+        assert_eq!(settings.nvidia_vsr, 1);
         assert!(!settings.intel_ai_vsr);
         AiUpscaler::Unavailable.apply(&mut settings, 0);
-        assert_eq!(settings.nvidia_vsr, 3);
-        assert_eq!(AiUpscaler::Nvidia.selection(&settings), 3);
+        assert_eq!(settings.nvidia_vsr, 1);
+        assert_eq!(AiUpscaler::Nvidia.selection(&settings), 1);
         assert_eq!(AiUpscaler::Intel.selection(&settings), 0);
-        assert_eq!(AiUpscaler::Nvidia.labels().len(), 5);
+        assert_eq!(AiUpscaler::Nvidia.labels().len(), 2);
         assert_eq!(AiUpscaler::Intel.labels().len(), 2);
         settings.intel_ai_vsr = true;
         for ten_bit in [false, true] {
@@ -549,7 +653,7 @@ mod vsr_tests {
         }
     }
     #[test]
-    fn vsr_defaults_off_retains_quality_and_excludes_original_surface_display() {
+    fn vsr_defaults_off_and_preserves_legacy_enabled_settings() {
         let settings = Settings::default();
         assert_eq!(settings.nvidia_vsr, 0);
         for quality in 0..=4 {
@@ -564,14 +668,76 @@ mod vsr_tests {
                 let available = form.availability();
                 assert_eq!(
                     available.ai_upscale,
-                    (cfg!(nvidia_vsr_sdk) && vendor == 0x10de)
+                    (cfg!(windows) && vendor == 0x10de)
                         || (cfg!(feature = "vendor-video") && vendor == 0x8086)
                 );
                 assert_eq!(
                     available.zero_copy,
-                    quality == 0 || vendor != 0x10de || !cfg!(nvidia_vsr_sdk)
+                    quality == 0 || vendor != 0x10de || !cfg!(windows)
                 );
             }
         }
+    }
+    #[test]
+    fn service_policy_keeps_local_media_controls_and_excludes_unwired_protocols() {
+        let mut form = Form::new(Settings::default(), Some(0x10de));
+        for phaze in [false, true] {
+            form.phaze = phaze;
+            assert!(form.supports(Feature::Common));
+            assert!(form.supports(Feature::RawAudio));
+            assert_eq!(
+                form.supports(Feature::Hid),
+                !phaze || cfg!(any(windows, target_os = "linux"))
+            );
+            for feature in [Feature::ParsecNetwork, Feature::SurroundAudio] {
+                assert_eq!(form.supports(feature), !phaze);
+            }
+            assert_eq!(form.video_formats().len(), if phaze { 2 } else { 3 });
+            if phaze {
+                assert_eq!(form.audio_format_labels(), ["AAC-LC", "Uncompressed PCM"]);
+                assert!(form.audio_format_help().contains("AAC-LC"));
+                assert!(!form.availability().lowlat);
+                assert!(!form.video_formats().contains(&VideoFormat::Hevc10));
+            } else {
+                assert_eq!(
+                    form.audio_format_labels(),
+                    BinaryChoice::AudioCodec.labels()
+                );
+            }
+        }
+    }
+    #[test]
+    fn phaze_settings_validate_shared_gpu_and_audio_options() {
+        let saved = Settings {
+            video_gpu: Some(GpuPreference {
+                name: "Offline fixture GPU".into(),
+                vendor_id: 0x1002,
+                device_id: 7,
+                subsystem_id: 0,
+                revision: 0,
+                luid: 9,
+            }),
+            prefer_hevc: true,
+            experimental_chroma_444: true,
+            ..Default::default()
+        };
+        let mut form = Form::new(saved.clone(), Some(0x1002));
+        form.phaze = true;
+        form.gpu_choices.push(saved.video_gpu.clone());
+        form.gpu_selection = Some(1);
+        form.audio_min = "30".into();
+        form.audio_max = "90".into();
+        form.availability();
+        form.turn_urls = "turn:127.0.0.1:3478?transport=udp".into();
+        form.values.force_relay = true;
+        let actual = form.candidate().unwrap();
+        assert_eq!(
+            serde_json::to_value(&actual.video_gpu).unwrap(),
+            serde_json::to_value(&saved.video_gpu).unwrap()
+        );
+        assert_eq!(actual.audio_min_buffer_ms, 30);
+        assert!(!actual.experimental_chroma_444);
+        assert!(actual.force_relay);
+        assert_eq!(actual.turn_urls.len(), 1);
     }
 }

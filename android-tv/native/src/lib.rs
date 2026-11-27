@@ -14,9 +14,6 @@ mod audio_preferences;
 mod audio_recovery;
 #[path = "../../../src-native/src/audio_stream.rs"]
 pub mod audio_stream;
-#[path = "../../../src-native/src/bud_ingress.rs"]
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
-pub mod bud_ingress;
 #[path = "../../../src-native/src/codec_initialization.rs"]
 pub mod codec_initialization;
 #[path = "../../../src-native/src/control.rs"]
@@ -29,6 +26,9 @@ mod event_log;
 pub mod frame_timing;
 #[path = "../../../src-native/src/native_core/host_video.rs"]
 pub mod host_video;
+#[path = "../../../src-native/src/lowlat_ingress.rs"]
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub mod lowlat_ingress;
 #[path = "../../../src-native/src/media_ingress.rs"]
 pub mod media_ingress;
 #[path = "../../../src-native/src/native_wire.rs"]
@@ -50,6 +50,17 @@ pub mod video_stream;
 #[cfg(target_os = "android")]
 mod audio_android;
 #[cfg(target_os = "android")]
+mod interop_android;
+#[cfg(target_os = "android")]
+// Android reuses the cross-platform Phaze adapter, whose optional HID builder
+// is currently selected by the Linux UI only. Keep the adapter unchanged.
+#[allow(dead_code)]
+#[path = "../../../src-native/src/interop_client.rs"]
+mod interop_client;
+#[cfg(target_os = "android")]
+#[path = "../../../src-native/src/interop_session.rs"]
+pub mod interop_session;
+#[cfg(target_os = "android")]
 mod stream;
 #[cfg(target_os = "android")]
 mod transport_android;
@@ -59,10 +70,10 @@ pub mod video_android;
 #[cfg(target_os = "android")]
 mod android;
 
+pub mod local_setup;
 #[cfg(target_os = "android")]
 #[path = "../../../src-native/src/bud_routes.rs"]
-mod bud_routes;
-pub mod local_setup;
+mod lowlat_routes;
 pub mod network;
 pub mod overlay;
 #[path = "../../../src-native/src/turn_configuration.rs"]

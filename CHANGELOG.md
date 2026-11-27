@@ -2,6 +2,122 @@
 
 ## Unreleased
 
+## v0.9.9-dev.3 — Phaze multi-display and refresh-rate fixes (2026-11-27)
+
+This development preview builds on **EvoParseq v0.9.9-dev.2**. It includes
+Windows x64, the distribution-signed Android TV APK and the experimental Linux
+x86_64 Flatpak. All three clients report **0.9.9-dev.3**.
+
+**This is a development preview. EvoParseq v0.9.8 remains the stable release.**
+
+### What's new and improved
+
+- **Phaze virtual displays:** add an optional Mirror display setting on
+  Windows, Linux and Android TV. Desktop clients can request up to four virtual
+  outputs with per-output resolutions; Android TV remains single-display.
+  Mirror display is off by default and the host controls the applied display
+  modes.
+- **Phaze multi-window streaming:** open active host outputs from the desktop
+  Session panel with **Add screen**. Each window has its own video stream and
+  output-targeted input; closing a secondary window leaves the other streams
+  running. Focus changes release held input, and Windows pointer capture plus
+  the Linux Wayland drag handoff carry a held button across output windows.
+  USB HID sessions remain single-window.
+- **Linux Phaze cursor:** render host cursor shapes with their hotspots above
+  the video and preserve pointer feedback during Wayland window dragging.
+  Cursor shapes are shared across stream windows and update only when the
+  reported shape changes. Parsec keeps its existing in-video cursor behavior.
+- **Phaze reconnect recovery:** when a reconnect produces no first video frame,
+  retain a bounded startup window for a late virtual output and retry eligible
+  host outputs. Keep a slow but healthy primary output selected.
+- **Mirror refresh-rate encoding:** encode requested and native refresh fields
+  independently in the Phaze display descriptor, with a 60 Hz default. The
+  corrected request fixed the reported Windows 24 Hz virtual-display mode.
+- **Privacy information:** document client data handling, third-party STUN/TURN
+  contacts and locally stored relay credentials in the new privacy policy.
+
+### Known limitations
+
+- The user confirmed two Windows outputs at different resolutions and a stable
+  60 Hz applied Windows mode across reconnects. Linux multi-display and cursor
+  behavior were confirmed on Zorin OS 18. Three- and four-output streaming are
+  not claimed as live-validated.
+- Mixed 60/120 Hz operation and live Linux/Android refresh behavior remain
+  unvalidated. Host-reported refresh values alone do not establish the applied
+  operating-system mode.
+- Normal Phaze mouse or keyboard input may occasionally be missed, including
+  with the official client. This has not been observed in USB HID mode.
+- NVIDIA RTX VSR driver acceptance does not by itself verify image enhancement.
+
+### Compatibility and updating
+
+Windows requires Windows 11 x64 and Direct3D feature level 11.0+. Android TV
+requires Android 10 (API 29) or later on ARMv7 or ARM64. The Linux preview
+requires Wayland, PipeWire, Flatpak 1.15.6 or later and compatible Vulkan Video
+support. Platform, GPU and host capabilities vary; see README and the linked
+feature PRs for details.
+
+Windows: close the client and extract **EvoParseq-v0.9.9-dev.3-win64.zip**. The
+legacy **ParsecWebTurn-v0.9.9-dev.3-win64.zip** contains the same executable
+under its previous name. The ZIPs exclude user settings.
+
+Android TV: install **EvoParseq-TV.apk** or select the prerelease channel in
+Settings > Updates. The APK uses the existing distribution signing identity.
+
+Linux: install **EvoParseq-Linux-v0.9.9-dev.3-x86_64.flatpak**. The application ID
+and settings directory remain the same.
+
+[Phaze Mirror display](https://github.com/vampywiz17/EvoParseq/pull/23) ·
+[Phaze multi-display](https://github.com/vampywiz17/EvoParseq/pull/36) ·
+[Display refresh correction](https://github.com/vampywiz17/EvoParseq/pull/42)
+
+
+## v0.9.9-dev.2 — Driver-based NVIDIA VSR preview (2026-11-22)
+
+This development preview builds on **EvoParseq v0.9.9-dev.1**. It includes
+Windows x64, the distribution-signed Android TV APK and the experimental Linux
+x86_64 Flatpak. All three clients report **0.9.9-dev.2**.
+
+**This is a development preview. EvoParseq v0.9.8 remains the stable release.**
+
+### What's new and improved
+
+- **Windows RTX VSR:** request Super Resolution from the installed NVIDIA
+  driver during the existing D3D11 video processor pass. Keep a local on/off
+  preference and use NVIDIA App for quality. When the driver rejects the
+  request, the stream can continue through normal GPU rendering.
+- **Windows build and packaging:** remove the NVIDIA SDK and bridge tooling.
+  The Windows CI build also runs for pull requests targeting dev.
+- **VSR diagnostics:** log when the driver accepts the VSR request. This event
+  records driver acceptance. RTX image enhancement remains unverified.
+
+### Known issues
+
+- **Phaze input:** normal mouse or keyboard events can occasionally be missed,
+  including in the official Phaze client. This has not been observed in USB
+  HID mode.
+
+### Compatibility and validation
+
+The Windows client asks the installed NVIDIA driver for VSR when scaling
+eligible NV12 or P010 video. The RTX 3060 driver accepted the request in a
+synthetic D3D11 test. Actual image enhancement still needs verification on
+an RTX system with Super Resolution enabled in NVIDIA App.
+
+### Updating
+
+Windows: close the client and extract **EvoParseq-v0.9.9-dev.2-win64.zip**.
+The legacy **ParsecWebTurn-v0.9.9-dev.2-win64.zip** contains the same executable
+under its previous name. The ZIPs exclude user settings.
+
+Android TV: install **EvoParseq-TV.apk** or select the prerelease channel in
+Settings > Updates. The APK uses the existing distribution signing identity.
+
+Linux: install **EvoParseq-Linux-v0.9.9-dev.2-x86_64.flatpak**. The application ID
+and settings directory remain the same.
+
+[Driver-based NVIDIA VSR and verification](https://github.com/vampywiz17/EvoParseq/pull/28)
+
 ## v0.9.8 — Multi-display streaming and Linux Flatpak (2026-11-19)
 
 
@@ -12,7 +128,7 @@ Flatpak. All three clients report **0.9.8**.
 ## What's new and improved
 
 - **Windows and Linux multi-display:** open up to three host-reported outputs
-  over one WebRTC or BUD connection, with one decoder per display and one
+  over one WebRTC or lowlat connection, with one decoder per display and one
   shared audio pipeline. Each additional display has independent resolution,
   fullscreen and input controls. Resolution changes refresh the host settings
   before updating the selected display, preserving other outputs' settings.
@@ -29,14 +145,14 @@ Flatpak. All three clients report **0.9.8**.
 - **Linux desktop and audio:** shared launcher, Settings, session overlay and
   connection statistics, with secure remembered sign-in through the Secret
   portal. PipeWire provides local volume and mute, automatic device recovery,
-  stereo Opus and BUD PCM or supported 5.1/7.1 output. Normal keyboard and mouse,
-  opt-in BUD HID, focused text clipboard and controllers with rumble are wired.
+  stereo Opus and lowlat PCM or supported 5.1/7.1 output. Normal keyboard and mouse,
+  opt-in lowlat HID, focused text clipboard and controllers with rumble are wired.
 - **Linux networking and session controls:** shared STUN, custom TURN and
   Cloudflare TURN settings, direct-only and Force TURN modes, and optional
   DSCP/socket-priority hints. The overlay exposes display, resolution, bitrate,
   frame-rate and frame-pacing requests. Vulkan adaptive presentation is available
   when supported.
-- **Windows reliability:** fix a BUD teardown deadlock that could freeze the
+- **Windows reliability:** fix a lowlat teardown deadlock that could freeze the
   client and remove duplicate scrollbars from information pages.
 - **Desktop sign-in:** accept spaced six-digit authenticator codes and show clearer
   messages for rejected fields, confirmation requirements and rate limits.
@@ -89,7 +205,7 @@ x86_64 Flatpak. All three application versions are **0.9.8-dev.3**.
   adapters, save the selected adapter identity and restore it on startup.
   The command-line adapter override remains available.
 - **Linux multi-display:** open additional host-listed outputs over the existing
-  BUD or WebRTC session, with independent Vulkan Video decoders and per-display
+  lowlat or WebRTC session, with independent Vulkan Video decoders and per-display
   resolution, fullscreen, input and close controls. Keep a single connection and
   audio pipeline; closing an additional window closes only that stream.
 - **Native Wayland window dragging:** transfer held-button motion between stream
@@ -163,7 +279,7 @@ All three application versions are **0.9.8-dev.2**.
 ## What's new and improved
 
 - **Windows multi-display:** open a second or third host-reported display from
-  the primary session overlay's **Add screen** menu, over the existing BUD or
+  the primary session overlay's **Add screen** menu, over the existing lowlat or
   WebRTC connection. Each stream uses its own bounded decoder/reference state
   and the existing D3D11 presentation path. Keep one connection and one audio
   pipeline; no application decoded-frame copy, composition pass or CPU readback
@@ -201,7 +317,7 @@ All three application versions are **0.9.8-dev.2**.
   the strict coverage/quality gate is unchanged. Measured Sonar coverage is
   **85.3% on new code** and **72.1% overall**; all required Quality Gate conditions
   pass. The 80% threshold applies to new code, not the whole repository.
-- **Maintenance:** remove the BUD adapter's unused direct Tokio dependency and
+- **Maintenance:** remove the lowlat adapter's unused direct Tokio dependency and
   refresh the validated display documentation. Windows, Android and Linux
   application dependency/feature graphs remain unchanged by that removal; the
   standalone adapter no longer pulls in unnecessary Tokio socket/runtime crates.
@@ -217,7 +333,7 @@ host first. Fallback To Virtual Display alone creates only a fallback output.
 The maintainer has live-tested two-screen Windows playback, independent
 resolution changes, activating clicks and dragging windows between displays.
 This does not validate every host, account or display topology. A previously
-reported BUD delivery/acknowledgement timeout is not claimed fixed by this work.
+reported lowlat delivery/acknowledgement timeout is not claimed fixed by this work.
 
 Linux Vulkan Video playback remains tested on **Intel HD 520** and **AMD Radeon
 780M**. **NVIDIA playback remains unverified**: the hybrid Pop!_OS test system
@@ -307,7 +423,7 @@ are now **0.9.8-dev.1**; Linux no longer uses a separate 0.1.x application versi
   decode submission slots without deepening the media queue; retain resources
   until their final GPU/render owner finishes. Preserve the synchronous path
   when timeline handoff is unavailable. No new rendering pass or frame copy.
-- **Linux media delivery and recovery:** reuse the Windows/shared BUD media ingress
+- **Linux media delivery and recovery:** reuse the Windows/shared lowlat media ingress
   with bounded video-first batches and prompt burst draining. Decouple compressed
   video draining from display refresh, retain output leases and recover from
   background-window stalls at a keyframe. Feed WebRTC media from the detached
@@ -316,16 +432,16 @@ are now **0.9.8-dev.1**; Linux no longer uses a separate 0.1.x application versi
 - **Linux relay/network settings:** integrate the shared STUN, custom TURN and
   Cloudflare configuration, direct-only and Force TURN policies, including the
   existing UDP/TCP/TLS relay routes. Protect saved relay secrets and preserve
-  in-memory Cloudflare credentials where selected. BUD remains an explicit choice;
+  in-memory Cloudflare credentials where selected. lowlat remains an explicit choice;
   failures never silently change the selected transport.
 - **Linux QoS:** connect the existing optional QoS setting to DSCP AF21 and
-  SO_PRIORITY 6, including configured BUD route attempts. The switch remains
+  SO_PRIORITY 6, including configured lowlat route attempts. The switch remains
   opt-in; these are scheduling/network hints, not guaranteed latency reductions.
-- **Linux audio:** support stereo WebRTC Opus, BUD Opus/raw PCM and verified
+- **Linux audio:** support stereo WebRTC Opus, lowlat Opus/raw PCM and verified
   default-output 5.1/7.1 layouts. Wire local mute/volume, configurable bounded
   buffering and automatic output reopening through PipeWire and the shared audio
   policies. Keep callbacks nonblocking and channel/layout validation explicit.
-- **Linux input:** implement normal Parsec keyboard/mouse and opt-in BUD USB HID,
+- **Linux input:** implement normal Parsec keyboard/mouse and opt-in lowlat USB HID,
   focused text clipboard synchronization, controllers and rumble. Share input
   policy, HID reports and controller lifecycle with the existing platforms.
   Include orientation, manual immersive modes and compositor-supported shortcut
@@ -355,12 +471,12 @@ are now **0.9.8-dev.1**; Linux no longer uses a separate 0.1.x application versi
   checks with verified Flatpak downloads handed to the system installer for user
   confirmation. Package Wayland cursor resources and the Flatpak runtime reference;
   default ANV_DEBUG=video-decode for Mesa Intel's experimental video path.
-- **Windows BUD freeze fix:** terminal transport events update their already-locked
+- **Windows lowlat freeze fix:** terminal transport events update their already-locked
   attempt state instead of reacquiring the same mutex. Delivery timeout/host
   disconnect can reach existing teardown/error handling instead of freezing the
   application. Preserve status codes, retry policy and video presentation.
 - **Windows feature status and information pages:** remove the experimental label
-  from Display timing, VRR, Zero copy presentation and BUD USB HID input. Defaults
+  from Display timing, VRR, Zero copy presentation and lowlat USB HID input. Defaults
   and hardware requirements are unchanged; old saved profile keys remain accepted.
   Linux retains its experimental labels. Remove the duplicate inner scrollbar
   from About and Check for updates.
@@ -466,7 +582,7 @@ Linux alpha builds and the proposed macOS port are not part of this release.
 ## What's new and improved
 
 - **Shared controller support:** one Rust state and protocol pipeline forwards
-  up to four controllers over WebRTC or BUD. Windows uses native XInput;
+  up to four controllers over WebRTC or lowlat. Windows uses native XInput;
   Android reads standard gamepad/joystick events. Forward buttons, D-pad,
   sticks and analog triggers; preserve trigger precision and avoid duplicate
   button mapping. Device-supported vibration uses the platform adapter.
@@ -494,10 +610,10 @@ Linux alpha builds and the proposed macOS port are not part of this release.
   validation, bounded queues and keyframe recovery. Decoded pixels do not cross
   JNI as Bitmaps or undergo CPU readback. Shared Rust audio decoding feeds a
   bounded nonblocking PCM handoff and 48 kHz AAudio pull output.
-- **WebRTC and BUD on TV:** reuse Rust authentication, discovery, signaling,
+- **WebRTC and lowlat on TV:** reuse Rust authentication, discovery, signaling,
   connection preferences, host settings and media handling. Support direct/STUN,
   Cloudflare or custom TURN, and Force TURN. Preserve WebRTC ICE selection and
-  BUD direct UDP/configured UDP-TLS-TCP relay carriers. Transport selection stays
+  lowlat direct UDP/configured UDP-TLS-TCP relay carriers. Transport selection stays
   explicit, with no silent switch. Keep useful transport errors and stop reasons
   visible after returning to the picker; distinguish empty WebRTC messages from
   channel EOF and retain bounded codec/output recovery.
@@ -528,7 +644,7 @@ Linux alpha builds and the proposed macOS port are not part of this release.
   buffering from 0-500 ms, with a positive maximum at least equal to the minimum.
   Defaults remain a zero minimum and 100 ms queue ceiling; larger minima add
   latency.
-- **BUD PCM and surround on TV:** optionally request raw PCM and verified
+- **lowlat PCM and surround on TV:** optionally request raw PCM and verified
   5.1/7.1 output layouts. Match explicit Android speaker positions to the actual
   AAudio route and opened stream; unknown or unsupported layouts use stereo.
   Resolve newer channel-mask APIs optionally so Android 10-12 still loads.
@@ -548,7 +664,7 @@ Linux alpha builds and the proposed macOS port are not part of this release.
 - **Shared core and dependency maintenance:** reuse Rust session, validation,
   media ingress, desktop input gestures, controller and audio policy across
   platforms, retaining explicit MediaCodec/AAudio/Keystore and D3D11/WASAPI
-  adapters. Use common bounded, video-first BUD batches and promptly drain bursts.
+  adapters. Use common bounded, video-first lowlat batches and promptly drain bursts.
   Remove unused nix AIO features and the resulting unmaintained pin-utils
   dependency without changing upstream Rust implementation or unrelated versions.
   Retain third-party licenses and local-change notices in Windows/Android packages.
@@ -579,11 +695,11 @@ and rumble combinations require their own testing. DirectInput-only Windows
 pads and Sony raw touch/gyro/adaptive-trigger passthrough are not implemented.
 The host's normal controller driver and permissions are still required.
 
-In the tested TV setup BUD at 50 Mbit/s was stable; sustained WebRTC 50 Mbit/s
+In the tested TV setup lowlat at 50 Mbit/s was stable; sustained WebRTC 50 Mbit/s
 still caused delay/video-channel closure, while around 30 Mbit/s was stable.
 This is a transport-specific observation, not a universal hardware bitrate cap.
 The AMD-host TV test returned 8-bit. 10-bit remains SDR, not HDR. Android adds
-no 4:4:4, Windows BUD USB HID mode, VRR, AISR or Windows-equivalent Zero copy mode.
+no 4:4:4, Windows lowlat USB HID mode, VRR, AISR or Windows-equivalent Zero copy mode.
 Surface output avoids application CPU pixel readback; driver/compositor copies
 and physical scanout remain unverified. No quantified latency gain is claimed.
 Some remotes cannot report simultaneous OK and direction presses for dragging.
@@ -655,13 +771,13 @@ the published Android APK at dev.5 so those installations can update forward.
   maximum must be positive and at least the minimum, with a 500 ms ceiling.
   Default behavior remains a zero minimum and 100 ms queue ceiling; increasing
   the minimum adds latency and can help absorb jitter.
-- **BUD PCM and surround on Android:** optionally request uncompressed PCM and
+- **lowlat PCM and surround on Android:** optionally request uncompressed PCM and
   the routed output's verified 5.1/7.1 speaker layout. Match explicit Android
   speaker positions to the actual AAudio device and opened stream. Unknown or
   unsupported layouts fall back to stereo. Newer channel-mask APIs are resolved
   optionally so the APK still loads on Android 10-12. WebRTC remains stereo Opus.
-- **Shared BUD media processing:** replace Android's separate media parsing
-  with the shared Rust BUD ingress. Preserve bounded,
+- **Shared lowlat media processing:** replace Android's separate media parsing
+  with the shared Rust lowlat ingress. Preserve bounded,
   video-first media batches, prompt draining of queued bursts, codec/layout
   validation, encoder-change handling and keyframe recovery. PCM and multistream
   Opus use the common decoder/output queue instead of a separate Kotlin path.
@@ -766,10 +882,10 @@ Windows video features already shipped in v0.9.5 are not repeated.
   bounded queues and keyframe recovery. Decoded pixels are not copied through
   JNI or read back to CPU memory. Stereo 48 kHz audio uses the shared Rust Opus
   decoder and AAudio pull output, with bounded audio storage.
-- **BUD and WebRTC on TV:** connect to the unmodified official host directly or
+- **lowlat and WebRTC on TV:** connect to the unmodified official host directly or
   through configured STUN/TURN. Reuse explicit transport selection, Cloudflare
-  and custom relay credentials, Force TURN and the existing BUD UDP/TLS/TCP
-  carrier order. Preserve ordinary BUD input validation while adding shared
+  and custom relay credentials, Force TURN and the existing lowlat UDP/TLS/TCP
+  carrier order. Preserve ordinary lowlat input validation while adding shared
   application-control routing. No silent transport switch or host patch is added.
 - **Secure remembered TV sign-in:** retain only the session token, encrypted
   using AES-256-GCM with a non-exportable Android Keystore key, in private
@@ -783,7 +899,7 @@ Windows video features already shipped in v0.9.5 are not repeated.
   Preserve origin/Host checks, bounded submissions and Keystore-protected relay
   secrets. No external provisioning website or public setup endpoint is used.
 - **Shared controller forwarding:** one Rust state/protocol pipeline supports
-  up to four standard controllers on BUD and WebRTC. Windows uses native XInput;
+  up to four standard controllers on lowlat and WebRTC. Windows uses native XInput;
   Android translates standard gamepad/joystick events. Forward buttons, D-pad,
   sticks and analog triggers, preserve host controller presence across local
   menus while releasing held state, and handle removal/disconnect explicitly.
@@ -820,7 +936,7 @@ EU on Android 14**, using a 32-bit ARM userspace. Other devices/codecs/controlle
 need their own live validation.
 
 H.264, HEVC 8-bit and NVIDIA-host HEVC Main10 are live-confirmed on this box.
-The tested AMD host returned 8-bit. BUD at 50 Mbit/s was stable in the tested
+The tested AMD host returned 8-bit. lowlat at 50 Mbit/s was stable in the tested
 setup; sustained WebRTC 50 Mbit/s still caused delay/video-channel closure on
 Ethernet and Wi-Fi, while about 30 Mbit/s was stable. This is not a proven
 universal hardware bitrate ceiling. Surface timing felt smoother in live use;
@@ -831,7 +947,7 @@ Android GameSir configurations. DirectInput-only Windows pads, advanced Sony
 features and all-device rumble compatibility are not provided. Home/Guide stays
 OS-owned. The official host needs its normal controller driver and permissions.
 Physical Android input/capture and device/focus edge cases need broader testing;
-Android does not implement the Windows BUD USB HID mode. Some remotes cannot
+Android does not implement the Windows lowlat USB HID mode. Some remotes cannot
 report simultaneous OK and direction presses required for dragging.
 
 MediaCodec-to-Surface output is not a claim of verified driver/compositor
@@ -877,10 +993,10 @@ The repository is now **vampywiz17/EvoParseq**.
   is bundled or executed. Remembered sessions use Windows CurrentUser encryption;
   passwords and two-factor codes are not saved. Computer discovery refreshes
   quietly in the background. Friend/invitation authorization is not implemented.
-- **Native WebRTC and BUD:** retain direct connections, custom TURN over
+- **Native WebRTC and lowlat:** retain direct connections, custom TURN over
   UDP/TLS/TCP, Cloudflare credentials, Force TURN and STUN-only routing while
   replacing WASM-dependent session orchestration. Transport selection is explicit;
-  a BUD failure never silently switches to WebRTC. Shared account/session policy
+  a lowlat failure never silently switches to WebRTC. Shared account/session policy
   is separated from platform adapters without adding a media-processing layer.
 - **EvoParseq interface and session controls:** native About/update pages,
   consistent dark windows, a draggable icon and a compact performance summary.
@@ -944,7 +1060,7 @@ The repository is now **vampywiz17/EvoParseq**.
   and state explicitly that video settings are host requests, not guarantees.
   Organize Connection stats into Overview, Network, Video, Audio and Timings
   tabs. Add recent two-second timing averages, expire stale values and separate
-  decoded FPS from presentation-submission FPS. BUD audio timing no longer
+  decoded FPS from presentation-submission FPS. lowlat audio timing no longer
   overwrites video encode timing. Stats report the actual stream/output format.
 - **Optional GPU AI upscaling:** one experimental GPU-dependent selector offers
   NVIDIA RTX VSR quality levels or Intel VPL AI. Upscaling is off by default,
@@ -955,7 +1071,7 @@ The repository is now **vampywiz17/EvoParseq**.
   `%LOCALAPPDATA%/EvoParseq/vsr/1.1.0`, outside the EXE and without admin rights.
   Intel uses its installed driver runtime and downloads no model or DLL.
 - **Optional TURN socket QoS:** experimental Windows AudioVideo marking for
-  outgoing BUD/WebRTC TCP/TLS TURN sockets is off by default. Rejection is
+  outgoing lowlat/WebRTC TCP/TLS TURN sockets is off by default. Rejection is
   nonfatal. It does not prioritize incoming traffic or alter relay-server policy.
 - **Maintenance and security:** update the existing WebRTC DTLS NIST-curve
   dependencies without replacing the WebRTC engine. Refresh transport/TLS
@@ -1066,7 +1182,7 @@ first EvoParseq release from `dev`; the previous stable remains available.
   computer discovery, authenticated signaling and owner-session control directly
   in Rust. Remembered sessions use Windows CurrentUser encryption; passwords and
   two-factor codes are not saved. The computer picker refreshes in the background.
-- **Native WebRTC and BUD sessions:** retain the existing media and transport
+- **Native WebRTC and lowlat sessions:** retain the existing media and transport
   backends while replacing their WASM-dependent orchestration. Use explicit
   transport selection, direct connections, custom TURN UDP/TLS/TCP, Force TURN,
   STUN-only and Cloudflare credentials without a silent transport switch.
@@ -1098,7 +1214,7 @@ first EvoParseq release from `dev`; the previous stable remains available.
 - **Clear 10-bit failure handling:** preserve the requested mode. An initial host
   encoder failure prompts the user to disable 10-bit and reconnect instead of
   silently reopening an 8-bit session. Stats retain actual stream/output precision.
-- **Presentation catch-up:** extend the reference-safe BUD approach to WebRTC,
+- **Presentation catch-up:** extend the reference-safe lowlat approach to WebRTC,
   decoding dependencies in order while skipping obsolete display work after a
   burst. Bounded recent queue history adapts WebRTC catch-up to sustained late
   input and resets after recovery. No extra frame copy, rendering thread or
@@ -1108,13 +1224,13 @@ first EvoParseq release from `dev`; the previous stable remains available.
   Retire stale queued and in-flight audio, preserve Opus state and existing
   buffer preferences, and expose recovery transitions in logs/stats.
 - **Optional TCP/TLS QoS:** add an off-by-default experimental Windows AudioVideo
-  marking option for outgoing BUD/WebRTC TURN sockets. Refusal is nonfatal;
+  marking option for outgoing lowlat/WebRTC TURN sockets. Refusal is nonfatal;
   existing TLS verification and transport IO remain intact. It does not set
   Cloudflare/server priorities or prioritize incoming relay traffic.
 - **Cursor, settings and diagnostics:** size remote cursor images to the client's
   Windows cursor canvas while preserving shape/hotspot proportions. Group routing,
   video-format, HID and audio choices into dropdowns; retain saved preferences.
-  Keep BUD video encode timing separate from audio timing reports and reuse
+  Keep lowlat video encode timing separate from audio timing reports and reuse
   existing telemetry for the session overlay and diagnostics.
 - **Maintenance and packaging:** separate shared sign-in, settings, session,
   diagnostics and input rules from Win32 adapters while retaining the GPU/media
@@ -1138,11 +1254,11 @@ builds, not published stable releases.
 
 
 - Standardize normal HEVC decoding: NVIDIA direct D3D11 including P010, AMD AMF 8/10-bit 4:2:0 by default, and Intel VPL NV12/P010/AYUV/Y410. Remove the AMF Main10 opt-in selector; AMD 4:4:4 remains disabled. Keep original-surface Zero copy limited to 4:2:0 NV12/P010.
-- Log decoder selection and MF fallback attempts. A 4:4:4 decoder compatibility failure requests 4:2:0 on BUD/WebRTC, preserves the requested bit depth and saved preferences, and uses MF after the host changes format. Recovery remains bounded; unsupported host responses fail explicitly.
+- Log decoder selection and MF fallback attempts. A 4:4:4 decoder compatibility failure requests 4:2:0 on lowlat/WebRTC, preserves the requested bit depth and saved preferences, and uses MF after the host changes format. Recovery remains bounded; unsupported host responses fail explicitly.
 - Explain in Video settings that format choices are requests and compatibility fallback may change the result; Connection stats shows the actual stream.
 
 
-## 0.9.4 - BUD relays, GPU video and HID input (2026-10-25)
+## 0.9.4 - lowlat relays, GPU video and HID input (2026-10-25)
 
 This stable Windows release brings together the changes from v0.9.4-dev.1 through
 v0.9.4-dev.7, following the maintainer's Intel, AMD and NVIDIA video testing.
@@ -1150,25 +1266,25 @@ The changes below cover everything delivered since the previous stable release,
 **v0.9.3**. This remains the ParsecWebTurn client built around the original,
 unmodified Parsec WASM core.
 
-- **BUD transport:** connect to unmodified Parsec hosts directly over UDP or through configured TURN relays over UDP, TLS or TCP. Use the same Network settings as WebRTC, including Force TURN; startup retries prefer UDP, then TLS, then TCP, with port 80 first among TCP URLs. An established connection is not migrated and BUD never silently switches to WebRTC.
-- **Responsive relay IO:** native event-driven BUD TCP/TLS sockets retain partial writes, bounded reusable buffers, TLS backpressure and write deadlines. TLS verifies the server certificate and hostname. WebRTC TURN/TCP reuses receive storage, and TCP/TLS ChannelData is submitted with its padding in one framed write. Newly queued BUD HID reports and control replies drain before the next network wait, without a batching delay or changes to protocol retransmission timers.
+- **lowlat transport:** connect to unmodified Parsec hosts directly over UDP or through configured TURN relays over UDP, TLS or TCP. Use the same Network settings as WebRTC, including Force TURN; startup retries prefer UDP, then TLS, then TCP, with port 80 first among TCP URLs. An established connection is not migrated and lowlat never silently switches to WebRTC.
+- **Responsive relay IO:** native event-driven lowlat TCP/TLS sockets retain partial writes, bounded reusable buffers, TLS backpressure and write deadlines. TLS verifies the server certificate and hostname. WebRTC TURN/TCP reuses receive storage, and TCP/TLS ChannelData is submitted with its padding in one framed write. Newly queued lowlat HID reports and control replies drain before the next network wait, without a batching delay or changes to protocol retransmission timers.
 - **Vendor HEVC decoding (experimental):** normal 8-bit HEVC uses Direct D3D11 on NVIDIA, AMF on AMD and VPL on Intel, with the existing Media Foundation recovery/fallback. H.264 continues to use Media Foundation on every vendor. Burst handling and surface ownership fixes improve HEVC startup and avoid unnecessary Intel decoder fallback.
 - **Zero copy presentation:** supported NVIDIA, AMD and Intel GPUs can present original 8-bit NV12 decoder surfaces through Windows Presentation API, preserving aspect ratio and falling back to normal GPU rendering when needed. This removes the application's conversion/output pass without decoded-frame CPU readback; internal Windows/driver copies and direct scanout are not guaranteed. Windows 11 and compatible drivers are required.
 - **Correct color range:** translate full/limited-range metadata correctly between Media Foundation and D3D11, including vendor output. This fixes grey-looking whites and lifted blacks. Startup, later encoder requests and keyframe requests consistently retain the selected range and HEVC flags.
-- **10-bit HEVC and RGB SDR output (experimental):** request Main 10 over WebRTC or BUD when supported, including the BUD startup fix for negotiated 10-bit video. Actual P010 decoder output can feed a 10-bit RGB swap chain through the existing GPU conversion pass, with compatible 8-bit RGB output fallback. Stats distinguish decoded depth from application output. Host/driver support determines the received stream; this is SDR, not HDR, and original-surface Zero copy stays 8-bit only.
-- **Audio controls:** add a dedicated Audio tab with optional minimum/maximum playback buffering, supported low-period shared WASAPI output with fallback, bounded fresh PCM queues and BUD-only raw PCM permission. Keep automatic buffering and Opus as defaults, align the menu's initial custom limits with the pinned core, and handle PCM/Opus transitions safely. Raw PCM also requires host support and can fall back to Opus; WebRTC remains stereo Opus.
-- **Multichannel audio (experimental, BUD):** optionally request the Windows output's compatible 5.1/7.1 channel layout, decode Opus/PCM with per-packet format information and report the actual layout. Stereo remains the default and fallback. This feature has synthetic tests and silent WASAPI validation only; live surround playback and channel ordering are not confirmed.
-- **USB HID mouse and keyboard (BUD):** use the stock host's USB/Yubikey passthrough for absolute desktop positioning, native relative camera control, five mouse buttons, dragging, scrolling and physical keyboard input. Mouse and keyboard share one device lifecycle and bounded queues; selected HID devices replace ordinary Parsec forwarding independently. Local menus remain accessible and focus loss/disconnect releases held input. No helper executable or host patch is needed; one physical or virtual display and matching keyboard layouts are supported.
-- **Dragging and cursor transitions:** restore the host-reported endpoint when leaving relative/hidden capture so the next HID click does not return to the old drag anchor. Keep the cursor hidden until position restoration and replace its image before retiring the old handle. Prompt BUD capture-state wakeups reduce transition flicker while preserving camera input, event order, focus handling and local controls.
+- **10-bit HEVC and RGB SDR output (experimental):** request Main 10 over WebRTC or lowlat when supported, including the lowlat startup fix for negotiated 10-bit video. Actual P010 decoder output can feed a 10-bit RGB swap chain through the existing GPU conversion pass, with compatible 8-bit RGB output fallback. Stats distinguish decoded depth from application output. Host/driver support determines the received stream; this is SDR, not HDR, and original-surface Zero copy stays 8-bit only.
+- **Audio controls:** add a dedicated Audio tab with optional minimum/maximum playback buffering, supported low-period shared WASAPI output with fallback, bounded fresh PCM queues and LOWLAT-only raw PCM permission. Keep automatic buffering and Opus as defaults, align the menu's initial custom limits with the pinned core, and handle PCM/Opus transitions safely. Raw PCM also requires host support and can fall back to Opus; WebRTC remains stereo Opus.
+- **Multichannel audio (experimental, lowlat):** optionally request the Windows output's compatible 5.1/7.1 channel layout, decode Opus/PCM with per-packet format information and report the actual layout. Stereo remains the default and fallback. This feature has synthetic tests and silent WASAPI validation only; live surround playback and channel ordering are not confirmed.
+- **USB HID mouse and keyboard (lowlat):** use the stock host's USB/Yubikey passthrough for absolute desktop positioning, native relative camera control, five mouse buttons, dragging, scrolling and physical keyboard input. Mouse and keyboard share one device lifecycle and bounded queues; selected HID devices replace ordinary Parsec forwarding independently. Local menus remain accessible and focus loss/disconnect releases held input. No helper executable or host patch is needed; one physical or virtual display and matching keyboard layouts are supported.
+- **Dragging and cursor transitions:** restore the host-reported endpoint when leaving relative/hidden capture so the next HID click does not return to the old drag anchor. Keep the cursor hidden until position restoration and replace its image before retiring the old handle. Prompt lowlat capture-state wakeups reduce transition flicker while preserving camera input, event order, focus handling and local controls.
 - **Two-way text clipboard:** forward native clipboard changes, focus restoration and paste-key requests through the original core while respecting core/host permissions. Preserve UTF-8 boundaries, avoid echoes and distinguish unavailable reads from copied empty text. Client-to-host pasting has been verified live; file/image transfer is not added.
-- **Display timing and burst catch-up:** add Automatic, Low latency and VSync choices. Automatic preserves previous behavior; explicit DXGI modes request a one-presentation queue. Interruptible display/input readiness waits fix the reported Low latency stutter while preferring fresh decoded input over a pending presentation. BUD can skip obsolete display work without dropping reference decoding. No extra decoded-frame copy, RGB target or rendering thread is introduced; original-surface timing stays Windows-managed.
-- **More useful diagnostics:** Connection stats adds native BUD route/RTT/traffic/delivery counters, actual audio codec and queue/buffer details, decoded/RGB precision, automatic host video/audio timing and bounded local video-stage measurements. Correct encode/frame-interval labels and add Present submission interval. The embedded overlay receives native Decode and Network values. Timings describe their reported host durations or CPU-observed stages, not GPU completion, scanout or end-to-end latency; unavailable values remain unknown.
+- **Display timing and burst catch-up:** add Automatic, Low latency and VSync choices. Automatic preserves previous behavior; explicit DXGI modes request a one-presentation queue. Interruptible display/input readiness waits fix the reported Low latency stutter while preferring fresh decoded input over a pending presentation. lowlat can skip obsolete display work without dropping reference decoding. No extra decoded-frame copy, RGB target or rendering thread is introduced; original-surface timing stays Windows-managed.
+- **More useful diagnostics:** Connection stats adds native lowlat route/RTT/traffic/delivery counters, actual audio codec and queue/buffer details, decoded/RGB precision, automatic host video/audio timing and bounded local video-stage measurements. Correct encode/frame-interval labels and add Present submission interval. The embedded overlay receives native Decode and Network values. Timings describe their reported host durations or CPU-observed stages, not GPU completion, scanout or end-to-end latency; unavailable values remain unknown.
 - **Optional event logging:** Network settings can create a bounded asynchronous UTF-8 JSON Lines log beside settings.json, with UTC connection/route transitions, transport/decoder/HID failures and audio/profile state. Rotation retains one previous file. Logging is off by default and excludes credentials, media, clipboard content and continuous mouse/key activity; temporary input trace capture has been removed.
 - **Settings, recovery and maintenance:** separate Network, Video, Audio and Input with consistent tab spacing, shared saving and preserved unsaved edits. Disable Zero copy and 10-bit controls while HEVC is off, fix wrapped settings/stats text and guide unsupported host launch choices. Reuse bounded media/input storage, shorten shared locks and release retired video reuse pools. Add concise bug/feature/question issue forms, consolidate active native tests, remove retired experiments, shorten the README, clarify the unchanged-core provenance and credit lowlat's reused open-source components.
 
 **Vendor HEVC decoding, 10-bit HEVC and multichannel audio remain experimental options in this stable release.**
 WebRTC, H.264, stereo Opus and Automatic display timing remain the defaults.
-BUD, custom audio buffering, raw PCM permission and host timing no longer carry
+lowlat, custom audio buffering, raw PCM permission and host timing no longer carry
 an experimental label. For the most conservative setup, keep the defaults and
 leave experimental options disabled.
 
@@ -1184,9 +1300,9 @@ Changes since v0.9.4-dev.6. Existing defaults and experimental feature labels
 are unchanged; this is a Windows x64 development release.
 
 - **HID dragging:** restore the local pointer to the host-reported endpoint on leaving relative/hidden capture, preventing a stale anchor from overwriting the next absolute HID position. Preserve native relative camera input, focus handling and local controls.
-- **Cursor transitions:** retain cursor hiding through position restoration and select a replacement image before freeing the old handle. BUD host capture-state changes wake the existing input callback promptly, keeping FIFO ordering and normal callback cadence. Live testing reported substantially reduced flicker; delayed host cursor responses can still be visible.
-- **BUD output scheduling:** drain newly queued HID reports and control replies through the existing UDP/TCP/TLS carrier before waiting again. Preserve bounded backpressure, ordering, ACK/retransmission timers and WebRTC behavior. No fixed end-to-end latency gain is claimed.
-- **Low latency presentation:** interruptible DXGI/input readiness waits replace regular idle readiness polling where available. Feed fresh input before retrying a pending picture, preserve the one-presentation limit and BUD burst catch-up, and add no decoded-frame copy, RGB target or worker thread. Reported stutter was resolved in live testing on the tested 60 FPS / 59.95 Hz DXGI setup; this is not a universal smoothness or measured scanout-latency claim. Automatic, VSync and original-surface Zero copy retain their presentation policies.
+- **Cursor transitions:** retain cursor hiding through position restoration and select a replacement image before freeing the old handle. lowlat host capture-state changes wake the existing input callback promptly, keeping FIFO ordering and normal callback cadence. Live testing reported substantially reduced flicker; delayed host cursor responses can still be visible.
+- **lowlat output scheduling:** drain newly queued HID reports and control replies through the existing UDP/TCP/TLS carrier before waiting again. Preserve bounded backpressure, ordering, ACK/retransmission timers and WebRTC behavior. No fixed end-to-end latency gain is claimed.
+- **Low latency presentation:** interruptible DXGI/input readiness waits replace regular idle readiness polling where available. Feed fresh input before retrying a pending picture, preserve the one-presentation limit and lowlat burst catch-up, and add no decoded-frame copy, RGB target or worker thread. Reported stutter was resolved in live testing on the tested 60 FPS / 59.95 Hz DXGI setup; this is not a universal smoothness or measured scanout-latency claim. Automatic, VSync and original-surface Zero copy retain their presentation policies.
 - **Connection stats:** add latest/average/peak Present submission interval. This is CPU-observed DXGI submission cadence, including idle periods, not GPU or physical display timing.
 - **Settings and documentation:** make the four tabs equal-width with consistent spacing and a clearer gap before Back/Save. Shorten the README and update current feature/validation descriptions.
 - **Maintenance:** remove temporary HID/cursor trace capture and build switches; retain focused regression coverage. No new runtime dependency or continuous input-event logging.
@@ -1200,105 +1316,105 @@ release is targeted for the second half of next week (October 29-November 1,
 
 Changes since v0.9.4-dev.5.
 
-**Vendor-specific HEVC decoding, 10-bit HEVC and multichannel audio remain experimental.** BUD, custom audio
+**Vendor-specific HEVC decoding, 10-bit HEVC and multichannel audio remain experimental.** lowlat, custom audio
 buffering, raw PCM permission and host timing no longer carry the experimental
 label. Defaults remain WebRTC, H.264 and automatic playback. For stability-first
 use, leave experimental options disabled or use the stable v0.9.3 release.
 
-- **Embedded overlay metrics:** supply measured native decoder input-to-output time and fresh BUD/WebRTC RTT through the original seven-output web import. Keep unavailable values unknown and preserve the WASM binary. The web import has no bitrate output; native Connection stats remains the source for traffic rates.
-- **Feature status:** remove the experimental label from BUD, custom audio buffering, raw PCM permission and host timing. Keep existing defaults and accept the former settings keys when loading saved profiles. Other experimental options keep their labels; historical release notes describe their original status.
+- **Embedded overlay metrics:** supply measured native decoder input-to-output time and fresh lowlat/WebRTC RTT through the original seven-output web import. Keep unavailable values unknown and preserve the WASM binary. The web import has no bitrate output; native Connection stats remains the source for traffic rates.
+- **Feature status:** remove the experimental label from lowlat, custom audio buffering, raw PCM permission and host timing. Keep existing defaults and accept the former settings keys when loading saved profiles. Other experimental options keep their labels; historical release notes describe their original status.
 - **Connection stats layout:** measure both text columns when sizing rows so wrapped labels and values do not overlap; shorten the display catch-up counter label.
 - **Local video timing:** bounded CPU measurements of native compressed-queue wait, decoder setup/service and correlated input-to-output time, surface handoff, presentation preparation and Present calls. No GPU execution/scanout claim, pixel readback or per-frame logging.
 - **Display timing:** Automatic preserves existing behavior; Low latency and VSync request a one-presentation DXGI queue with nonblocking readiness checks and compatible fallback. Original-surface Zero copy keeps Windows-managed timing. Hardware/live latency gains remain unverified.
-- **BUD burst handling:** retain reference decoding while omitting obsolete display updates when later compressed messages are queued. Deterministic tests compare identical decoded references and reduced display work; WebRTC delivery is unchanged.
+- **lowlat burst handling:** retain reference decoding while omitting obsolete display updates when later compressed messages are queued. Deterministic tests compare identical decoded references and reduced display work; WebRTC delivery is unchanged.
 - **Memory diagnostics:** distinguish resident/private committed process memory in stats and record a few startup milestones through existing optional event logging. The reported intermittent high-memory startup remains under investigation; no forced working-set trimming. Retired video pipelines release their compressed-buffer reuse pool while preserving final statistics.
 
 - **Two-way text clipboard:** forward native clipboard changes, stream focus restoration and paste-key requests to the original core. Preserve clipboard preference/host permissions, avoid echoing incoming host copies, and keep unavailable reads distinct from copied empty text. Client-to-host pasting has been confirmed in live use.
 - **Host timing labels:** correct the reversed encode-duration and video-frame-interval labels. Values remain in milliseconds without rescaling; audio interval anomalies remain under investigation.
-- **Detailed host timing:** automatically request video/audio timing while Connection stats is visible or event logging is enabled. Show reported processing durations, video capture/encode segments and frame/block intervals with latest/average/peak values, report counts and freshness. Bounded collectors bypass application control queues in BUD and WebRTC; malformed or unavailable diagnostics do not fail the stream. No separate switch or per-frame file logging. Live BUD report reception observed; WebRTC validation and audio interval anomalies remain under investigation.
-- **Multichannel audio (experimental, BUD; synthetic tests only):** optional automatic 5.1/7.1 requests based on the Windows output layout, per-packet Opus/PCM format handling, native multichannel playback, and actual channel information in Connection stats. Stereo remains the default and the host may fall back to stereo. Validation covers synthetic Opus/PCM tests and silent WASAPI output only; live host-to-client operation, channel ordering and audible surround playback remain unverified. WebRTC retains stereo.
+- **Detailed host timing:** automatically request video/audio timing while Connection stats is visible or event logging is enabled. Show reported processing durations, video capture/encode segments and frame/block intervals with latest/average/peak values, report counts and freshness. Bounded collectors bypass application control queues in lowlat and WebRTC; malformed or unavailable diagnostics do not fail the stream. No separate switch or per-frame file logging. Live lowlat report reception observed; WebRTC validation and audio interval anomalies remain under investigation.
+- **Multichannel audio (experimental, lowlat; synthetic tests only):** optional automatic 5.1/7.1 requests based on the Windows output layout, per-packet Opus/PCM format handling, native multichannel playback, and actual channel information in Connection stats. Stereo remains the default and the host may fall back to stereo. Validation covers synthetic Opus/PCM tests and silent WASAPI output only; live host-to-client operation, channel ordering and audible surround playback remain unverified. WebRTC retains stereo.
 - **Relative mouse transition:** hide the local cursor before Raw Input registration and confinement, while retaining cursor restoration if acquisition fails. This narrows the visible transition; the reported intermittent flash still needs live verification.
 
-- **Maintenance and reporting:** add bug/feature/question issue forms, move the active TURN integration fixture under native tests, and remove the obsolete separate BUD test-file logger and launcher instructions. Connection failure stages remain in the normal event log.
+- **Maintenance and reporting:** add bug/feature/question issue forms, move the active TURN integration fixture under native tests, and remove the obsolete separate lowlat test-file logger and launcher instructions. Connection failure stages remain in the normal event log.
 
 ## 0.9.4-dev.5 - USB HID input (2026-10-20)
 
 Changes since v0.9.4-dev.4.
 
-**BUD, vendor-specific HEVC decoding, 10-bit HEVC and the Audio options remain experimental.** For stability-first use, select
+**lowlat, vendor-specific HEVC decoding, 10-bit HEVC and the Audio options remain experimental.** For stability-first use, select
 WebRTC with H.264, leave experimental options disabled, or use the published
-stable v0.9.3 release. HID input requires BUD and USB/Yubikey passthrough on
+stable v0.9.3 release. HID input requires lowlat and USB/Yubikey passthrough on
 the stock host; compatibility depends on the host and application.
 
-- **USB HID mouse:** use the stock host's USB/Yubikey passthrough with BUD for absolute desktop positioning, native relative camera movement, five buttons, dragging and vertical/horizontal scrolling. Relative capture follows the host cursor state and hides the local pointer. One physical or virtual display is supported.
+- **USB HID mouse:** use the stock host's USB/Yubikey passthrough with lowlat for absolute desktop positioning, native relative camera movement, five buttons, dragging and vertical/horizontal scrolling. Relative capture follows the host cursor state and hides the local pointer. One physical or virtual display is supported.
 - **USB HID keyboard:** forward physical key presses, releases and modifiers through the same host USB path. Matching active layouts, including Hungarian on both computers, are supported; the host layout is not changed automatically. Simultaneous keys use a bitmap without a six-key array limit.
 - **Simultaneous HID input:** mouse and keyboard share one USB device lifecycle and bounded transport queues, with separate reports and fair scheduling. Buttons keep the same owner across desktop/camera mode changes. Ordinary Parsec forwarding is disabled independently for each selected HID input, preventing duplicate input.
-- **New Input settings tab:** select HID mouse and keyboard independently, save the preferences and reconnect. Both options require BUD and are disabled by default. Local menus remain usable; focus loss and disconnect release held input and capture. Only the usual EXE and settings.json are needed, without a host modification or additional launcher.
+- **New Input settings tab:** select HID mouse and keyboard independently, save the preferences and reconnect. Both options require lowlat and are disabled by default. Local menus remain usable; focus loss and disconnect release held input and capture. Only the usual EXE and settings.json are needed, without a host modification or additional launcher.
 - **HID operational logging:** the existing optional client-events.jsonl records activation, state changes and setup/transfer/queue failures, without continuous mouse movement, coordinates, clicks, key history, typed text or USB payloads.
 
 ## 0.9.4-dev.4 - Relay IO improvements and 10-bit SDR output (2026-10-17)
 
 Changes since v0.9.4-dev.3.
 
-**BUD, vendor-specific HEVC decoding, Zero copy, 10-bit HEVC and the Audio
+**lowlat, vendor-specific HEVC decoding, Zero copy, 10-bit HEVC and the Audio
 options remain experimental.** For stability-first use, select WebRTC with H.264,
 leave experimental options disabled, or use the published stable v0.9.3 release.
 
-- **Native BUD TCP/TLS IO:** relay sockets use the existing platform wake and native socket wait, with overlapped IOCP on Windows, bounded reusable storage and cancellation. Queued TURN frames drain from reused staging storage without a batching delay; received frames are parsed in place. Direct BUD remains UDP, and TLS retains certificate and hostname verification through rustls.
-- **BUD TLS backpressure:** retain pending frames until both TURN framing and encrypted TLS output have drained to the socket. This prevents new protocol output from building up behind earlier TLS records and preserves write deadlines during slow sends.
+- **Native lowlat TCP/TLS IO:** relay sockets use the existing platform wake and native socket wait, with overlapped IOCP on Windows, bounded reusable storage and cancellation. Queued TURN frames drain from reused staging storage without a batching delay; received frames are parsed in place. Direct lowlat remains UDP, and TLS retains certificate and hostname verification through rustls.
+- **lowlat TLS backpressure:** retain pending frames until both TURN framing and encrypted TLS output have drained to the socket. This prevents new protocol output from building up behind earlier TLS records and preserves write deadlines during slow sends.
 - **More efficient WebRTC TURN streams:** reuse a bounded receive buffer for plain TURN/TCP and write ChannelData with its padding as one framed write on TCP/TLS. TLS retains its existing receive path. No batching delay is added; UDP routing, ICE selection and SCTP behavior are unchanged.
 - **Experimental 10-bit RGB SDR output:** actual Main 10/P010 decoder output can now use a 10-bit RGB swap chain when the GPU and driver support conversion and presentation. The existing GPU conversion writes directly into the output buffer, without an additional decoded-frame copy or conversion pass. Unsupported output falls back to 8-bit RGB. This is SDR, not HDR, and does not establish physical display or scanout depth.
 - **Clearer video precision status:** Connection stats and optional event logging distinguish decoded color depth from application RGB output depth and report output fallback. Live Main 10 with 10-bit RGB output is currently verified with NVIDIA host encoding and AMD Radeon 780M client decoding; the tested AMD host path sent 8-bit HEVC. Original-surface Zero copy remains 8-bit only, and 4:4:4 remains unsupported.
 - **Leaner native components and acknowledgements:** remove unused direct H.264 decoder code and its unused GPU protocol-core dependency; H.264 continues to use Media Foundation on all GPU vendors. The README now explicitly credits lowlat inspiration and reused components while clarifying that ParsecWebTurn is an independent project.
 
-## 0.9.4-dev.3 - BUD TCP/TLS relays and audio controls (2026-10-16)
+## 0.9.4-dev.3 - lowlat TCP/TLS relays and audio controls (2026-10-16)
 
 Changes since v0.9.4-dev.2.
 
-**BUD, vendor-specific HEVC decoding, Zero copy, 10-bit HEVC and the new Audio
+**lowlat, vendor-specific HEVC decoding, Zero copy, 10-bit HEVC and the new Audio
 options are experimental.** For stability-first use, select WebRTC with H.264,
 leave experimental options disabled, or use the published stable v0.9.3 release.
 
-- **Experimental BUD over TURN TCP/TLS:** use the existing TURN URLs for BUD as well as WebRTC, with UDP preferred, then TLS and plain TCP (port 80 preferred among TCP URLs). Failed startup attempts can try the next configured relay; direct BUD remains UDP. TLS checks the server identity. BUD TURN/TLS playback has been confirmed with a stock host using AMD AMF HEVC and Direct D3D11 HEVC.
+- **Experimental lowlat over TURN TCP/TLS:** use the existing TURN URLs for lowlat as well as WebRTC, with UDP preferred, then TLS and plain TCP (port 80 preferred among TCP URLs). Failed startup attempts can try the next configured relay; direct lowlat remains UDP. TLS checks the server identity. lowlat TURN/TLS playback has been confirmed with a stock host using AMD AMF HEVC and Direct D3D11 HEVC.
 - **Reliable TCP/TLS startup and responsive IO:** handle pending nonblocking TCP connections correctly, disable Nagle before sending TLS/application data and retain partial writes under backpressure. The event-driven carrier uses bounded reusable buffers and immediate input wakeups without a batching delay. Event logging identifies failed transport stages and IO error codes without recording credentials or packet contents.
 
-- **Experimental Audio settings:** add a separate Audio tab with optional minimum/maximum playback buffering, supported low-period WASAPI initialization with fallback, bounded fresh PCM playback, and BUD-only raw PCM permission. Automatic playback and Opus remain the defaults. Raw requires host support and can still fall back to Opus; WebRTC audio remains Opus.
+- **Experimental Audio settings:** add a separate Audio tab with optional minimum/maximum playback buffering, supported low-period WASAPI initialization with fallback, bounded fresh PCM playback, and LOWLAT-only raw PCM permission. Automatic playback and Opus remain the defaults. Raw requires host support and can still fall back to Opus; WebRTC audio remains Opus.
 - **Audio visibility:** show actual audio codec, local output buffer and limits, device capacity, decoded PCM backlog and underruns in Connection stats. Operational logging includes audio configuration and playback-error counters without media payloads.
 
 - **HEVC-dependent video options:** disable the Zero copy checkbox while Prefer H.265 / HEVC is off, matching the 10-bit HEVC option. Turning HEVC back on restores access to the saved preference.
-- **BUD Main 10 startup fix:** remove an obsolete 8-bit-only parser check that disconnected BUD when Main 10 video arrived. Advertised Main 10 is passed to the existing MF/P010 GPU path; host/driver compatibility still needs testing. 4:4:4 remains unsupported.
+- **lowlat Main 10 startup fix:** remove an obsolete 8-bit-only parser check that disconnected lowlat when Main 10 video arrived. Advertised Main 10 is passed to the existing MF/P010 GPU path; host/driver compatibility still needs testing. 4:4:4 remains unsupported.
 
 ## 0.9.4-dev.2 - Color range fixes and event logging (2026-10-16)
 
 Changes since v0.9.4-dev.1.
 
-**BUD, vendor-specific HEVC decoding and 10-bit HEVC are experimental.**
+**lowlat, vendor-specific HEVC decoding and 10-bit HEVC are experimental.**
 For stability-first use, select WebRTC with H.264 and leave experimental options
 disabled, or use the published stable v0.9.3 release.
 
 - **Correct video black and white levels:** translate limited/full-range metadata correctly between Media Foundation and D3D11, including vendor HEVC output. This fixes lifted blacks and grey-looking whites in normal GPU rendering. Full-range support is declared consistently at startup and in later encoder requests.
-- **Experimental 10-bit HEVC:** an optional Video setting requests Main 10 with WebRTC or BUD when the selected GPU exposes the required P010 decode/conversion capabilities. Later encoder and keyframe requests preserve the selected flags. Main 10 uses the existing GPU Media Foundation path and conversion pass; RGB display output remains 8-bit, and original-surface Zero copy remains 8-bit only. Host and driver support are required: the request does not guarantee a 10-bit stream. Connection stats shows the actual decoded color depth. 4:4:4 remains unsupported.
+- **Experimental 10-bit HEVC:** an optional Video setting requests Main 10 with WebRTC or lowlat when the selected GPU exposes the required P010 decode/conversion capabilities. Later encoder and keyframe requests preserve the selected flags. Main 10 uses the existing GPU Media Foundation path and conversion pass; RGB display output remains 8-bit, and original-surface Zero copy remains 8-bit only. Host and driver support are required: the request does not guarantee a 10-bit stream. Connection stats shows the actual decoded color depth. 4:4:4 remains unsupported.
 - **Optional operational event log:** enable event logging in the Network tab to record connection and route changes, transport failures, decoder recovery/errors and profile-save failures beside settings.json. UTF-8 JSON Lines records have UTC timestamps; background file writes use a bounded queue and approximately 5 MiB rotation with one previous file. Credentials and media payloads are excluded. Logging is disabled by default and applies immediately after saving.
-- **Readable settings and statistics:** fix clipped event-log help in Settings and size the Connection stats explanation to its wrapped text, including the longer BUD description and narrower windows.
+- **Readable settings and statistics:** fix clipped event-log help in Settings and size the Connection stats explanation to its wrapped text, including the longer lowlat description and narrower windows.
 - **Clearer core provenance:** README documentation explains that the embedded proprietary Parsec WASM core remains unmodified and that Rust supplies the native framework rather than a rewrite of that core.
 
-## 0.9.4-dev.1 - Experimental BUD and GPU video paths (2026-10-15)
+## 0.9.4-dev.1 - Experimental lowlat and GPU video paths (2026-10-15)
 
 Changes since the stable v0.9.3 release.
 
-**BUD and vendor-specific HEVC decoding are experimental.** For
+**lowlat and vendor-specific HEVC decoding are experimental.** For
 stability-first use, select WebRTC with H.264 and leave the experimental options
 disabled, or use the published stable v0.9.3 release. H.264 remains the default
 and uses Media Foundation on every GPU vendor.
 
-- **Experimental BUD transport:** enable Experimental BUD in Settings to use the native UDP protocol with a regular Parsec host. Direct UDP, automatic fallback to a configured UDP TURN relay and Force TURN are supported. WebRTC remains the default and retains TURN over UDP, TCP and TLS; BUD supports UDP only and does not silently switch to WebRTC.
+- **Experimental lowlat transport:** enable Experimental lowlat in Settings to use the native UDP protocol with a regular Parsec host. Direct UDP, automatic fallback to a configured UDP TURN relay and Force TURN are supported. WebRTC remains the default and retains TURN over UDP, TCP and TLS; lowlat supports UDP only and does not silently switch to WebRTC.
 - **Experimental vendor-specific HEVC decoding:** when Prefer H.265 / HEVC is enabled, normal 8-bit HEVC playback uses Direct D3D11 on NVIDIA, AMF on AMD and VPL on Intel. These paths keep decoder output on the GPU and feed the existing presentation path directly. The existing GPU Media Foundation fallback/recovery remains available when a vendor path cannot be used.
 - **Zero copy presentation:** the Video tab can select original NV12 decoder-surface presentation through Direct D3D11 and Windows Presentation API on supported NVIDIA, AMD and Intel GPUs. This removes the application's conversion/output pass and introduces no intermediate decoded-frame copy or CPU pixel readback. Windows 11 and compatible hardware/drivers are required; internal Windows/driver copies and direct scanout are not guaranteed.
 - **More reliable HEVC startup and recovery:** handle short arrival bursts without exhausting presentation surfaces or unnecessarily abandoning the working Intel decoder. Original-surface presentation preserves the picture's aspect ratio and can recover to normal GPU rendering when unavailable.
-- **BUD connection statistics:** show native RTT, decoded FPS, incoming/outgoing traffic, direct or relay route, host encode time when available and BUD delivery counters. Irrelevant WebRTC ICE/DTLS fields are hidden in BUD mode, and the last valid host encode time no longer flickers between reports.
+- **lowlat connection statistics:** show native RTT, decoded FPS, incoming/outgoing traffic, direct or relay route, host encode time when available and lowlat delivery counters. Irrelevant WebRTC ICE/DTLS fields are hidden in lowlat mode, and the last valid host encode time no longer flickers between reports.
 - **Network and Video settings tabs:** connection servers, credentials, routing and transport settings are separated from GPU, codec and presentation choices. Both tabs share Save settings and retain unsaved edits when switching tabs.
 - **Clearer playback status:** Connection stats uses shorter Zero copy, decoder fallback and playback-error descriptions while retaining detailed diagnostic information separately.
-- **Safer host launch selection:** choosing the unsupported native-client launch option now explains that the web launch option is required instead of crashing the application. The web launch option is also used when BUD is selected in Settings.
+- **Safer host launch selection:** choosing the unsupported native-client launch option now explains that the web launch option is required instead of crashing the application. The web launch option is also used when lowlat is selected in Settings.
 - **Less input and shared-lock overhead:** reuse bounded input-event storage, pass native input arguments without temporary vectors and copy queued control messages outside the shared connection lock. Event ordering, immediate input wakeups and WebRTC reliability remain unchanged.
 
 ## 0.9.3 - Native Windows client (2026-10-14)

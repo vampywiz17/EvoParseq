@@ -58,6 +58,7 @@ impl Desktop {
                 }
             }
         }
+        let phaze = self.service == crate::account::Service::Phaze;
         let draft = self
             .ui_state
             .network
@@ -69,7 +70,11 @@ impl Desktop {
         let origin = ui.cursor().min
             + egui::vec2(((ui.available_width() - s::WIDTH as f32) / 2.).max(24.), 0.);
         let r = |rect| rect_at(origin, s::positioned(rect));
-        let footer = [1150, 1034, 750, 570][self.ui_state.tab];
+        let footer = if phaze {
+            [860, f::PHAZE_VIDEO_FOOTER, 626, 570]
+        } else {
+            [1150, 1034, 750, 570]
+        }[self.ui_state.tab];
         ui.allocate_space(egui::vec2(868., (footer + 138 + s::HEADER_EXTRA) as f32));
         label(
             ui,
@@ -106,8 +111,8 @@ impl Desktop {
             self.fitted_stream = None;
             self.ui_state.network = None;
             let saved = self.settings.view().0;
-            self.transport = if saved.bud {
-                connection::Mode::Bud
+            self.transport = if saved.lowlat {
+                connection::Mode::Lowlat
             } else {
                 connection::Mode::WebRtc
             };
@@ -135,10 +140,34 @@ impl Desktop {
         for row in f::SETTINGS
             .iter()
             .filter(|row| row.tab == tab && (row.group == 0 || usize::from(row.group) == group))
+            .filter(|row| {
+                phaze
+                    || (row.label != f::MIRROR_DISPLAY.label
+                        && row.label != f::VIRTUAL_DISPLAY_COUNT.label
+                        && !f::VIRTUAL_DISPLAY_RESOLUTIONS
+                            .iter()
+                            .any(|resolution| resolution.label == row.label))
+            })
+            .filter(|row| {
+                !phaze
+                    || ![
+                        f::STUN_SERVERS.label,
+                        f::TRANSPORT.label,
+                        f::TCP_TLS_QOS.label,
+                        f::SPEAKER_LAYOUT.label,
+                        f::COMPATIBILITY.label,
+                    ]
+                    .contains(&row.label)
+            })
         {
+            let y = if phaze && tab == 0 {
+                s::phaze_network_y(row.y, 94)
+            } else {
+                row.y
+            };
             label(
                 ui,
-                r(s::label(row.y)),
+                r(s::label(y)),
                 row.label,
                 16.,
                 color(app_style::SETTINGS_TEXT),
@@ -146,9 +175,17 @@ impl Desktop {
             if !row.help.is_empty() {
                 label(
                     ui,
-                    r(s::help(row.y, row.help_height)),
+                    r(s::help(y, row.help_height)),
                     if row.label == f::VIDEO_GPU.label {
                         "GPU for stream decoding and rendering.\nRestart EvoParseq after changing the GPU."
+                    } else if phaze && row.label == f::AUDIO_FORMAT.label {
+                        "48 kHz stereo: AAC-LC or uncompressed PCM.\nPCM uses about 1.54 Mbps before overhead."
+                    } else if phaze && row.label == f::CONNECTION_ROUTE.label {
+                        "Choose direct UDP or explicitly force TURN.\nThere is no automatic direct/relay fallback."
+                    } else if phaze && row.label == f::VIDEO_FORMAT.label {
+                        "Request H.264 or HEVC 8-bit.\nThe host may select H.264; reconnect after changing."
+                    } else if phaze && row.label == f::HID_REQUIREMENTS.label {
+                        "Allow USB devices from clients on the Phaze host. HID mouse uses the primary display."
                     } else {
                         row.help
                     },
@@ -156,7 +193,7 @@ impl Desktop {
                     color(app_style::SETTINGS_MUTED),
                 );
             }
-            let rect = r(s::field(row.y, row.field_height));
+            let rect = r(s::field(y, row.field_height));
             if row.label == f::TRANSPORT.label {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     egui::ComboBox::from_id_salt("transport")
@@ -170,21 +207,79 @@ impl Desktop {
                             );
                             ui.selectable_value(
                                 &mut self.transport,
-                                connection::Mode::Bud,
+                                connection::Mode::Lowlat,
                                 s::TRANSPORT_CHOICES[1],
                             );
                         });
                 });
+            } else if row.label == f::MIRROR_DISPLAY.label {
+                use evoparseq_host_interop::display_layout::MIRROR_CHOICES;
+                let enabled = &mut draft.values.phaze_display_layout.enabled;
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    egui::ComboBox::from_id_salt(row.label)
+                        .width(rect.width())
+                        .selected_text(MIRROR_CHOICES[usize::from(*enabled)])
+                        .show_ui(ui, |ui| {
+                            for (index, text) in MIRROR_CHOICES.iter().copied().enumerate() {
+                                ui.selectable_value(enabled, index == 1, text);
+                            }
+                        });
+                });
+            } else if row.label == f::VIRTUAL_DISPLAY_COUNT.label {
+                use evoparseq_host_interop::display_layout::DisplayCount;
+                let display = &mut draft.values.phaze_display_layout;
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    ui.add_enabled_ui(display.enabled, |ui| {
+                        egui::ComboBox::from_id_salt(row.label)
+                            .width(rect.width())
+                            .selected_text(DisplayCount::LABELS[display.count.index()])
+                            .show_ui(ui, |ui| {
+                                for (count, label) in
+                                    DisplayCount::ALL.into_iter().zip(DisplayCount::LABELS)
+                                {
+                                    ui.selectable_value(&mut display.count, count, label);
+                                }
+                            });
+                    });
+                });
+            } else if let Some(index) = f::VIRTUAL_DISPLAY_RESOLUTIONS
+                .iter()
+                .position(|resolution| resolution.label == row.label)
+            {
+                use evoparseq_host_interop::display_layout::Resolution;
+                let display = &mut draft.values.phaze_display_layout;
+                let mut selected = display.resolutions()[index];
+                let labels = Resolution::labels();
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    ui.add_enabled_ui(display.requests(index), |ui| {
+                        egui::ComboBox::from_id_salt(row.label)
+                            .width(rect.width())
+                            .selected_text(labels[selected.index()])
+                            .show_ui(ui, |ui| {
+                                for (index, text) in labels.into_iter().enumerate() {
+                                    if let Some(resolution) = Resolution::from_index(index) {
+                                        ui.selectable_value(&mut selected, resolution, text);
+                                    }
+                                }
+                            });
+                    });
+                });
+                display.set_resolution(index, selected);
             } else if row.label == f::VIDEO_FORMAT.label {
                 use crate::connection_settings::VideoFormat;
                 let mut value = VideoFormat::current(&draft.values);
+                if phaze && value == VideoFormat::Hevc10 {
+                    value = VideoFormat::Hevc8;
+                }
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     egui::ComboBox::from_id_salt("video-format")
                         .width(400.)
                         .selected_text(VideoFormat::LABELS[value as usize])
                         .show_ui(ui, |ui| {
-                            for (format, text) in
-                                VideoFormat::ALL.into_iter().zip(VideoFormat::LABELS)
+                            for (format, text) in VideoFormat::ALL
+                                .into_iter()
+                                .zip(VideoFormat::LABELS)
+                                .filter(|(format, _)| !phaze || *format != VideoFormat::Hevc10)
                             {
                                 let supported = format == VideoFormat::H264
                                     || self.video_context.as_ref().is_some_and(|c| {
@@ -270,7 +365,7 @@ impl Desktop {
                 });
             } else if row.label == f::INPUT_MODE.label {
                 use crate::connection_settings::InputMode;
-                let mut mode = InputMode::current(&draft.values);
+                let mut mode = InputMode::for_service(&draft.values, phaze);
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     egui::ComboBox::from_id_salt(row.label)
                         .width(400.)
@@ -279,7 +374,8 @@ impl Desktop {
                             for (item, text) in InputMode::ALL.into_iter().zip(InputMode::LABELS) {
                                 ui.add_enabled_ui(
                                     item == InputMode::Standard
-                                        || self.transport == connection::Mode::Bud,
+                                        || phaze
+                                        || self.transport == connection::Mode::Lowlat,
                                     |ui| {
                                         ui.selectable_value(&mut mode, item, text);
                                     },
@@ -287,7 +383,7 @@ impl Desktop {
                             }
                         });
                 });
-                mode.apply(&mut draft.values);
+                mode.apply_for_service(&mut draft.values, phaze);
             } else if tab == 2 {
                 use crate::connection_settings::BinaryChoice;
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
@@ -313,16 +409,20 @@ impl Desktop {
                             (
                                 BinaryChoice::AudioCodec,
                                 &mut draft.values.allow_raw_audio,
-                                self.transport == connection::Mode::Bud,
+                                phaze || self.transport == connection::Mode::Lowlat,
                             )
                         } else {
                             (
                                 BinaryChoice::Speakers,
                                 &mut draft.values.experimental_surround_audio,
-                                self.transport == connection::Mode::Bud,
+                                self.transport == connection::Mode::Lowlat,
                             )
                         };
-                        let labels = choice.labels();
+                        let labels = if phaze && row.label == f::AUDIO_FORMAT.label {
+                            s::PHAZE_AUDIO_FORMATS
+                        } else {
+                            choice.labels()
+                        };
                         ui.add_enabled_ui(enabled, |ui| {
                             egui::ComboBox::from_id_salt(row.label)
                                 .width(400.)
@@ -369,12 +469,17 @@ impl Desktop {
                         );
                     } else if row.label == f::CONNECTION_ROUTE.label {
                         let mut route = RouteMode::current(&draft.values);
+                        let labels = if phaze {
+                            &s::PHAZE_ROUTES
+                        } else {
+                            &RouteMode::LABELS
+                        };
                         egui::ComboBox::from_id_salt(row.label)
                             .width(400.)
-                            .selected_text(RouteMode::LABELS[route as usize])
+                            .selected_text(labels[route as usize])
                             .show_ui(ui, |ui| {
                                 for (mode, text) in
-                                    RouteMode::ALL.into_iter().zip(RouteMode::LABELS)
+                                    RouteMode::ALL.into_iter().zip(labels.iter().copied())
                                 {
                                     ui.selectable_value(&mut route, mode, text);
                                 }
@@ -386,58 +491,65 @@ impl Desktop {
                             egui::Checkbox::new(&mut draft.values.event_logging, row.control_text),
                         );
                     } else {
-                        ui.add_enabled_ui(!draft.values.stun_only, |ui| {
-                            if row.label == f::TURN_PROVIDER.label {
-                                egui::ComboBox::from_id_salt(row.label)
-                                    .width(400.)
-                                    .selected_text(if draft.values.provider == "cloudflare" {
-                                        "Cloudflare TURN"
-                                    } else {
-                                        "Custom servers"
-                                    })
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(
-                                            &mut draft.values.provider,
-                                            "custom".into(),
-                                            "Custom servers",
-                                        );
-                                        ui.selectable_value(
-                                            &mut draft.values.provider,
-                                            "cloudflare".into(),
-                                            "Cloudflare TURN",
-                                        );
-                                    });
-                            } else if row.label == f::CREDENTIAL_CACHE.label {
-                                ui.put(
-                                    rect,
-                                    egui::Checkbox::new(
-                                        &mut draft.values.cache_credentials,
-                                        row.control_text,
-                                    ),
-                                );
+                        ui.add_enabled_ui(
+                            if phaze {
+                                draft.values.force_relay
                             } else {
-                                let (value, secret, multiline): (&mut String, bool, bool) =
-                                    if row.label == f::TURN_SERVERS.label {
-                                        (&mut draft.turn_urls, false, true)
-                                    } else if row.label == f::USERNAME.label {
-                                        (&mut draft.values.custom_username, false, false)
-                                    } else if row.label == f::PASSWORD.label {
-                                        (&mut draft.password, true, false)
-                                    } else if row.label == f::TURN_KEY_ID.label {
-                                        (&mut draft.values.turn_key_id, false, false)
-                                    } else if row.label == f::API_TOKEN.label {
-                                        (&mut draft.token, true, false)
-                                    } else {
-                                        (&mut draft.ttl, false, false)
-                                    };
-                                let edit = if multiline {
-                                    egui::TextEdit::multiline(value)
+                                !draft.values.stun_only
+                            },
+                            |ui| {
+                                if row.label == f::TURN_PROVIDER.label {
+                                    egui::ComboBox::from_id_salt(row.label)
+                                        .width(400.)
+                                        .selected_text(if draft.values.provider == "cloudflare" {
+                                            "Cloudflare TURN"
+                                        } else {
+                                            "Custom servers"
+                                        })
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut draft.values.provider,
+                                                "custom".into(),
+                                                "Custom servers",
+                                            );
+                                            ui.selectable_value(
+                                                &mut draft.values.provider,
+                                                "cloudflare".into(),
+                                                "Cloudflare TURN",
+                                            );
+                                        });
+                                } else if row.label == f::CREDENTIAL_CACHE.label {
+                                    ui.put(
+                                        rect,
+                                        egui::Checkbox::new(
+                                            &mut draft.values.cache_credentials,
+                                            row.control_text,
+                                        ),
+                                    );
                                 } else {
-                                    egui::TextEdit::singleline(value).password(secret)
-                                };
-                                ui.put(rect, edit.char_limit(32768));
-                            }
-                        });
+                                    let (value, secret, multiline): (&mut String, bool, bool) =
+                                        if row.label == f::TURN_SERVERS.label {
+                                            (&mut draft.turn_urls, false, true)
+                                        } else if row.label == f::USERNAME.label {
+                                            (&mut draft.values.custom_username, false, false)
+                                        } else if row.label == f::PASSWORD.label {
+                                            (&mut draft.password, true, false)
+                                        } else if row.label == f::TURN_KEY_ID.label {
+                                            (&mut draft.values.turn_key_id, false, false)
+                                        } else if row.label == f::API_TOKEN.label {
+                                            (&mut draft.token, true, false)
+                                        } else {
+                                            (&mut draft.ttl, false, false)
+                                        };
+                                    let edit = if multiline {
+                                        egui::TextEdit::multiline(value)
+                                    } else {
+                                        egui::TextEdit::singleline(value).password(secret)
+                                    };
+                                    ui.put(rect, edit.char_limit(32768));
+                                }
+                            },
+                        );
                     }
                 });
             } else {
@@ -476,6 +588,7 @@ impl Desktop {
                 } else {
                     (&mut draft.forget_token, "Forget saved API token")
                 };
+                let y = if phaze { s::phaze_network_y(y, 94) } else { y };
                 ui.put(r([420, y, 400, 28]), egui::Checkbox::new(value, text));
             });
         }
@@ -483,7 +596,11 @@ impl Desktop {
             ui,
             r([0, footer, 820, 64]),
             if self.ui_state.tab == 0 {
-                crate::network_settings::NOTICE
+                if phaze {
+                    "Phaze: Force TURN uses the configured relay. Other modes use direct UDP."
+                } else {
+                    crate::network_settings::NOTICE
+                }
             } else {
                 ""
             },
@@ -503,7 +620,7 @@ impl Desktop {
                 .network
                 .take()
                 .expect("network form initialized");
-            draft.values.bud = self.transport == connection::Mode::Bud;
+            draft.values.lowlat = self.transport == connection::Mode::Lowlat;
             self.ui_state.gpu_changed = draft.values.video_gpu != self.settings.view().0.video_gpu;
             // Retain public/encrypted form values for disabled painting only.
             // Plaintext replacement secrets move exclusively to the save worker.

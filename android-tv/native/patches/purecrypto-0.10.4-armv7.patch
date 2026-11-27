@@ -1,0 +1,114 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index b38f52f..1d36eb7 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -47,6 +47,7 @@ repository = "https://github.com/KarpelesLab/purecrypto"
+ all-features = true
+ 
+ [features]
++evoparseq-armv7-aes-gcm = ["dep:aes-gcm", "dep:aes", "dep:polyval"]
+ __ct-check = []
+ __fuzz = ["tls"]
+ aez = [
+@@ -605,3 +606,22 @@ lto = "thin"
+ 
+ [profile.test]
+ opt-level = 2
++
++# aes and polyval activate erasure of the expanded AES key and GHASH subkey.
++[target.'cfg(target_arch = "arm")'.dependencies.aes-gcm]
++version = "=0.10.3"
++default-features = false
++features = ["aes", "zeroize"]
++optional = true
++
++[target.'cfg(target_arch = "arm")'.dependencies.aes]
++version = "=0.8.4"
++default-features = false
++features = ["zeroize"]
++optional = true
++
++[target.'cfg(target_arch = "arm")'.dependencies.polyval]
++version = "=0.6.2"
++default-features = false
++features = ["zeroize"]
++optional = true
+diff --git a/src/tls/crypto/aead12.rs b/src/tls/crypto/aead12.rs
+index 27be1f4..23ee527 100644
+--- a/src/tls/crypto/aead12.rs
++++ b/src/tls/crypto/aead12.rs
+@@ -109,6 +109,56 @@ enum NonceScheme {
+     Xor { iv: [u8; 12] },
+ }
+ 
++#[cfg(not(all(feature = "evoparseq-armv7-aes-gcm", target_arch = "arm")))]
++type RecordAead12 = Aead;
++
++// Use the measured RustCrypto software AES only in the opt-in 32-bit ARM
++// record layer. The existing DTLS code still owns nonce construction, AAD,
++// record limits and replay state.
++#[cfg(all(feature = "evoparseq-armv7-aes-gcm", target_arch = "arm"))]
++enum RecordAead12 {
++    Aes128(aes_gcm::Aes128Gcm),
++    Aes256(aes_gcm::Aes256Gcm),
++    Other(Aead),
++}
++
++#[cfg(all(feature = "evoparseq-armv7-aes-gcm", target_arch = "arm"))]
++impl RecordAead12 {
++    fn from_key(alg: AeadAlg, key: &[u8]) -> Self {
++        use aes_gcm::KeyInit;
++        match alg {
++            AeadAlg::Aes128Gcm => Self::Aes128(
++                aes_gcm::Aes128Gcm::new_from_slice(key).expect("TLS 1.2 AES-128 key length"),
++            ),
++            AeadAlg::Aes256Gcm => Self::Aes256(
++                aes_gcm::Aes256Gcm::new_from_slice(key).expect("TLS 1.2 AES-256 key length"),
++            ),
++            AeadAlg::ChaCha20Poly1305 => Self::Other(Aead::from_key(alg, key)),
++        }
++    }
++
++    fn encrypt(&self, nonce: &[u8; 12], aad: &[u8], body: &mut [u8]) -> [u8; 16] {
++        use aes_gcm::aead::AeadInPlace;
++        match self {
++            Self::Aes128(gcm) => gcm.encrypt_in_place_detached(nonce.into(), aad, body),
++            Self::Aes256(gcm) => gcm.encrypt_in_place_detached(nonce.into(), aad, body),
++            Self::Other(aead) => return aead.encrypt(nonce, aad, body),
++        }
++        .expect("bounded TLS 1.2 record")
++        .into()
++    }
++
++    fn decrypt(&self, nonce: &[u8; 12], aad: &[u8], body: &mut [u8], tag: &[u8; 16]) -> bool {
++        use aes_gcm::aead::AeadInPlace;
++        match self {
++            Self::Aes128(gcm) => gcm.decrypt_in_place_detached(nonce.into(), aad, body, tag.into()),
++            Self::Aes256(gcm) => gcm.decrypt_in_place_detached(nonce.into(), aad, body, tag.into()),
++            Self::Other(aead) => return aead.decrypt(nonce, aad, body, tag),
++        }
++        .is_ok()
++    }
++}
++
+ /// One direction's TLS 1.2 record protection: an AEAD keyed from the
+ /// `key_block` slice for this direction, that direction's write IV, and a
+ /// monotonic 64-bit record sequence counter.
+@@ -118,7 +168,7 @@ enum NonceScheme {
+ /// handshake's master secret and randoms.
+ #[allow(dead_code)]
+ pub(crate) struct RecordCrypter12 {
+-    aead: Aead,
++    aead: RecordAead12,
+     /// Per-key record cap for the negotiated AEAD (see `max_records_for`).
+     max_records: u64,
+     /// The suite's nonce construction and the write IV it draws on.
+@@ -156,7 +206,7 @@ impl RecordCrypter12 {
+             }
+         };
+         RecordCrypter12 {
+-            aead: Aead::from_key(alg, key),
++            aead: RecordAead12::from_key(alg, key),
+             max_records: max_records_for(alg),
+             nonce,
+             seq: 0,

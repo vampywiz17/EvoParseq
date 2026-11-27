@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
   push:
     branches: [dev]
-    paths: ['src-native/crates/**', '.github/workflows/native-backends.yml', 'scripts/test-bud-turn-stream.sh']
+    paths: ['src-native/crates/**', '.github/workflows/native-backends.yml', 'scripts/test-lowlat-turn-stream.sh']
   pull_request:
-    paths: ['src-native/crates/**', '.github/workflows/native-backends.yml', 'scripts/test-bud-turn-stream.sh']
+    paths: ['src-native/crates/**', '.github/workflows/native-backends.yml', 'scripts/test-lowlat-turn-stream.sh']
 permissions:
   contents: read
 jobs:
@@ -26,7 +26,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          workspaces: src-native/crates/bud
+          workspaces: src-native/crates/lowlat
       - name: Start isolated UDP TURN fixture
         if: matrix.os == 'ubuntu-latest'
         shell: bash
@@ -48,57 +48,80 @@ jobs:
           done
           cat /tmp/evoparseq-turn-stdout.log
           exit 1
+      - name: Check independent host adapter
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path src-native/crates/host-interop/Cargo.toml -- --check
+          if ($LASTEXITCODE -ne 0) { throw 'Phaze formatting failed' }
+          $phazeTree = cargo tree --locked --manifest-path src-native/crates/host-interop/Cargo.toml --target ${{ matrix.target }} -e normal,build --prefix none
+          if ($LASTEXITCODE -ne 0) { throw 'Phaze dependency inspection failed' }
+          if ($phazeTree | Select-String '^(ring|aws-lc-sys|openssl-sys|boring-sys|s2n-tls-sys|cc) v') { throw 'Phaze runtime must remain pure Rust' }
+          cargo clippy --locked --manifest-path src-native/crates/host-interop/Cargo.toml --target ${{ matrix.target }} --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'Phaze lint failed' }
+          cargo test --locked --manifest-path src-native/crates/host-interop/Cargo.toml --target ${{ matrix.target }}
+          if ($LASTEXITCODE -ne 0) { throw 'Host adapter tests failed' }
+          cargo test --locked --manifest-path src-native/crates/host-interop/Cargo.toml --target ${{ matrix.target }} -p rustls-rustcrypto
+          if ($LASTEXITCODE -ne 0) { throw 'RustCrypto provider compatibility tests failed' }
+      - name: Check host adapter for both Android TV ABIs
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-linux-android armv7-linux-androideabi
+          for target in aarch64-linux-android armv7-linux-androideabi; do
+            cargo check --locked --manifest-path src-native/crates/host-interop/Cargo.toml --target "$target"
+          done
       - name: Check isolated adapters
         shell: pwsh
         run: |
           cargo fmt --manifest-path src-native/crates/socket-qos/Cargo.toml -- --check
           if ($LASTEXITCODE -ne 0) { throw 'QoS adapter formatting failed' }
-          cargo clippy --locked --manifest-path src-native/crates/bud/Cargo.toml --target ${{ matrix.target }} -p evoparseq-socket-qos --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path src-native/crates/lowlat/Cargo.toml --target ${{ matrix.target }} -p evoparseq-socket-qos --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { throw 'QoS adapter Clippy failed' }
-          cargo test --locked --manifest-path src-native/crates/bud/Cargo.toml --target ${{ matrix.target }} -p evoparseq-socket-qos
+          cargo test --locked --manifest-path src-native/crates/lowlat/Cargo.toml --target ${{ matrix.target }} -p evoparseq-socket-qos
           if ($LASTEXITCODE -ne 0) { throw 'QoS adapter I/O lifecycle test failed' }
           cargo fmt --manifest-path src-native/crates/video/Cargo.toml -- --check
           if ($LASTEXITCODE -ne 0) { throw 'GPU decoder formatting failed' }
-          cargo fmt --manifest-path src-native/crates/bud/Cargo.toml -- --check
+          cargo fmt --manifest-path src-native/crates/lowlat/Cargo.toml -- --check
           if ($LASTEXITCODE -ne 0) { throw 'Formatting failed' }
-          cargo fmt --manifest-path src-native/crates/bud/vendor/lowlat-client/Cargo.toml -- --check
+          cargo fmt --manifest-path src-native/crates/lowlat/vendor/lowlat-client/Cargo.toml -- --check
           if ($LASTEXITCODE -ne 0) { throw 'External media seam formatting failed' }
-          cargo clippy --locked --manifest-path src-native/crates/bud/Cargo.toml --target ${{ matrix.target }} --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path src-native/crates/lowlat/Cargo.toml --target ${{ matrix.target }} --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { throw 'Clippy failed' }
-          cargo clippy --locked --manifest-path src-native/crates/bud/Cargo.toml --target ${{ matrix.target }} -p lowlat-client --features external-video,turn-stream,usb-hid-input --all-targets -- -D warnings
-          if ($LASTEXITCODE -ne 0) { throw 'BUD external media and HID input Clippy failed' }
+          cargo clippy --locked --manifest-path src-native/crates/lowlat/Cargo.toml --target ${{ matrix.target }} -p lowlat-client --features external-video,turn-stream,usb-hid-input --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'LOWLAT external media and HID input Clippy failed' }
           cargo clippy --locked --manifest-path src-native/crates/video/Cargo.toml --target ${{ matrix.target }} --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { throw 'GPU backend Clippy failed' }
-          cargo clippy --locked --manifest-path src-native/crates/bud/Cargo.toml --target ${{ matrix.target }} -p lowlat-net --features turn-stream --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path src-native/crates/lowlat/Cargo.toml --target ${{ matrix.target }} -p lowlat-net --features turn-stream --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { throw 'Native TCP/TLS IO Clippy failed' }
           cargo test --locked --manifest-path src-native/crates/video/Cargo.toml --target ${{ matrix.target }}
           if ($LASTEXITCODE -ne 0) { throw 'Default GPU backend contract tests failed' }
-          cargo test --locked --manifest-path src-native/crates/bud/Cargo.toml --target ${{ matrix.target }}
+          cargo test --locked --manifest-path src-native/crates/lowlat/Cargo.toml --target ${{ matrix.target }}
           if ($LASTEXITCODE -ne 0) { throw 'Adapter tests failed' }
-          cargo test --locked --manifest-path src-native/crates/bud/Cargo.toml --target ${{ matrix.target }} -p lowlat-client --features external-video,turn-stream,usb-hid-input --lib
+          cargo test --locked --manifest-path src-native/crates/lowlat/Cargo.toml --target ${{ matrix.target }} -p lowlat-client --features external-video,turn-stream,usb-hid-input --lib
           if ($LASTEXITCODE -ne 0) { throw 'External media seam tests failed' }
-          cargo test --locked --manifest-path src-native/crates/bud/Cargo.toml --target ${{ matrix.target }} -p lowlat-net --lib send::tests
+          cargo test --locked --manifest-path src-native/crates/lowlat/Cargo.toml --target ${{ matrix.target }} -p lowlat-net --lib send::tests
           if ($LASTEXITCODE -ne 0) { throw 'Native UDP send accounting tests failed' }
-          cargo test --locked --manifest-path src-native/crates/bud/Cargo.toml --target ${{ matrix.target }} -p lowlat-net --lib a_queued_datagram_is_received_on_the_pass_it_woke
+          cargo test --locked --manifest-path src-native/crates/lowlat/Cargo.toml --target ${{ matrix.target }} -p lowlat-net --lib a_queued_datagram_is_received_on_the_pass_it_woke
           if ($LASTEXITCODE -ne 0) { throw 'Native UDP receive accounting test failed' }
-          cargo test --locked --manifest-path src-native/crates/bud/Cargo.toml --target ${{ matrix.target }} -p lowlat-net --features turn-stream
+          cargo test --locked --manifest-path src-native/crates/lowlat/Cargo.toml --target ${{ matrix.target }} -p lowlat-net --features turn-stream
           if ($LASTEXITCODE -ne 0) { throw 'Native TCP/TLS IO tests failed' }
-          cargo test --locked --manifest-path src-native/crates/bud/Cargo.toml --target ${{ matrix.target }} -p lowlat-core
-          if ($LASTEXITCODE -ne 0) { throw 'BUD protocol / reliable TURN regression tests failed' }
-          cargo test --locked --manifest-path src-native/crates/bud/Cargo.toml --target ${{ matrix.target }} -p lowlat-crypto
-          if ($LASTEXITCODE -ne 0) { throw 'BUD credential and record compatibility tests failed' }
+          cargo test --locked --manifest-path src-native/crates/lowlat/Cargo.toml --target ${{ matrix.target }} -p lowlat-core
+          if ($LASTEXITCODE -ne 0) { throw 'LOWLAT protocol / reliable TURN regression tests failed' }
+          cargo test --locked --manifest-path src-native/crates/lowlat/Cargo.toml --target ${{ matrix.target }} -p lowlat-crypto
+          if ($LASTEXITCODE -ne 0) { throw 'LOWLAT credential and record compatibility tests failed' }
           if ('${{ matrix.os }}' -eq 'ubuntu-latest') {
-            cargo test --locked --manifest-path src-native/crates/bud/Cargo.toml --target ${{ matrix.target }} --test bud_paths turn_udp_connectivity -- --ignored --exact
-            if ($LASTEXITCODE -ne 0) { throw 'Native BUD UDP TURN connectivity failed' }
-            cargo test --locked --manifest-path src-native/crates/bud/Cargo.toml --target ${{ matrix.target }} --test bud_paths turn_tcp_connectivity -- --ignored --exact
-            if ($LASTEXITCODE -ne 0) { throw 'Application BUD TCP TURN connectivity failed' }
+            cargo test --locked --manifest-path src-native/crates/lowlat/Cargo.toml --target ${{ matrix.target }} --test lowlat_paths turn_udp_connectivity -- --ignored --exact
+            if ($LASTEXITCODE -ne 0) { throw 'Native LOWLAT UDP TURN connectivity failed' }
+            cargo test --locked --manifest-path src-native/crates/lowlat/Cargo.toml --target ${{ matrix.target }} --test lowlat_paths turn_tcp_connectivity -- --ignored --exact
+            if ($LASTEXITCODE -ne 0) { throw 'Application LOWLAT TCP TURN connectivity failed' }
           }
-      - name: Verify BUD UDP/TCP/TLS through isolated coturn across renewal
+      - name: Verify LOWLAT UDP/TCP/TLS through isolated coturn across renewal
         if: matrix.os == 'ubuntu-latest'
         shell: bash
-        run: bash scripts/test-bud-turn-stream.sh
+        run: bash scripts/test-lowlat-turn-stream.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure() && matrix.os == 'ubuntu-latest'
         with:
-          name: Isolated-BUD-TURN-fixture-logs
+          name: Isolated-LOWLAT-TURN-fixture-logs
           path: /tmp/evoparseq*turn*.log

@@ -23,3 +23,5 @@ It describes 152x152 coded pixels and a 150x146 visible picture. Both independen
 metadata readers are checked against it. Tests also synthesize a 1920x1088-coded /
 1920x1080-visible header. No complete new clip or runtime diagnostic is added;
 these metadata tests do not prove hardware decoding on an older AMF runtime.
+
+See the [interoperability and test-data policy](../../../../docs/INTEROPERABILITY.md).

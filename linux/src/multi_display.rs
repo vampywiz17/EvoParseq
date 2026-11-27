@@ -67,7 +67,7 @@ impl crate::Desktop {
             return;
         };
         let mut open_settings = false;
-        for stream in 1..crate::display_stream::STREAMS {
+        for stream in 1..crate::display_stream::DESKTOP_DISPLAYS {
             let slot = &mut self.screens[stream - 1];
             let Some(channel) = telemetry.displays.get(stream) else {
                 *slot = None;
@@ -145,7 +145,6 @@ impl crate::Desktop {
                                 channel.playback.set_input_geometry(source);
                                 fit(child, source, &mut surface.fitted);
                             }
-                            surface.input.cursor(child, &channel.playback);
                         });
                     surface
                         .badge
@@ -153,8 +152,9 @@ impl crate::Desktop {
                     if surface.badge.open {
                         secondary_controls(child, stream, surface, parent.as_ref(), &telemetry);
                     }
+                    surface.input.cursor(child, &channel.playback);
                     channel.playback.finish_clipboard(
-                        surface.input.enabled && raw.focused && !surface.badge.open,
+                        channel.phaze_output.is_none() && surface.input.enabled && raw.focused && !surface.badge.open,
                     );
                 },
             );
@@ -191,6 +191,9 @@ fn secondary_controls(
                     ui.scope_builder(
                         egui::UiBuilder::new().max_rect(r([174, 72, 218, 28])),
                         |ui| {
+                            if surface.channel.phaze_output.is_some() {
+                                ui.disable();
+                            }
                             let mut value =
                                 crate::session_preferences::resolution_text(surface.resolution);
                             egui::ComboBox::from_id_salt(("resolution", stream))
@@ -211,7 +214,17 @@ fn secondary_controls(
                             .iter()
                             .enumerate()
                     {
-                        if ui.put(r(*rect), egui::Button::new(*text)).clicked() {
+                        let enabled = i != 0 || surface.channel.phaze_output.is_none();
+                        if ui
+                            .scope_builder(egui::UiBuilder::new().max_rect(r(*rect)), |ui| {
+                                if !enabled {
+                                    ui.disable();
+                                }
+                                ui.put(r(*rect), egui::Button::new(*text))
+                            })
+                            .inner
+                            .clicked()
+                        {
                             match i {
                                 0 => {
                                     if let Some(primary) = primary {

@@ -1,9 +1,41 @@
 //! Rust adaptation of lowlat scripts/kessel-login.py at e548d48.
 //! Only account authentication: no daemon, installer, host or extra runtime.
-//! MIT attribution: src-native/crates/bud/vendor/lowlat-client/LICENSE.
+//! MIT attribution: src-native/crates/lowlat/vendor/lowlat-client/LICENSE.
 use anyhow::{ensure, Context, Result};
 use serde_json::{json, Value};
 use std::{io::Read, time::Duration};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Service {
+    #[default]
+    Parsec,
+    Phaze,
+}
+impl Service {
+    pub fn signed_in_label(self) -> &'static str {
+        match self {
+            Self::Parsec => "Signed in to Parsec",
+            Self::Phaze => "Signed in to Phaze",
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn notice(self) -> &'static str {
+        match self {
+            Self::Parsec => crate::app_style::LOGIN_NOTICE,
+            Self::Phaze => {
+                "Use your Phaze account. Passwords and two-factor codes are never saved."
+            }
+        }
+    }
+}
+pub fn phaze_runtime<T>(future: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("Could not initialize Phaze runtime")?
+        .block_on(future)
+}
 
 pub struct Login {
     pub email: String,
@@ -13,6 +45,7 @@ pub struct Login {
 
 // Deliberately no Debug/Serialize: neither token nor password belongs in logs.
 pub struct Session {
+    service: Service,
     token: zeroize::Zeroizing<String>,
     revoke_on_drop: std::sync::atomic::AtomicBool,
 }
@@ -23,8 +56,27 @@ impl Session {
             "Invalid account session"
         );
         Ok(Self {
+            service: Service::Parsec,
             token: zeroize::Zeroizing::new(token.into()),
             revoke_on_drop: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+    pub fn service(&self) -> Service {
+        self.service
+    }
+    pub fn from_saved(token: &str) -> Result<Self> {
+        if let Some(token) = token.strip_prefix("phaze:") {
+            let mut session = Self::from_token(token)?;
+            session.service = Service::Phaze;
+            Ok(session)
+        } else {
+            Self::from_token(token)
+        }
+    }
+    pub fn saved_token(&self) -> zeroize::Zeroizing<String> {
+        zeroize::Zeroizing::new(match self.service {
+            Service::Parsec => self.token().to_owned(),
+            Service::Phaze => format!("phaze:{}", self.token()),
         })
     }
     pub fn token(&self) -> &str {
@@ -36,6 +88,19 @@ impl Session {
     }
     pub fn revoke(&self) {
         self.remembered();
+        if self.service == Service::Phaze {
+            {
+                let result = phaze_runtime(async {
+                    evoparseq_host_interop::Session::from_token(self.token())?
+                        .revoke()
+                        .await
+                });
+                if result.is_err() {
+                    crate::event_log::record("WARN", "phaze_account_revoke_failed", json!({}));
+                }
+            }
+            return;
+        }
         // Same DELETE contract as lowlat's --logout. Never log a server body.
         let result = reqwest::blocking::Client::builder()
             .https_only(true)
@@ -132,6 +197,24 @@ fn accepted(status: u16, value: Value) -> Result<Session> {
     Session::from_token(token)
 }
 
+pub fn login_service(login: &Login, service: Service) -> Result<Session> {
+    if service == Service::Parsec {
+        return self::login(login);
+    }
+    {
+        let remote = phaze_runtime(evoparseq_host_interop::login(
+            &login.email,
+            &login.password,
+            &login.tfa,
+        ))?;
+        let mut session = Session::from_token(remote.token())?;
+        session.service = Service::Phaze;
+        session
+            .revoke_on_drop
+            .store(true, std::sync::atomic::Ordering::Release);
+        Ok(session)
+    }
+}
 pub fn login(login: &Login) -> Result<Session> {
     ensure!(
         !login.email.trim().is_empty() && !login.password.is_empty(),
@@ -172,6 +255,22 @@ pub fn login(login: &Login) -> Result<Session> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn saved_sessions_preserve_provider_and_legacy_parsec_tokens() {
+        let parsec = Session::from_token("legacy-fixture").unwrap();
+        assert_eq!(
+            Session::from_saved(&parsec.saved_token())
+                .unwrap()
+                .service(),
+            Service::Parsec
+        );
+        let phaze = Session::from_saved("phaze:new-fixture").unwrap();
+        assert_eq!(phaze.service(), Service::Phaze);
+        assert_eq!(phaze.token(), "new-fixture");
+        assert_eq!(&*phaze.saved_token(), "phaze:new-fixture");
+        assert!(Session::from_saved("phaze:").is_err());
+        assert!(Session::from_saved("phaze:invalid\n").is_err());
+    }
     #[test]
     fn accepts_created_sessions_and_rejects_missing_tokens_without_echoing_secrets() {
         for status in [200, 201] {
@@ -236,6 +335,34 @@ impl std::fmt::Display for ExpiredSession {
 impl std::error::Error for ExpiredSession {}
 
 pub fn hosts(session: &Session) -> Result<Vec<Host>> {
+    if session.service() == Service::Phaze {
+        {
+            return phaze_runtime(evoparseq_host_interop::hosts(
+                &evoparseq_host_interop::Session::from_token(session.token())?,
+            ))
+            .map_err(|error| {
+                if error.is::<evoparseq_host_interop::ExpiredSession>() {
+                    ExpiredSession.into()
+                } else {
+                    error
+                }
+            })
+            .map(|hosts| {
+                hosts
+                    .into_iter()
+                    .map(|h| Host {
+                        peer: h.peer_id,
+                        name: h
+                            .name
+                            .chars()
+                            .filter(|c| !c.is_control())
+                            .take(128)
+                            .collect(),
+                    })
+                    .collect()
+            });
+        }
+    }
     // Audited pinned core's desktop discovery endpoint; no credentials in URL.
     let client = reqwest::blocking::Client::builder()
         .https_only(true)
