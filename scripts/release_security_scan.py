@@ -84,7 +84,9 @@ class VirusTotal:
 
     def request(self, url, file=None):
         parsed = urlsplit(url)
-        if (parsed.scheme != "https" or parsed.hostname != "www.virustotal.com"
+        allowed_host = parsed.hostname == "www.virustotal.com" or (
+            file is not None and parsed.hostname == "bigfiles.virustotal.com")
+        if (parsed.scheme != "https" or not allowed_host
                 or parsed.port not in (None, 443) or parsed.username or parsed.password or parsed.fragment):
             raise ScanError("VirusTotal returned an untrusted endpoint")
         for attempt in range(3):

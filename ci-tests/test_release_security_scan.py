@@ -163,9 +163,24 @@ class Fixtures(unittest.TestCase):
         client = scan.VirusTotal(KEY)
         for url in ["http://www.virustotal.com/x", "https://evil.invalid/x",
                     "https://www.virustotal.com:444/x", "https://user@www.virustotal.com/x",
-                    "https://www.virustotal.com/x#fragment"]:
+                    "https://www.virustotal.com/x#fragment", "https://bigfiles.virustotal.com/upload"]:
             with self.assertRaises(scan.ScanError):
                 client.request(url)
+
+    @patch.object(scan.time, "sleep")
+    def test_documented_bigfiles_host_is_allowed_only_for_https_file_uploads(self, _sleep):
+        client = scan.VirusTotal(KEY)
+        path = self.root / "public-elf"
+        with patch.object(scan, "command", return_value='{"data":1}\n200') as run:
+            self.assertEqual(client.request("https://bigfiles.virustotal.com/upload", file=path), {"data": 1})
+            self.assertIn("--form", run.call_args.args[0])
+            run.reset_mock()
+            for url in ["http://bigfiles.virustotal.com/upload", "https://bigfiles.virustotal.com:444/upload",
+                        "https://user@bigfiles.virustotal.com/upload", "https://bigfiles.virustotal.com/upload#fragment",
+                        "https://bigfiles.virustotal.com.evil.invalid/upload", "https://other.virustotal.com/upload"]:
+                with self.assertRaises(scan.ScanError):
+                    client.request(url, file=path)
+            run.assert_not_called()
 
     @patch.object(scan.time, "sleep")
     def test_requests_are_throttled_and_key_is_stdin_only(self, sleep):
