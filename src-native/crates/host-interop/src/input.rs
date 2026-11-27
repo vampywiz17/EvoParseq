@@ -25,6 +25,71 @@ pub enum Input {
     },
     Release,
 }
+/// The session's existing input batch, with a destination for each event.
+#[derive(Default)]
+pub struct InputBatch {
+    pub(crate) items: Vec<(Option<u32>, Input)>,
+    output: Option<u32>,
+}
+
+impl InputBatch {
+    pub fn target(&mut self, output: Option<u32>) {
+        self.output = output;
+    }
+
+    pub fn push(&mut self, command: Input) {
+        self.items.push((self.output, command));
+    }
+
+    pub fn insert(&mut self, index: usize, command: Input) {
+        self.items.insert(index, (self.output, command));
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Input> {
+        self.items.iter().map(|(_, command)| command)
+    }
+
+    pub fn last(&self) -> Option<&Input> {
+        self.items.last().map(|(_, command)| command)
+    }
+
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.output = None;
+    }
+}
+
+impl Extend<Input> for InputBatch {
+    fn extend<T: IntoIterator<Item = Input>>(&mut self, commands: T) {
+        self.items
+            .extend(commands.into_iter().map(|command| (self.output, command)));
+    }
+}
+
+impl FromIterator<Input> for InputBatch {
+    fn from_iter<T: IntoIterator<Item = Input>>(commands: T) -> Self {
+        let mut batch = Self::default();
+        batch.extend(commands);
+        batch
+    }
+}
+
+impl std::ops::Index<usize> for InputBatch {
+    type Output = Input;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.items[index].1
+    }
+}
+
 impl Input {
     pub(crate) fn is_absolute_motion(self) -> bool {
         matches!(
@@ -244,4 +309,182 @@ mod tests {
         );
         assert_eq!(Input::Release.encode(7), vec![13]);
     }
+
+    #[test]
+    fn physical_scan_table_maps_supported_usages_and_rejects_unknown_ones() {
+        for usage in 4..=29 {
+            assert!(scan(usage).is_some(), "usage {usage}");
+        }
+        for usage in 30..=39 {
+            assert_eq!(scan(usage), Some(usage - 28));
+        }
+        for usage in 58..=67 {
+            assert_eq!(scan(usage), Some(usage + 1));
+        }
+        for usage in 104..=114 {
+            assert_eq!(scan(usage), Some(usage - 4));
+        }
+        let table = [
+            (40, 0x1c),
+            (41, 1),
+            (42, 0xe),
+            (43, 0xf),
+            (44, 0x39),
+            (45, 0xc),
+            (46, 0xd),
+            (47, 0x1a),
+            (48, 0x1b),
+            (49, 0x2b),
+            (51, 0x27),
+            (52, 0x28),
+            (53, 0x29),
+            (54, 0x33),
+            (55, 0x34),
+            (56, 0x35),
+            (57, 0x3a),
+            (68, 0x57),
+            (69, 0x58),
+            (70, 0x137),
+            (71, 0x46),
+            (72, 0x45),
+            (73, 0x152),
+            (74, 0x147),
+            (75, 0x149),
+            (76, 0x153),
+            (77, 0x14f),
+            (78, 0x151),
+            (79, 0x14d),
+            (80, 0x14b),
+            (81, 0x150),
+            (82, 0x148),
+            (83, 0x145),
+            (84, 0x135),
+            (85, 0x37),
+            (86, 0x4a),
+            (87, 0x4e),
+            (88, 0x11c),
+            (89, 0x4f),
+            (90, 0x50),
+            (91, 0x51),
+            (92, 0x4b),
+            (93, 0x4c),
+            (94, 0x4d),
+            (95, 0x47),
+            (96, 0x48),
+            (97, 0x49),
+            (98, 0x52),
+            (99, 0x53),
+            (100, 0x56),
+            (101, 0x15d),
+            (103, 0x59),
+            (115, 0x76),
+        ];
+        for (usage, expected) in table {
+            assert_eq!(scan(usage), Some(expected), "usage {usage}");
+        }
+        for usage in [0u16, 1, 2, 3, 50, 102, 116, 200, 232] {
+            assert_eq!(scan(usage), None, "usage {usage}");
+        }
+    }
+
+    #[test]
+    fn absolute_motion_is_distinguished_from_relative_motion() {
+        let absolute = Input::Motion {
+            x: 1,
+            y: 2,
+            relative: false,
+        };
+        let relative = Input::Motion {
+            x: 1,
+            y: 2,
+            relative: true,
+        };
+        assert!(absolute.is_absolute_motion());
+        assert!(!relative.is_absolute_motion());
+        assert!(!Input::Release.is_absolute_motion());
+    }
+
+    #[test]
+    fn compact_modifier_sources_fall_back_to_shared_modifier_bits() {
+        let mut keys = Keyboard::default();
+        let modifiers = |input: Option<Input>| match input {
+            Some(Input::Key { modifiers, .. }) => modifiers,
+            _ => panic!("expected keyboard input"),
+        };
+        assert_eq!(modifiers(keys.key(4, 1, true)), 1);
+        assert_eq!(modifiers(keys.key(4, 2, true)), 4);
+        assert_eq!(modifiers(keys.key(4, 4, true)), 16);
+        assert_eq!(modifiers(keys.key(4, 8, true)), 64);
+        assert_eq!(modifiers(keys.key(4, 16, true)), 512);
+        assert_eq!(modifiers(keys.key(4, 32, true)), 256);
+        assert_eq!(modifiers(keys.key(225, 0, true)), 1);
+        assert_eq!(modifiers(keys.key(4, 1, true)), 1);
+        assert_eq!(modifiers(keys.key(4, 1, false)), 1);
+        keys.reset();
+        assert_eq!(modifiers(keys.key(228, 0, true)), 8);
+        assert_eq!(modifiers(keys.key(228, 0, false)), 0);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn display_drag_keeps_press_move_and_release_on_their_outputs() {
+    let mut batch = InputBatch::default();
+    batch.target(Some(11));
+    batch.push(Input::Button {
+        button: 1,
+        x: 2,
+        y: 4,
+        down: true,
+    });
+    batch.target(Some(29));
+    batch.push(Input::Motion {
+        x: 300,
+        y: 200,
+        relative: false,
+    });
+    batch.push(Input::Button {
+        button: 1,
+        x: 20,
+        y: 10,
+        down: false,
+    });
+    let frames: Vec<_> = batch
+        .items
+        .iter()
+        .map(|(output, command)| command.encode(output.unwrap()))
+        .collect();
+    assert_eq!((frames[0][0], frames[0][4], frames[0][20]), (10, 11, 1));
+    assert_eq!((frames[1][0], frames[1][4]), (11, 29));
+    assert_eq!((frames[2][0], frames[2][4], frames[2][20]), (10, 29, 0));
+    batch.clear();
+    batch.push(Input::Release);
+    assert_eq!(batch.items, [(None, Input::Release)]);
+}
+
+#[cfg(test)]
+#[test]
+fn initial_pointer_alignment_preserves_the_button_destination() {
+    let down = Input::Button {
+        button: 1,
+        x: 512,
+        y: 384,
+        down: true,
+    };
+    let position = Input::Motion {
+        x: 32767,
+        y: 32767,
+        relative: false,
+    };
+    let mut batch = InputBatch::default();
+    assert!(batch.is_empty());
+    batch.target(Some(29));
+    batch.extend([down]);
+    batch.insert(0, position);
+    assert_eq!(batch.len(), 2);
+    assert_eq!(batch[0], position);
+    assert_eq!(batch.last(), Some(&down));
+    assert_eq!(batch.items, [(Some(29), position), (Some(29), down)]);
+    let copy: InputBatch = batch.iter().copied().collect();
+    assert_eq!(copy.items, [(None, position), (None, down)]);
 }

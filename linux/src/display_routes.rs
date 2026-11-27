@@ -1,5 +1,5 @@
 //! Linux compressed-stream routing and bounded lifecycle; no windows or renderer.
-use crate::playback::Playback;
+use crate::{display_stream::DESKTOP_DISPLAYS, playback::Playback};
 use anyhow::{Result, ensure};
 use eframe::egui;
 use std::sync::{
@@ -9,7 +9,7 @@ use std::sync::{
 #[derive(Default)]
 pub struct Displays {
     pub primary: Mutex<std::sync::Weak<Playback>>,
-    slots: Mutex<[Option<Arc<Channel>>; crate::display_stream::STREAMS - 1]>,
+    slots: Mutex<[Option<Arc<Channel>>; DESKTOP_DISPLAYS - 1]>,
     pub owner: AtomicUsize,
     pub hevc: std::sync::atomic::AtomicBool,
     pub ten_bit: std::sync::atomic::AtomicBool,
@@ -17,6 +17,7 @@ pub struct Displays {
 }
 pub struct Channel {
     pub playback: Arc<Playback>,
+    pub phaze_output: Option<u32>,
     pub inspector: Arc<Mutex<crate::video_stream::Inspector>>,
     ingress: Mutex<crate::lowlat_ingress::VideoState>,
     opened: std::time::Instant,
@@ -45,11 +46,43 @@ impl Displays {
             (1..crate::display_stream::STREAMS).contains(&stream),
             "Invalid display stream"
         );
+        self.open_window(stream, ctx, None, self.hevc.load(Ordering::Acquire))
+    }
+
+    pub fn open_phaze(
+        self: &Arc<Self>,
+        stream: usize,
+        output: u32,
+        ctx: &egui::Context,
+        hevc: bool,
+    ) -> Result<()> {
+        self.open_window(stream, ctx, Some(output), hevc)
+    }
+
+    pub fn has_phaze_output(&self, output: u32) -> bool {
+        self.slots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .flatten()
+            .any(|screen| screen.phaze_output == Some(output))
+    }
+
+    fn open_window(
+        self: &Arc<Self>,
+        stream: usize,
+        ctx: &egui::Context,
+        phaze_output: Option<u32>,
+        hevc: bool,
+    ) -> Result<()> {
         let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
         ensure!(slots[stream - 1].is_none(), "Display is already open");
         let playback = Playback::new(ctx.clone());
         playback.attach_displays(self, stream);
-        playback.set_hevc(self.hevc.load(Ordering::Acquire));
+        playback
+            .local_cursor
+            .store(phaze_output.is_some(), Ordering::Release);
+        playback.set_hevc(hevc);
         playback.set_ten_bit(self.ten_bit.load(Ordering::Acquire));
         let mut inspector = crate::video_stream::Inspector::default();
         inspector.configure(crate::video_stream::VideoProtocol {
@@ -62,6 +95,7 @@ impl Displays {
         slots[stream - 1] = Some(Arc::new(Channel {
             opened: std::time::Instant::now(),
             playback: playback.clone(),
+            phaze_output,
             inspector: Arc::new(Mutex::new(inspector)),
             ingress: Mutex::new(crate::lowlat_ingress::VideoState::new(
                 playback.hevc(),
@@ -93,7 +127,7 @@ impl Displays {
         }
     }
     pub fn clear(&self) {
-        for stream in 1..crate::display_stream::STREAMS {
+        for stream in 1..DESKTOP_DISPLAYS {
             self.close(stream);
         }
     }

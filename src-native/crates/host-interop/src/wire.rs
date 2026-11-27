@@ -126,25 +126,31 @@ pub(crate) fn hello(raw_audio: bool, layout: DisplayLayout) -> Vec<u8> {
 
     let mut b = vec![18];
     b.extend(flags.to_be_bytes());
-    b.extend(u32::from(layout.enabled).to_be_bytes());
-    if !layout.enabled {
-        return b;
+    let count = if layout.enabled {
+        layout.count.total()
+    } else {
+        0
+    };
+    b.extend((count as u32).to_be_bytes());
+    let mut left = 0;
+    for (index, resolution) in layout.resolutions().into_iter().take(count).enumerate() {
+        let [width, height] = resolution.dimensions();
+        const NAME: &[u8] = b"EvoParseq Display";
+        let id = 0x4556_5031u32 + index as u32;
+        b.extend(id.to_be_bytes());
+        b.extend((NAME.len() as u32).to_be_bytes());
+        b.extend(NAME);
+        // Arrange displays from left to right, with only the first primary.
+        // x, y, logical size, rotation, pixel size, refresh, capabilities.
+        for word in [left, 0, width, height, 0, width, height, 60, 1, 0, 0] {
+            b.extend(word.to_be_bytes());
+        }
+        // The serializer scales normalized floating values by 10,000.
+        b.extend(10_000u32.to_be_bytes());
+        b.extend(10_000u32.to_be_bytes());
+        b.extend([1, u8::from(index == 0)]);
+        left += width;
     }
-    let [width, height] = layout.resolution.dimensions();
-
-    const NAME: &[u8] = b"EvoParseq Display";
-    b.extend(0x4556_5031u32.to_be_bytes()); // Synthetic client display ID.
-    b.extend((NAME.len() as u32).to_be_bytes());
-    b.extend(NAME);
-    // x, y, logical width/height, rotation, pixel width/height,
-    // refresh numerator/denominator, reserved display capabilities.
-    for word in [0, 0, width, height, 0, width, height, 60, 1, 0, 0] {
-        b.extend(word.to_be_bytes());
-    }
-    // The vendor serializer scales both normalized floating values by 10,000.
-    b.extend(10_000u32.to_be_bytes());
-    b.extend(10_000u32.to_be_bytes());
-    b.extend([1, 1]); // Active, primary.
     b
 }
 
@@ -157,12 +163,14 @@ pub(crate) fn video_request(
     let start = config.request(output)?;
     let stop = previous
         .filter(|&previous| previous != output || recovering)
-        .map(|previous| {
-            let mut command = [4; 5];
-            command[1..].copy_from_slice(&previous.to_be_bytes());
-            command
-        });
+        .map(stop_video);
     Ok((stop, start))
+}
+
+pub(crate) fn stop_video(output: u32) -> [u8; 5] {
+    let mut command = [4; 5];
+    command[1..].copy_from_slice(&output.to_be_bytes());
+    command
 }
 
 #[cfg(test)]
@@ -194,6 +202,52 @@ fn recovery_reopens_the_selected_output_without_changing_stream_settings() -> Re
     assert!(video_request(Some(output), output, VideoConfig { fps: 0, ..config }, true).is_err());
     Ok(())
 }
+#[derive(Default)]
+pub(crate) struct DisplayHeaderProbe {
+    output: Option<u32>,
+    samples: u8,
+}
+
+impl DisplayHeaderProbe {
+    const MAX_SAMPLES: u8 = 8;
+
+    pub(crate) fn observe(&mut self, output: u32, header: &[u8]) -> Option<u8> {
+        if self.output != Some(output) {
+            self.output = Some(output);
+            self.samples = 0;
+        }
+        if self.samples >= Self::MAX_SAMPLES {
+            return None;
+        }
+
+        self.samples += 1;
+        let mask = video_header_output_matches(header, output);
+        if mask != 0 || self.samples == Self::MAX_SAMPLES {
+            self.samples = Self::MAX_SAMPLES;
+            Some(mask)
+        } else {
+            None
+        }
+    }
+}
+
+/// Report which aligned header words equal the selected output ID.
+/// The match alone does not establish a frame-to-output routing contract.
+fn video_header_output_matches(header: &[u8], output: u32) -> u8 {
+    if output == 0 {
+        return 0;
+    }
+    header
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .take(5)
+        .enumerate()
+        .fold(0, |mask, (index, word)| {
+            mask | (u8::from(u32::from_be_bytes(*word) == output) << index)
+        })
+}
+
 pub fn encoded(b: &[u8]) -> Result<&[u8]> {
     ensure!(b.len() >= 24, "Short video header");
     let n = be(b, 20) as usize;
@@ -562,6 +616,76 @@ fn client_display_hello_uses_observed_options_and_one_descriptor() {
         ),
         hello(false, DisplayLayout::default())
     );
+}
+
+#[cfg(test)]
+#[test]
+fn display_layout_serializes_four_distinct_outputs() -> Result<()> {
+    use crate::display_layout::{DisplayCount, Resolution};
+
+    let mut layout = DisplayLayout {
+        enabled: true,
+        count: DisplayCount::Four,
+        ..DisplayLayout::default()
+    };
+    layout.set_resolution(1, Resolution::Hd);
+    layout.set_resolution(2, Resolution::Qhd);
+    layout.set_resolution(3, Resolution::FullHd);
+    let hello_bytes = hello(false, layout);
+    assert_eq!(be(&hello_bytes, 5), 4);
+    // The descriptors have the same format as a host output list.
+    let mut list = Vec::new();
+    list.extend((hello_bytes.len() as u32 + 3).to_be_bytes());
+    list.extend(&hello_bytes[5..9]);
+    list.extend(0u32.to_be_bytes());
+    list.extend(&hello_bytes[9..]);
+    let outputs = outputs(&list)?;
+    assert_eq!(outputs.len(), 4);
+    for (index, (output, (width, height))) in outputs
+        .iter()
+        .zip([(1920, 1200), (1280, 720), (2560, 1440), (1920, 1080)])
+        .enumerate()
+    {
+        assert_eq!(output.id, 0x4556_5031 + index as u32);
+        assert_eq!((output.width, output.height), (width, height));
+        assert_eq!(output.primary, index == 0);
+        assert!(output.active);
+    }
+    let name_len = be(&hello_bytes, 13) as usize;
+    let entry_len = 8 + name_len + 54;
+    for (index, left) in [0, 1920, 3200, 5760].into_iter().enumerate() {
+        assert_eq!(be(&hello_bytes, 17 + name_len + entry_len * index), left);
+    }
+    assert_eq!(be(&hello(false, layout.single_display()), 5), 1);
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn video_header_diagnostics_report_word_matches_without_assuming_a_field() {
+    let output = 0x1a2b_3c4du32;
+    let header: Vec<u8> = [output, 0, output, 0, 0, output]
+        .into_iter()
+        .flat_map(u32::to_be_bytes)
+        .collect();
+    assert_eq!(video_header_output_matches(&header, output), 0b00101);
+    assert_eq!(video_header_output_matches(&header, 0), 0);
+    assert_eq!(video_header_output_matches(&header, 7), 0);
+}
+
+#[cfg(test)]
+#[test]
+fn display_header_probe_is_bounded_and_resets_when_switching_outputs() {
+    let mut probe = DisplayHeaderProbe::default();
+    let header = [0x1234_5678u32.to_be_bytes(), 42u32.to_be_bytes()].concat();
+    for _ in 1..DisplayHeaderProbe::MAX_SAMPLES {
+        assert_eq!(probe.observe(7, &header), None);
+    }
+    assert_eq!(probe.observe(7, &header), Some(0));
+    assert_eq!(probe.observe(7, &header), None);
+    assert_eq!(probe.observe(42, &header), Some(2));
+    assert_eq!(probe.observe(42, &header), None);
+    assert_eq!(probe.observe(0x1234_5678, &header), Some(1));
 }
 
 #[cfg(test)]

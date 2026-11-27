@@ -537,6 +537,21 @@ impl Window {
         Some(viewport)
     }
 
+    pub(crate) fn pointer_in(&self, target: &Self, x: i32, y: i32) -> Option<(i32, i32)> {
+        let mut point = POINT { x, y };
+        unsafe {
+            if ClientToScreen(self.handle(), &mut point) == 0
+                || GetAncestor(WindowFromPoint(point), GA_ROOT) != target.handle()
+                || ScreenToClient(target.handle(), &mut point) == 0
+            {
+                return None;
+            }
+        }
+        let [left, top, right, bottom] = target.presented_viewport()?.rect()?;
+        ((left..right).contains(&point.x) && (top..bottom).contains(&point.y))
+            .then_some((point.x, point.y))
+    }
+
     unsafe fn mouse_button(&self, down: bool, button: i32, x: i32, y: i32) {
         #[cfg(feature = "lowlat")]
         self.sync_absolute_pointer(x, y, false);
@@ -1976,6 +1991,48 @@ mod tests {
                 SetForegroundWindow(window.handle());
             }
             wait(|| unsafe { GetForegroundWindow() == window.handle() });
+            // Map a point inside the second HWND back through the source's
+            // client coordinates. Neither the system pointer nor a host is used.
+            unsafe {
+                SetWindowPos(
+                    peer.handle(),
+                    HWND_TOPMOST,
+                    200,
+                    120,
+                    400,
+                    320,
+                    SWP_NOACTIVATE,
+                );
+                SendMessageW(peer.handle(), WM_NULL, 0, 0);
+                let [left, top, right, bottom] = peer.presented_viewport().unwrap().rect().unwrap();
+                let target = ((left + right) / 2, (top + bottom) / 2);
+                let mut point = POINT {
+                    x: target.0,
+                    y: target.1,
+                };
+                assert_ne!(ClientToScreen(peer.handle(), &mut point), 0);
+                assert_ne!(ScreenToClient(window.handle(), &mut point), 0);
+                assert_eq!(window.pointer_in(&peer, point.x, point.y), Some(target));
+                assert!(window.pointer_in(&peer, -32768, -32768).is_none());
+                SetWindowPos(
+                    peer.handle(),
+                    HWND_NOTOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+                );
+                SetWindowPos(
+                    peer.handle(),
+                    HWND_BOTTOM,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+                );
+            }
             // Capture is foreground-owned. Exercise chords in this isolated
             // fixture, not among UI tests whose window teardown can steal focus.
             for (first_down, second_down, first_up, second_up, first, second) in [

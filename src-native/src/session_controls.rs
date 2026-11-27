@@ -8,6 +8,8 @@ pub enum Command {
     #[cfg(any(windows, target_os = "linux"))]
     AddDisplay(usize),
     #[cfg(any(windows, target_os = "linux"))]
+    AddPhazeDisplay(u32),
+    #[cfg(any(windows, target_os = "linux"))]
     DisplayResolution {
         stream: usize,
         resolution: crate::session_preferences::Resolution,

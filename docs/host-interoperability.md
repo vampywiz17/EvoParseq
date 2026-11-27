@@ -9,16 +9,42 @@ research methods and test-data policy.
 
 ## Mirror display
 
-In Phaze **Settings → Video**, enable **Mirror display** and choose a
-**Virtual display resolution** before connecting. Windows, Linux and
-Android TV use the same Rust presets. The option is off by default.
-The selected resolution is remembered when you turn mirroring off.
+In Phaze **Settings → Video**, enable **Mirror display** before connecting.
+Windows and Linux offer a **Virtual display count** from one to four and a
+resolution for each requested display. Android TV offers one display.
+The option is off by default. Resolutions are remembered when mirroring is
+off or the display count is reduced.
 
-The setting requests one synthetic primary display in the authenticated
-hello with option `0x100`. The host provisions its virtual display, determines
-the actual mode and may replace physical host displays. With mirroring off,
-the hello uses the normal empty display list. This uses the vendor's protocol
-and requires a compatible host.
+The authenticated hello uses option `0x100` and describes the requested
+displays left to right, with the first as primary. The host provisions its
+virtual displays, determines the actual modes and may replace physical host
+displays. With mirroring off, the hello uses the normal empty display list.
+The one-display request was validated with Phaze 0.14.3. Host acceptance
+and active outputs for larger layouts still require live validation.
+
+Windows and Linux can open active host outputs in separate windows using **Add
+screen** in the Session panel. Each window sends normal mouse and keyboard
+input to its own output. A held pointer drag can cross into another client
+window and release on its output. USB HID sessions keep a single window.
+Closing an additional window stops only that output. Android TV still selects
+one host output at a time. With event logging
+enabled, a multi-display request can log `phaze_display_video_header_observed`
+after opening or switching the selected output. It records the selected
+output ID and which aligned header words match it, without recording raw
+headers or encoded video. In a test with two host virtual displays, the
+first aligned 32-bit big-endian word matched each selected output across
+repeated switches.
+
+For a controlled test of independent streams, enable the event log and launch
+the desktop client with `EVOPARSEQ_PHAZE_VERIFY_PARALLEL=1`. Request two displays,
+connect using standard input and leave the primary session alone while the
+probe runs. It temporarily opens another advertised active output at a low
+video rate, looks for video from both outputs, then sends stop for the second
+output and checks for continued primary video. Results appear in
+`phaze_parallel_display_probe`. The probe discards secondary video before decode. The test on Phaze host
+0.14.3 confirmed interleaved video and continued primary video after stopping
+the secondary. The probe did not exercise cross-window input.
+This opt-in diagnostic does not open another window.
 
 A Phaze 0.14.3 test with the DisplayPort monitor powered off delivered video
 from the host's virtual output. The same DP capture failure also occurred

@@ -28,6 +28,8 @@ mod control;
 mod crypto_policy_tests;
 #[cfg(windows)]
 mod cursor;
+#[cfg(any(windows, test))]
+mod cursor_pixels;
 #[cfg(test)]
 mod data_only_policy_tests;
 #[cfg(any(windows, test))]

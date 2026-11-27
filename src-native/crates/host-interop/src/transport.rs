@@ -1,4 +1,4 @@
-use super::{wire, Answer, Sink};
+use super::{parallel_display_probe, wire, Answer, DisplayCommand, InputBatch, Sink};
 use anyhow::{bail, ensure, Context, Result};
 use hmac::{Hmac, Mac};
 use purecrypto::{
@@ -462,6 +462,164 @@ fn routing_cid(b: &[u8]) -> Option<[u8; 8]> {
     }
     None
 }
+
+#[derive(Default)]
+struct DisplayRoutes {
+    secondary: [Option<u32>; 3],
+    routed_video: bool,
+    visible_cursor: Option<u32>,
+}
+
+impl DisplayRoutes {
+    fn command(
+        &mut self,
+        command: DisplayCommand,
+        primary: Option<u32>,
+        outputs: &[wire::Output],
+        sink: &mut impl Sink,
+        send: impl FnOnce(&[u8]) -> Result<()>,
+    ) -> Result<()> {
+        match command {
+            DisplayCommand::Open(output, config) => {
+                let allowed = Some(output) != primary
+                    && !self.secondary.contains(&Some(output))
+                    && outputs.iter().any(|o| o.active && o.id == output);
+                if let Some(slot) = self
+                    .secondary
+                    .iter_mut()
+                    .find(|slot| slot.is_none())
+                    .filter(|_| allowed)
+                {
+                    send(&config.request(output)?)?;
+                    *slot = Some(output);
+                    self.routed_video = true;
+                } else {
+                    sink.secondary_lost(output);
+                }
+            }
+            DisplayCommand::Close(output) => {
+                if let Some(slot) = self
+                    .secondary
+                    .iter_mut()
+                    .find(|slot| **slot == Some(output))
+                {
+                    send(&wire::stop_video(output))?;
+                    *slot = None;
+                    if self.visible_cursor == Some(output) {
+                        self.visible_cursor = None;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn promote(&mut self, primary: u32, sink: &mut impl Sink) {
+        if let Some(slot) = self
+            .secondary
+            .iter_mut()
+            .find(|slot| **slot == Some(primary))
+        {
+            *slot = None;
+            sink.secondary_lost(primary);
+            if self.visible_cursor == Some(primary) {
+                self.visible_cursor = None;
+            }
+        }
+    }
+
+    fn advertised(&mut self, outputs: &[wire::Output], sink: &mut impl Sink) {
+        for slot in &mut self.secondary {
+            if let Some(output) = *slot {
+                if !outputs
+                    .iter()
+                    .any(|entry| entry.id == output && entry.active)
+                {
+                    *slot = None;
+                    sink.secondary_lost(output);
+                    if self.visible_cursor == Some(output) {
+                        self.visible_cursor = None;
+                    }
+                }
+            }
+        }
+    }
+
+    fn input_target(
+        &self,
+        primary: u32,
+        target: Option<u32>,
+        command: crate::Input,
+    ) -> Option<u32> {
+        let target = target.unwrap_or(primary);
+        (target == primary
+            || self.secondary.contains(&Some(target))
+            || command == crate::Input::Release)
+            .then_some(target)
+    }
+
+    fn video(
+        &self,
+        primary: Option<u32>,
+        frame: &[u8],
+        encoded: &[u8],
+        sink: &mut impl Sink,
+    ) -> Result<bool> {
+        let reset = wire::be(frame, 8) & 1 != 0;
+        if self.routed_video {
+            let output = wire::be(frame, 0);
+            if Some(output) != primary {
+                if self.secondary.contains(&Some(output)) {
+                    sink.secondary_video(output, encoded, reset);
+                }
+                return Ok(false);
+            }
+        }
+        sink.video(encoded, reset)?;
+        Ok(!encoded.is_empty())
+    }
+
+    fn cursor(&mut self, primary: Option<u32>, body: &[u8], sink: &mut impl Sink) {
+        let Some((relative, visible)) =
+            crate::cursor::mode(body, body.get(..4).map(|_| wire::be(body, 0)))
+        else {
+            return;
+        };
+        let output = wire::be(body, 0);
+        if Some(output) != primary
+            && (!self.routed_video || !self.secondary.contains(&Some(output)))
+        {
+            return;
+        }
+        if self.routed_video && !relative && visible && self.visible_cursor != Some(output) {
+            // A visible cursor on this output retires the departed output's
+            // hidden state, including while its HWND still owns drag capture.
+            self.visible_cursor = Some(output);
+            if primary.is_some_and(|id| id != output) {
+                sink.cursor_mode(false, true);
+            }
+            for peer in self
+                .secondary
+                .iter()
+                .flatten()
+                .copied()
+                .filter(|id| *id != output)
+            {
+                sink.secondary_cursor_mode(peer, false, true);
+            }
+        }
+        let visible = visible
+            || (self.routed_video
+                && !relative
+                && self.visible_cursor.is_some_and(|owner| owner != output));
+        if Some(output) == primary {
+            sink.cursor_mode(relative, visible);
+        } else {
+            sink.secondary_cursor_mode(output, relative, visible);
+        }
+    }
+}
+
 pub async fn run(
     socket: impl crate::Datagram,
     identity: Identity,
@@ -580,7 +738,16 @@ pub async fn run(
     let mut heartbeat_timer = tokio::time::interval(Duration::from_millis(200));
     heartbeat_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut selected_output = None;
-    let mut input = Vec::new();
+    let mut display_header_probe = display_layout
+        .requests(1)
+        .then(wire::DisplayHeaderProbe::default);
+    let mut parallel_display_probe = (display_layout.requests(1)
+        && !hid_mouse
+        && !hid_keyboard
+        && std::env::var_os("EVOPARSEQ_PHAZE_VERIFY_PARALLEL").is_some_and(|value| value == "1"))
+    .then(parallel_display_probe::Probe::default);
+    let mut input = InputBatch::default();
+    let mut displays = DisplayRoutes::default();
     let mut controls = Vec::new();
     let mut deferred_motion = None;
     let mut outputs_available = Vec::new();
@@ -625,8 +792,48 @@ pub async fn run(
                 let request = update.or_else(|| {
                     selected_output.filter(|_| recovering).map(|output| (output, sink.video_config()))
                 });
+                if reliable.pending().count() < 48 && parallel_display_probe.as_ref().is_none_or(|probe| !probe.active()) {
+                    if let Some(command) = sink.display_command() {
+                        displays.command(command, selected_output, &outputs_available, sink, |message| {
+                            for packet in reliable.frame(message)? {
+                                send(&mut c, &packet)?;
+                            }
+                            Ok(())
+                        })?;
+                    }
+                }
+                if let Some(probe) = parallel_display_probe.as_mut() {
+                    let action = probe.poll(
+                        Instant::now(),
+                        selected_output,
+                        &outputs_available,
+                        video_received && !displays.routed_video && reliable.pending().count() < 48,
+                        request.is_some(),
+                    )?;
+                    match action {
+                        Some(parallel_display_probe::Action::Start(message)) => {
+                            for packet in reliable.frame(&message)? {
+                                send(&mut c, &packet)?;
+                            }
+                            sink.parallel_display_probe("started");
+                        }
+                        Some(parallel_display_probe::Action::Stop(message, interrupted)) => {
+                            for packet in reliable.frame(&message)? {
+                                send(&mut c, &packet)?;
+                            }
+                            if interrupted {
+                                sink.parallel_display_probe("interrupted");
+                            }
+                        }
+                        Some(parallel_display_probe::Action::Status(status)) => {
+                            sink.parallel_display_probe(status);
+                        }
+                        None => {}
+                    }
+                }
                 if let Some((output,config))=request {
                     ensure!(outputs_available.iter().any(|o: &wire::Output| o.id==output && o.active), "Phaze display is unavailable");
+                    displays.promote(output, sink);
                     let changing_output = selected_output != Some(output);
                     if changing_output {
                         deferred_motion = None;
@@ -644,25 +851,26 @@ pub async fn run(
                     // A newer position supersedes a deferred position. A release
                     // clears it, so it cannot move the pointer after focus loss.
                     let deferred = deferred_motion.take().filter(|_| {
-                        !input.first().is_some_and(|event| {
+                        !input.items.first().is_some_and(|(_, event)| {
                             event.is_absolute_motion() || *event == crate::Input::Release
                         })
                     });
-                    let mut commands = deferred.into_iter().chain(input.drain(..)).peekable();
-                    while let Some(command) = commands.next() {
+                    let mut commands = deferred.into_iter().chain(input.items.drain(..)).peekable();
+                    while let Some((target, command)) = commands.next() {
+                        let Some(target) = displays.input_target(output, target, command) else { continue };
                         if usb_probe.as_mut().is_some_and(|usb| usb.input(command)) { continue; }
                         let outstanding = reliable.pending().count();
                         // Preserve room for button and key transitions when the
                         // peer is slow to acknowledge a burst of positions.
                         if outstanding >= 48 && command.is_absolute_motion() && commands.peek().is_none() {
-                            deferred_motion = Some(command);
+                            deferred_motion = Some((Some(target), command));
                             break;
                         }
                         if outstanding >= 63 {
                             release_and_close(&mut c,&mut reliable,&socket,peer,usb_probe.as_mut()).await;
                             bail!("Phaze input acknowledgment window exhausted; reconnect to continue");
                         }
-                        for p in reliable.frame(&command.encode(output))? { send(&mut c,&p)?; }
+                        for p in reliable.frame(&command.encode(target))? { send(&mut c,&p)?; }
                     }
                 }
                 for control in &controls {
@@ -740,21 +948,41 @@ pub async fn run(
                                 sink.stage("video_requested");
                             }
                         }
+                        displays.advertised(&outputs, sink);
                         outputs_available = outputs;
                     }
                     Some(5) if requested => {
                         let bytes = wire::encoded(&frame[1..])?;
-                        let flags = u32::from_be_bytes(frame[9..13].try_into().unwrap());
-                        sink.video(bytes, flags & 1 != 0)?;
-                        video_received |= !bytes.is_empty();
-                    }
-                    Some(6) => {
-                        if let Some((relative, visible)) =
-                            crate::cursor::mode(&frame[1..], selected_output)
-                        {
-                            sink.cursor_mode(relative, visible);
+                        if let (false, Some(output), Some(probe)) = (
+                            bytes.is_empty(),
+                            selected_output,
+                            display_header_probe.as_mut(),
+                        ) {
+                            if let Some(mask) = probe.observe(output, &frame[1..]) {
+                                sink.display_video_header_observed(output, mask);
+                            }
                         }
+                        if let Some(probe) = parallel_display_probe
+                            .as_mut()
+                            .filter(|_| !displays.routed_video)
+                        {
+                            let (keep, status) = probe.video(
+                                &frame[1..],
+                                selected_output,
+                                !bytes.is_empty(),
+                                Instant::now(),
+                            );
+                            if let Some(status) = status {
+                                sink.parallel_display_probe(status);
+                            }
+                            if !keep {
+                                continue;
+                            }
+                        }
+                        video_received |=
+                            displays.video(selected_output, &frame[1..], bytes, sink)?;
                     }
+                    Some(6) => displays.cursor(selected_output, &frame[1..], sink),
                     Some(7) => {
                         let (codec, pcm, payload_bytes) = audio.decode(&frame[1..])?;
                         sink.audio(pcm, codec, payload_bytes)?;
@@ -903,6 +1131,212 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_display_routes_keep_video_cursor_and_input_on_their_outputs() -> Result<()> {
+        #[derive(Default)]
+        struct Client {
+            lost: Vec<u32>,
+            primary_video: Vec<(Vec<u8>, bool)>,
+            secondary_video: Vec<(u32, Vec<u8>, bool)>,
+            cursor: Vec<(Option<u32>, bool, bool)>,
+        }
+
+        impl Sink for Client {
+            fn stage(&mut self, _: &'static str) {}
+            fn outputs(&mut self, _: &[wire::Output]) {}
+            fn secondary_lost(&mut self, output: u32) {
+                self.lost.push(output);
+            }
+            fn secondary_video(&mut self, id: u32, encoded: &[u8], reset: bool) {
+                self.secondary_video.push((id, encoded.into(), reset));
+            }
+            fn secondary_cursor_mode(&mut self, id: u32, relative: bool, visible: bool) {
+                self.cursor.push((Some(id), relative, visible));
+            }
+            fn cursor_mode(&mut self, relative: bool, visible: bool) {
+                self.cursor.push((None, relative, visible));
+            }
+            fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()> {
+                self.primary_video.push((encoded.into(), reset));
+                Ok(())
+            }
+            fn audio(&mut self, _: &[i16], _: crate::AudioCodec, _: usize) -> Result<()> {
+                Ok(())
+            }
+            fn poll(
+                &mut self,
+                _: Option<u32>,
+                _: &mut InputBatch,
+                _: &mut Vec<crate::ClientControl>,
+            ) -> Result<bool> {
+                Ok(true)
+            }
+        }
+
+        let primary = Some(7);
+        let config = crate::VideoConfig::default();
+        let mut routes = DisplayRoutes::default();
+        let mut client = Client::default();
+        let targets = [7, 17, 9, 22, 50].map(|id| wire::Output {
+            id,
+            name: String::new(),
+            width: 1920,
+            height: 1080,
+            active: true,
+            primary: id == 7,
+        });
+        let [mut first, mut second] = [[0; 13]; 2];
+        first[..4].copy_from_slice(&7u32.to_be_bytes());
+        second[..4].copy_from_slice(&17u32.to_be_bytes());
+        second[11] = 1;
+
+        assert!(routes.video(primary, &first, b"one", &mut client)?);
+        assert!(!routes.video(primary, &first, b"", &mut client)?);
+        client.primary_video.clear();
+        for id in [7, 8] {
+            routes.command(
+                DisplayCommand::Open(id, config),
+                primary,
+                &targets,
+                &mut client,
+                |_| anyhow::bail!("Unexpected start"),
+            )?;
+        }
+        for id in [17, 9, 22] {
+            routes.command(
+                DisplayCommand::Open(id, config),
+                primary,
+                &targets,
+                &mut client,
+                |message| {
+                    assert_eq!(message[0], 3);
+                    assert_eq!(wire::be(message, 1), id);
+                    Ok(())
+                },
+            )?;
+        }
+        routes.command(
+            DisplayCommand::Open(50, config),
+            primary,
+            &targets,
+            &mut client,
+            |_| anyhow::bail!("No fourth secondary slot"),
+        )?;
+        assert_eq!(client.lost, [7, 8, 50]);
+        assert!(!routes.video(primary, &second, b"two", &mut client)?);
+        assert!(routes.video(primary, &first, b"one", &mut client)?);
+        assert_eq!(client.primary_video, [(b"one".to_vec(), false)]);
+        assert_eq!(client.secondary_video, [(17, b"two".to_vec(), true)]);
+
+        first[4] = 2;
+        second[4] = 1;
+        routes.cursor(primary, &first, &mut client);
+        routes.cursor(primary, &[0], &mut client);
+        routes.cursor(primary, &second, &mut client);
+        assert_eq!(
+            client.cursor,
+            [(None, false, false), (Some(17), true, true)]
+        );
+
+        let motion = crate::Input::Motion {
+            x: 4,
+            y: 5,
+            relative: false,
+        };
+        assert_eq!(routes.input_target(7, None, motion), Some(7));
+        assert_eq!(routes.input_target(7, Some(17), motion), Some(17));
+        assert_eq!(routes.input_target(7, Some(8), motion), None);
+        assert_eq!(
+            routes.input_target(7, Some(8), crate::Input::Release),
+            Some(8)
+        );
+        routes.command(
+            DisplayCommand::Close(17),
+            primary,
+            &targets,
+            &mut client,
+            |message| {
+                assert_eq!(message, wire::stop_video(17));
+                Ok(())
+            },
+        )?;
+        routes.command(
+            DisplayCommand::Close(17),
+            primary,
+            &targets,
+            &mut client,
+            |_| anyhow::bail!("Output is already closed"),
+        )?;
+        assert!(!routes.video(primary, &second, b"late packet", &mut client)?);
+        routes.cursor(primary, &second, &mut client);
+        assert_eq!(client.secondary_video.len(), 1);
+        assert_eq!(client.cursor.len(), 2);
+        routes.command(
+            DisplayCommand::Open(17, config),
+            primary,
+            &targets,
+            &mut client,
+            |_| Ok(()),
+        )?;
+        second[4] = 0;
+        routes.cursor(primary, &second, &mut client);
+        assert_eq!(client.cursor.last(), Some(&(Some(17), false, true)));
+        first[4] = 2;
+        routes.cursor(primary, &first, &mut client);
+        assert_eq!(
+            client.cursor.last(),
+            Some(&(None, false, true)),
+            "a late hide from the departed output must not hide the captured pointer"
+        );
+        second[4] = 2;
+        routes.cursor(primary, &second, &mut client);
+        assert_eq!(
+            client.cursor.last(),
+            Some(&(Some(17), false, false)),
+            "the current output can deliberately hide its cursor"
+        );
+        first[4] = 0;
+        routes.cursor(primary, &first, &mut client);
+        assert_eq!(client.cursor.last(), Some(&(None, false, true)));
+        assert!(client.cursor.contains(&(Some(17), false, true)));
+        second[4] = 2;
+        routes.cursor(primary, &second, &mut client);
+        assert_eq!(client.cursor.last(), Some(&(Some(17), false, true)));
+        second[4] = 3;
+        routes.cursor(primary, &second, &mut client);
+        assert_eq!(
+            client.cursor.last(),
+            Some(&(Some(17), true, false)),
+            "relative input retains the host's hidden cursor"
+        );
+        second[4] = 0;
+        routes.cursor(primary, &second, &mut client);
+        assert_eq!(routes.visible_cursor, Some(17));
+        routes.command(
+            DisplayCommand::Close(17),
+            primary,
+            &targets,
+            &mut client,
+            |_| Ok(()),
+        )?;
+        first[4] = 2;
+        // Closing the output that owned the visible cursor must retire that
+        // ownership, so a later absolute hide from the primary stays a hide.
+        routes.cursor(primary, &first, &mut client);
+        assert_eq!(
+            client.cursor.last(),
+            Some(&(None, false, false)),
+            "closing the cursor-owning output restores primary hides"
+        );
+        routes.promote(9, &mut client);
+        routes.promote(50, &mut client);
+        routes.advertised(&targets[..2], &mut client);
+        assert_eq!(client.lost, [7, 8, 50, 9, 22]);
+        assert_eq!(routes.input_target(9, None, motion), Some(9));
+        assert_eq!(routes.input_target(9, Some(22), motion), None);
+        Ok(())
+    }
 
     #[test]
     fn startup_waits_for_an_active_output_and_prefers_the_primary() {

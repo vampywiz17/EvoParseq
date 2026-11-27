@@ -390,4 +390,225 @@ mod tests {
             assert_eq!(mouse.complete().unwrap().1[10], direction as u8);
         }
     }
+
+    fn setup(request_type: u8, request: u8, value: u16, interface: u16, length: u16) -> [u8; 8] {
+        let [value_low, value_high] = value.to_le_bytes();
+        let [interface_low, interface_high] = interface.to_le_bytes();
+        let [length_low, length_high] = length.to_le_bytes();
+        [
+            request_type,
+            request,
+            value_low,
+            value_high,
+            interface_low,
+            interface_high,
+            length_low,
+            length_high,
+        ]
+    }
+
+    fn status(payload: &[u8]) -> i32 {
+        i32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]])
+    }
+
+    fn data(payload: &[u8]) -> &[u8] {
+        &payload[16..]
+    }
+
+    #[test]
+    fn control_transfers_serve_descriptors_configuration_and_indicator_state() {
+        let mut keyboard = Device::new(KEYBOARD_ID);
+        let mut mouse = Device::new(MOUSE_ID);
+
+        let descriptor = mouse.control(setup(0x80, 6, 0x0100, 0, 18), &[]);
+        assert_eq!(status(&descriptor), 0);
+        assert_eq!(data(&descriptor), mouse.device_descriptor().as_slice());
+
+        let configuration = mouse.control(setup(0x80, 6, 0x0200, 0, 34), &[]);
+        assert_eq!(data(&configuration), mouse.configuration().as_slice());
+
+        let hid = mouse.control(setup(0x81, 6, 0x2100, 0, 9), &[]);
+        assert_eq!(data(&hid), &mouse.configuration()[18..27]);
+
+        let report = mouse.control(setup(0x81, 6, 0x2200, 0, 4), &[]);
+        assert_eq!(data(&report), &mouse.descriptor()[..4]);
+
+        let string = mouse.control(setup(0x81, 6, 0x0300, 0, 4), &[]);
+        assert_eq!(data(&string), &[4u8, 3, 9, 4][..]);
+
+        let language = string_descriptor("EvoParseq");
+        let read = mouse.control(setup(0x81, 6, 0x0301, 0, language.len() as u16), &[]);
+        assert_eq!(data(&read), language.as_slice());
+
+        let product = string_descriptor(mouse.name());
+        let read = mouse.control(setup(0x81, 6, 0x0302, 0, product.len() as u16), &[]);
+        assert_eq!(data(&read), product.as_slice());
+
+        let unknown = mouse.control(setup(0x81, 6, 0x2300, 0, 4), &[]);
+        assert_eq!(status(&unknown), -32);
+
+        let status_read = mouse.control(setup(0x82, 0, 0, 0, 2), &[]);
+        assert_eq!(data(&status_read), &[0u8, 0][..]);
+
+        let address = mouse.control(setup(0, 5, 1, 0, 0), &[]);
+        assert_eq!(status(&address), 0);
+
+        let configured = mouse.control(setup(0, 9, 1, 0, 0), &[]);
+        assert_eq!(status(&configured), 0);
+        let current = mouse.control(setup(0x80, 8, 0, 0, 1), &[]);
+        assert_eq!(data(&current), &[1u8][..]);
+
+        mouse.control(setup(0, 9, 0, 0, 0), &[]);
+        let current = mouse.control(setup(0x80, 8, 0, 0, 1), &[]);
+        assert_eq!(data(&current), &[0u8][..]);
+
+        let interface = mouse.control(setup(0x81, 10, 0, 0, 1), &[]);
+        assert_eq!(data(&interface), &[0u8][..]);
+        let interface_out = mouse.control(setup(1, 11, 0, 0, 0), &[]);
+        assert_eq!(status(&interface_out), 0);
+
+        keyboard.control(setup(0x21, 10, 0x7d00, 0, 0), &[]);
+        let idle = keyboard.control(setup(0xa1, 2, 0, 0, 1), &[]);
+        assert_eq!(data(&idle), &[125u8][..]);
+
+        let missing = keyboard.control(setup(0xa1, 1, 0x0101, 0, 29), &[]);
+        assert_eq!(status(&missing), -32);
+        let keyboard_state = keyboard.control(setup(0xa1, 1, 0x0100, 0, 29), &[]);
+        assert_eq!(data(&keyboard_state), &[0u8; 29][..]);
+        let mouse_position = mouse.control(setup(0xa1, 1, 0x0101, 0, 5), &[]);
+        assert_eq!(data(&mouse_position), &[1u8, 0, 0, 0, 0][..]);
+        let mouse_state = mouse.control(setup(0xa1, 1, 0x0103, 0, 8), &[]);
+        assert_eq!(data(&mouse_state).len(), 8);
+
+        let leds = keyboard.control(setup(0xa1, 1, 0x0200, 0, 1), &[]);
+        assert_eq!(data(&leds), &[0u8][..]);
+        let set_leds = keyboard.control(setup(0x21, 9, 0x0200, 0, 1), &[0x1f]);
+        assert_eq!(status(&set_leds), 0);
+        let leds = keyboard.control(setup(0xa1, 1, 0x0200, 0, 1), &[]);
+        assert_eq!(data(&leds), &[0x1fu8][..]);
+    }
+
+    #[test]
+    fn closed_devices_ignore_input_and_reads() {
+        let mut device = Device::new(MOUSE_ID);
+        let queued = device.reports.len();
+        device.input(Input::Release);
+        assert_eq!(device.reports.len(), queued);
+        assert!(!device.enqueue_read([0; 33]));
+        assert!(device.complete().is_none());
+    }
+
+    #[test]
+    fn pointer_reports_cover_absolute_relative_scroll_and_release() {
+        let mut mouse = Device::new(MOUSE_ID);
+        mouse.open();
+        let queued = mouse.reports.len();
+        mouse.input(Input::Key {
+            usage: 3,
+            scan: 0,
+            modifiers: 0,
+            down: true,
+        });
+        assert_eq!(mouse.reports.len(), queued);
+
+        mouse.input(Input::Motion {
+            x: 40000,
+            y: -10,
+            relative: false,
+        });
+        assert_eq!(
+            mouse.reports.back().map(Report::data),
+            Some(&[1u8, 0x20, 0x4e, 0, 0][..])
+        );
+        mouse.input(Input::Motion {
+            x: 200,
+            y: 100,
+            relative: false,
+        });
+        assert_eq!(
+            mouse.reports.back().map(Report::data),
+            Some(&[1u8, 100, 0, 50, 0][..])
+        );
+
+        mouse.input(Input::Motion {
+            x: -5,
+            y: 9,
+            relative: true,
+        });
+        assert_eq!(
+            mouse.reports.back().map(Report::data),
+            Some(&[3u8, 0, 0xfb, 0xff, 9, 0, 0, 0][..])
+        );
+
+        mouse.input(Input::Button {
+            button: 6,
+            x: 0,
+            y: 0,
+            down: true,
+        });
+        assert_eq!(
+            mouse.reports.back().map(Report::data),
+            Some(&[3u8, 0, 0xfb, 0xff, 9, 0, 0, 0][..])
+        );
+
+        mouse.input(Input::Button {
+            button: 5,
+            x: 0,
+            y: 0,
+            down: true,
+        });
+        assert_eq!(
+            mouse.reports.back().map(Report::data),
+            Some(&[3u8, 16, 0, 0, 0, 0, 0, 0][..])
+        );
+
+        let queued = mouse.reports.len();
+        mouse.input(Input::Scroll { x: 60, y: 0 });
+        assert_eq!(mouse.reports.len(), queued);
+        mouse.input(Input::Scroll { x: 60, y: 0 });
+        assert_eq!(
+            mouse.reports.back().map(Report::data),
+            Some(&[3u8, 16, 0, 0, 0, 0, 0, 1][..])
+        );
+
+        mouse.input(Input::Release);
+        assert_eq!(mouse.reports.len(), 1);
+        assert_eq!(
+            mouse.reports.back().map(Report::data),
+            Some(&[3u8, 0, 0, 0, 0, 0, 0, 0][..])
+        );
+    }
+
+    #[test]
+    fn queued_reports_and_reads_stay_bounded() {
+        let mut mouse = Device::new(MOUSE_ID);
+        mouse.open();
+        for _ in 1..MAX_REPORTS {
+            mouse.input(Input::Scroll { x: 0, y: 120 });
+        }
+        assert_eq!(mouse.reports.len(), MAX_REPORTS);
+        mouse.input(Input::Scroll { x: 0, y: 120 });
+        assert_eq!(mouse.reports.len(), 1);
+
+        for _ in 0..MAX_READS {
+            assert!(mouse.enqueue_read([0; 33]));
+        }
+        assert!(!mouse.enqueue_read([0; 33]));
+        assert!(mouse.complete().is_some());
+    }
+
+    #[test]
+    fn idle_keyboard_resends_its_state_without_new_input() {
+        let mut keyboard = Device::new(KEYBOARD_ID);
+        keyboard.open();
+        assert!(keyboard.enqueue_read([0; 33]));
+        assert!(keyboard.complete().is_some());
+        keyboard.reports.clear();
+        keyboard.idle = 1;
+        std::thread::sleep(Duration::from_millis(10));
+        assert!(keyboard.enqueue_read([0; 33]));
+        let (_, payload, initial) = keyboard.complete().expect("idle repeat");
+        assert!(!initial);
+        assert_eq!(payload.len(), 4 + 29);
+    }
 }

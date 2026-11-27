@@ -1,7 +1,7 @@
 //! MediaCodec/AAudio/D-pad platform binding for the shared Phaze session.
 use crate::{account, audio_android, interop_client, stream::Request};
 use anyhow::Result;
-use evoparseq_host_interop::{ClientControl, Input};
+use evoparseq_host_interop::{ClientControl, InputBatch};
 use serde_json::{json, Value};
 use std::{
     collections::VecDeque,
@@ -50,7 +50,7 @@ pub fn run(request: Request, stop: &AtomicBool, status: &Mutex<Value>) -> Result
         config,
         pcm,
         prefs.audio.pcm,
-        prefs.phaze_display_layout,
+        prefs.phaze_display_layout.single_display(),
     );
     let network = crate::network::current();
     let result = account::phaze_runtime(async {
@@ -114,7 +114,7 @@ impl interop_client::Platform for Adapter<'_> {
         &mut self,
         state: &mut interop_client::State,
         _: Option<u32>,
-        input: &mut Vec<Input>,
+        input: &mut InputBatch,
         _: &mut Vec<ClientControl>,
     ) -> Result<bool> {
         if self.stop.load(Ordering::Acquire) {

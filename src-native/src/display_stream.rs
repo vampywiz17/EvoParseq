@@ -1,6 +1,8 @@
 //! Bounded Parsec display-stream wire model; no window or media APIs.
 use anyhow::{ensure, Result};
 pub const STREAMS: usize = 3;
+/// Client window slots, including the primary window. Phaze can use all four.
+pub const DESKTOP_DISPLAYS: usize = 4;
 pub fn motion(stream: usize, bytes: &[u8]) -> Result<bytes::Bytes> {
     ensure!(
         (1..STREAMS).contains(&stream) && bytes.len() == 13 && bytes[12] == 3,

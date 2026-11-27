@@ -22,6 +22,8 @@ pub struct DesktopInput {
     restored_position: Option<Pos2>,
     drag_candidate: Option<Pos2>,
     transferred: bool,
+    cursor: crate::cursor_linux::Cursor,
+    cursor_presentation: Option<&'static str>,
 }
 impl DesktopInput {
     pub fn keyboard(&self) -> std::sync::Arc<crate::native_loop::KeyboardBridge> {
@@ -60,6 +62,7 @@ impl DesktopInput {
         self.restored_position = None;
         self.drag_candidate = None;
         self.transferred = false;
+        self.cursor = Default::default();
         playback.deactivate_input();
         self.controls = None;
         self.badge = None;
@@ -77,6 +80,9 @@ impl DesktopInput {
             playback.push_input(Input::Focus(true));
         }
     }
+    /// Finalize after this viewport's widgets and input releases.
+    /// The egui icon is the sole visibility authority: a later CursorVisible
+    /// command would override None and desynchronize egui-winit's icon cache.
     pub fn cursor(&mut self, ctx: &egui::Context, playback: &Playback) {
         let native_drag = playback
             .native_drag
@@ -127,7 +133,6 @@ impl DesktopInput {
                 self.capture_anchor = self.last_absolute;
                 self.restored_position = None;
             }
-            ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(!grab));
             ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(if grab {
                 egui::CursorGrab::Locked
             } else {
@@ -158,21 +163,63 @@ impl DesktopInput {
         // Keep None while locked, but let ordinary UI hover choose its cursor.
         // Repeated native visibility commands would overwrite Wayland CSD resize
         // cursors even though the capture state has not changed.
-        let hidden_over_video = self.enabled
-            && playback.input_active()
+        let position = ctx
+            .input(|i| {
+                (i.focused || self.transferred)
+                    .then_some(i.pointer.hover_pos())
+                    .flatten()
+            })
+            .filter(|&pos| {
+                self.inside(pos)
+                    && ctx
+                        .layer_id_at(pos)
+                        .is_none_or(|layer| layer.order == egui::Order::Background)
+            });
+        let over_video = self.enabled && playback.input_active() && position.is_some();
+        let hidden_over_video = over_video
             && playback
                 .phaze_cursor_hidden
-                .load(std::sync::atomic::Ordering::Acquire)
-            && ctx
-                .input(|i| i.focused && i.pointer.hover_pos().is_some_and(|pos| self.inside(pos)));
-        if grab || native_drag || hidden_over_video {
+                .load(std::sync::atomic::Ordering::Acquire);
+        let local_cursor = !grab
+            && !native_drag
+            && !hidden_over_video
+            && over_video
+            && playback
+                .local_cursor
+                .load(std::sync::atomic::Ordering::Acquire);
+        let painted = local_cursor
+            && position
+                .is_some_and(|position| self.cursor.paint(ctx, playback.cursor_image(), position));
+        if grab || native_drag || hidden_over_video || painted {
             ctx.set_cursor_icon(egui::CursorIcon::None);
+        }
+        if playback
+            .local_cursor
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            let presentation = if native_drag {
+                "wayland_drag"
+            } else if grab || hidden_over_video {
+                "hidden"
+            } else if painted {
+                "host_image"
+            } else {
+                "native_ui"
+            };
+            if self.cursor_presentation != Some(presentation) {
+                self.cursor_presentation = Some(presentation);
+                // Requested presentation only; compositor visibility is unobserved.
+                crate::event_log::record(
+                    "INFO",
+                    "phaze_cursor_presentation_requested",
+                    serde_json::json!({"stream":playback.stream(),"presentation":presentation}),
+                );
+            }
         }
     }
     pub fn restore_cursor(ctx: &egui::Context) {
         ctx.set_cursor_icon(egui::CursorIcon::Default);
         ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(egui::CursorGrab::None));
-        ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
     }
     fn inside(&self, pos: Pos2) -> bool {
         self.video.is_some_and(|rect| rect.contains(pos))
@@ -431,7 +478,7 @@ mod tests {
 mod cursor_tests {
     use super::*;
     #[test]
-    fn linux_cursor_restore_clears_both_egui_icon_and_native_visibility() {
+    fn linux_cursor_restore_uses_one_visibility_authority_and_unlocks() {
         let ctx = egui::Context::default();
         let playback = Playback::new(ctx.clone());
         playback.activate_input();
@@ -458,9 +505,9 @@ mod cursor_tests {
             .unwrap()
             .commands;
         assert!(
-            commands
+            !commands
                 .iter()
-                .any(|cmd| matches!(cmd, egui::ViewportCommand::CursorVisible(true)))
+                .any(|cmd| matches!(cmd, egui::ViewportCommand::CursorVisible(_)))
         );
         assert!(commands.iter().any(|cmd| matches!(
             cmd,
@@ -699,5 +746,336 @@ mod native_drag_tests {
         raw.events.clear();
         adapter.events(&ctx, &mut raw, &playback);
         assert!(!adapter.enabled && !playback.input_active());
+    }
+}
+
+#[cfg(test)]
+mod phaze_cursor_tests {
+    use super::*;
+    use std::sync::{Arc, atomic::Ordering};
+    fn session() -> (egui::Context, Arc<Playback>, DesktopInput) {
+        let ctx = egui::Context::default();
+        let playback = Playback::new(ctx.clone());
+        playback.set_input_ready(true);
+        playback.activate_input();
+        playback.local_cursor.store(true, Ordering::Release);
+        playback.set_cursor_image(Some(Arc::new(crate::cursor_pixels::Pixels {
+            size: (1, 1),
+            hotspot: (0, 0),
+            rgba: vec![255; 4],
+        })));
+        let adapter = DesktopInput {
+            enabled: true,
+            video: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.))),
+            controls: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(50., 50.))),
+            ..Default::default()
+        };
+        (ctx, playback, adapter)
+    }
+
+    #[test]
+    fn linux_phaze_cursor_is_local_only_over_active_video_and_respects_host_visibility() {
+        let (ctx, playback, mut adapter) = session();
+        for (position, focused, transferred, hidden, dragging, enabled, local, drawn, icon) in [
+            (
+                (100., 80.),
+                true,
+                false,
+                false,
+                false,
+                true,
+                true,
+                true,
+                egui::CursorIcon::None,
+            ),
+            (
+                (100., 80.),
+                false,
+                true,
+                false,
+                false,
+                true,
+                true,
+                true,
+                egui::CursorIcon::None,
+            ),
+            (
+                (10., 10.),
+                true,
+                false,
+                false,
+                false,
+                true,
+                true,
+                false,
+                egui::CursorIcon::Text,
+            ),
+            (
+                (900., 80.),
+                true,
+                false,
+                false,
+                false,
+                true,
+                true,
+                false,
+                egui::CursorIcon::Text,
+            ),
+            (
+                (100., 80.),
+                false,
+                false,
+                false,
+                false,
+                true,
+                true,
+                false,
+                egui::CursorIcon::Text,
+            ),
+            (
+                (100., 80.),
+                false,
+                true,
+                true,
+                false,
+                true,
+                true,
+                false,
+                egui::CursorIcon::None,
+            ),
+            (
+                (100., 80.),
+                true,
+                false,
+                true,
+                false,
+                true,
+                true,
+                false,
+                egui::CursorIcon::None,
+            ),
+            (
+                (100., 80.),
+                true,
+                false,
+                false,
+                true,
+                true,
+                true,
+                false,
+                egui::CursorIcon::None,
+            ),
+            (
+                (100., 80.),
+                true,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                egui::CursorIcon::Text,
+            ),
+            (
+                (100., 80.),
+                true,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                egui::CursorIcon::Text,
+            ),
+        ] {
+            adapter.transferred = transferred;
+            adapter.enabled = enabled;
+            playback.local_cursor.store(local, Ordering::Release);
+            playback
+                .phaze_cursor_hidden
+                .store(hidden, Ordering::Release);
+            playback.native_drag.store(dragging, Ordering::Release);
+            let output = ctx.run(
+                egui::RawInput {
+                    focused,
+                    events: vec![Event::PointerMoved(egui::pos2(position.0, position.1))],
+                    ..Default::default()
+                },
+                |ctx| {
+                    ctx.set_cursor_icon(egui::CursorIcon::Text);
+                    adapter.cursor(ctx, &playback);
+                },
+            );
+            assert_eq!(output.platform_output.cursor_icon, icon);
+            assert_eq!(
+                output
+                    .shapes
+                    .iter()
+                    .any(|s| matches!(&s.shape, egui::Shape::Mesh(_))),
+                drawn
+            );
+        }
+    }
+    #[test]
+    fn linux_phaze_capture_exit_never_reenables_native_cursor_under_host_image() {
+        let (ctx, playback, mut adapter) = session();
+        for captured in [true, false, false, false, true, false] {
+            playback.set_capture(captured);
+            let output = ctx.run(
+                egui::RawInput {
+                    focused: true,
+                    events: vec![Event::PointerMoved(egui::pos2(100., 80.))],
+                    ..Default::default()
+                },
+                |ctx| adapter.cursor(ctx, &playback),
+            );
+            assert_eq!(output.platform_output.cursor_icon, egui::CursorIcon::None);
+            assert_eq!(
+                output
+                    .shapes
+                    .iter()
+                    .any(|s| matches!(&s.shape, egui::Shape::Mesh(_))),
+                !captured
+            );
+            assert_eq!(
+                adapter.cursor_presentation,
+                Some(if captured { "hidden" } else { "host_image" })
+            );
+            // eframe applies viewport commands after the icon. A visible=true
+            // here would show a second cursor and leave the cached icon at None.
+            assert!(
+                !output.viewport_output[&egui::ViewportId::ROOT]
+                    .commands
+                    .iter()
+                    .any(|c| matches!(c, egui::ViewportCommand::CursorVisible(_)))
+            );
+        }
+        let output = ctx.run(Default::default(), |ctx| {
+            adapter.release(ctx, &playback);
+            adapter.cursor(ctx, &playback);
+        });
+        assert_eq!(
+            output.platform_output.cursor_icon,
+            egui::CursorIcon::Default
+        );
+        assert_eq!(adapter.cursor_presentation, Some("native_ui"));
+        assert!(
+            !output
+                .shapes
+                .iter()
+                .any(|s| matches!(&s.shape, egui::Shape::Mesh(_)))
+        );
+    }
+
+    #[test]
+    fn linux_phaze_release_and_reactivation_cannot_queue_native_show_under_host_cursor() {
+        let (ctx, playback, mut adapter) = session();
+        for reactivate in [false, true, true] {
+            let output = ctx.run(
+                egui::RawInput {
+                    focused: true,
+                    events: vec![Event::PointerMoved(egui::pos2(100., 80.))],
+                    ..Default::default()
+                },
+                |ctx| {
+                    if reactivate {
+                        adapter.release(ctx, &playback);
+                        adapter.enable(&playback);
+                    }
+                    adapter.cursor(ctx, &playback);
+                },
+            );
+            assert_eq!(output.platform_output.cursor_icon, egui::CursorIcon::None);
+            assert_eq!(
+                output
+                    .shapes
+                    .iter()
+                    .filter(|s| matches!(&s.shape, egui::Shape::Mesh(_)))
+                    .count(),
+                1
+            );
+            assert!(
+                !output.viewport_output[&egui::ViewportId::ROOT]
+                    .commands
+                    .iter()
+                    .any(|c| matches!(c, egui::ViewportCommand::CursorVisible(_)))
+            );
+        }
+    }
+
+    #[test]
+    fn linux_phaze_cursor_does_not_cover_local_windows_inside_video_rectangle() {
+        let (ctx, playback, mut adapter) = session();
+        for _ in 0..2 {
+            let output = ctx.run(
+                egui::RawInput {
+                    focused: true,
+                    events: vec![Event::PointerMoved(egui::pos2(100., 80.))],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |_| {});
+                    egui::Area::new(egui::Id::new("local-statistics"))
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(egui::pos2(60., 60.))
+                        .show(ctx, |ui| {
+                            ui.allocate_exact_size(egui::vec2(200., 200.), egui::Sense::hover());
+                        });
+                    assert_eq!(
+                        ctx.layer_id_at(egui::pos2(100., 80.)).unwrap().order,
+                        egui::Order::Foreground
+                    );
+                    ctx.set_cursor_icon(egui::CursorIcon::Text);
+                    adapter.cursor(ctx, &playback);
+                },
+            );
+            assert_eq!(output.platform_output.cursor_icon, egui::CursorIcon::Text);
+            assert_eq!(adapter.cursor_presentation, Some("native_ui"));
+            assert!(
+                !output
+                    .shapes
+                    .iter()
+                    .any(|s| matches!(&s.shape, egui::Shape::Mesh(_)))
+            );
+        }
+    }
+
+    #[test]
+    fn linux_phaze_cursor_finalization_uses_current_panel_geometry_and_release() {
+        let (ctx, playback, mut adapter) = session();
+        // A panel or badge can move/open during the current UI pass. Finalize
+        // only after its rectangle and any input release have been applied.
+        let panel = Rect::from_min_size(egui::pos2(80., 60.), egui::vec2(100., 100.));
+        for release in [false, true] {
+            let output = ctx.run(
+                egui::RawInput {
+                    focused: true,
+                    events: vec![Event::PointerMoved(egui::pos2(100., 80.))],
+                    ..Default::default()
+                },
+                |ctx| {
+                    adapter.controls = Some(panel);
+                    if release {
+                        adapter.release(ctx, &playback);
+                    }
+                    ctx.set_cursor_icon(egui::CursorIcon::Text);
+                    adapter.cursor(ctx, &playback);
+                },
+            );
+            assert_eq!(output.platform_output.cursor_icon, egui::CursorIcon::Text);
+            assert_eq!(adapter.cursor_presentation, Some("native_ui"));
+            assert!(
+                !output
+                    .shapes
+                    .iter()
+                    .any(|s| matches!(&s.shape, egui::Shape::Mesh(_)))
+            );
+            assert!(
+                !output.viewport_output[&egui::ViewportId::ROOT]
+                    .commands
+                    .iter()
+                    .any(|c| matches!(c, egui::ViewportCommand::CursorVisible(_)))
+            );
+        }
     }
 }

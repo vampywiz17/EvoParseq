@@ -47,7 +47,9 @@ const STATUS: usize = 4115;
 const GPU: usize = 4116;
 const VIDEO_FORMAT: usize = 4117;
 const MIRROR_DISPLAY: usize = 4141;
-const VIRTUAL_DISPLAY_RESOLUTION: usize = 4142;
+const VIRTUAL_DISPLAY_COUNT: usize = 4142;
+const FIRST_VIRTUAL_DISPLAY_RESOLUTION: usize = 4143;
+const LAST_VIRTUAL_DISPLAY_RESOLUTION: usize = 4146;
 #[cfg(feature = "lowlat")]
 const LOWLAT: usize = 4119;
 const LOWLAT_EXTRA: i32 = if cfg!(feature = "lowlat") { 94 } else { 0 };
@@ -678,7 +680,7 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
     controls::combo(ai);
     if page.model.phaze {
         use crate::app_style::forms;
-        use evoparseq_host_interop::display_layout::{Resolution, MIRROR_CHOICES};
+        use evoparseq_host_interop::display_layout::{DisplayCount, Resolution, MIRROR_CHOICES};
         let display = s.phaze_display_layout;
         let resolutions = Resolution::labels();
         for (id, row, labels, selected) in [
@@ -689,14 +691,29 @@ unsafe fn open_mode(parent: HWND, manager: Arc<Manager>, phaze: bool) -> HWND {
                 usize::from(display.enabled),
             ),
             (
-                VIRTUAL_DISPLAY_RESOLUTION,
-                forms::VIRTUAL_DISPLAY_RESOLUTION,
-                resolutions.as_slice(),
-                display.resolution.index(),
+                VIRTUAL_DISPLAY_COUNT,
+                forms::VIRTUAL_DISPLAY_COUNT,
+                DisplayCount::LABELS.as_slice(),
+                display.count.index(),
             ),
         ] {
             row_label(hwnd, page, row.label, row.help, row.y, 0, row.help_height);
             choice(hwnd, page, id, row.y, labels, selected);
+        }
+        for (index, (row, resolution)) in forms::VIRTUAL_DISPLAY_RESOLUTIONS
+            .into_iter()
+            .zip(display.resolutions())
+            .enumerate()
+        {
+            row_label(hwnd, page, row.label, row.help, row.y, 0, row.help_height);
+            choice(
+                hwnd,
+                page,
+                FIRST_VIRTUAL_DISPLAY_RESOLUTION + index,
+                row.y,
+                &resolutions,
+                resolution.index(),
+            );
         }
     }
     page.building_tab = Some(Tab::Network);
@@ -1274,7 +1291,8 @@ fn mode_combo(id: usize) -> bool {
             | ROUTE_MODE
             | IMMERSIVE
             | MIRROR_DISPLAY
-            | VIRTUAL_DISPLAY_RESOLUTION
+            | VIRTUAL_DISPLAY_COUNT
+            | FIRST_VIRTUAL_DISPLAY_RESOLUTION..=LAST_VIRTUAL_DISPLAY_RESOLUTION
     ) || binary_choice_kind(id).is_some()
 }
 fn mode_label(id: usize, index: u32, model: &Form) -> &'static str {
@@ -1285,7 +1303,11 @@ fn mode_label(id: usize, index: u32, model: &Form) -> &'static str {
         evoparseq_host_interop::display_layout::MIRROR_CHOICES
             .get(index)
             .copied()
-    } else if id == VIRTUAL_DISPLAY_RESOLUTION {
+    } else if id == VIRTUAL_DISPLAY_COUNT {
+        evoparseq_host_interop::display_layout::DisplayCount::LABELS
+            .get(index)
+            .copied()
+    } else if (FIRST_VIRTUAL_DISPLAY_RESOLUTION..=LAST_VIRTUAL_DISPLAY_RESOLUTION).contains(&id) {
         evoparseq_host_interop::display_layout::Resolution::labels()
             .get(index)
             .copied()
@@ -1368,11 +1390,18 @@ unsafe fn read_options(hwnd: HWND, page: &mut Page) {
         mode.apply(s);
     }
     if model.phaze {
-        s.phaze_display_layout.enabled = selection(hwnd, MIRROR_DISPLAY) == 1;
-        if let Some(resolution) = evoparseq_host_interop::display_layout::Resolution::from_index(
-            selection(hwnd, VIRTUAL_DISPLAY_RESOLUTION),
-        ) {
-            s.phaze_display_layout.resolution = resolution;
+        use evoparseq_host_interop::display_layout::{DisplayCount, Resolution};
+        let display = &mut s.phaze_display_layout;
+        display.enabled = selection(hwnd, MIRROR_DISPLAY) == 1;
+        if let Some(&count) = DisplayCount::ALL.get(selection(hwnd, VIRTUAL_DISPLAY_COUNT)) {
+            display.count = count;
+        }
+        for (index, id) in
+            (FIRST_VIRTUAL_DISPLAY_RESOLUTION..=LAST_VIRTUAL_DISPLAY_RESOLUTION).enumerate()
+        {
+            if let Some(resolution) = Resolution::from_index(selection(hwnd, id)) {
+                display.set_resolution(index, resolution);
+            }
         }
     }
     s.experimental_chroma_444 = checked(hwnd, CHROMA_444);
@@ -1441,10 +1470,19 @@ unsafe fn update_enabled(hwnd: HWND) {
         );
     }
     if page.model.phaze {
+        let display = page.model.values.phaze_display_layout;
         EnableWindow(
-            GetDlgItem(hwnd, VIRTUAL_DISPLAY_RESOLUTION as i32),
-            i32::from(page.model.values.phaze_display_layout.enabled),
+            GetDlgItem(hwnd, VIRTUAL_DISPLAY_COUNT as i32),
+            i32::from(display.enabled),
         );
+        for (index, id) in
+            (FIRST_VIRTUAL_DISPLAY_RESOLUTION..=LAST_VIRTUAL_DISPLAY_RESOLUTION).enumerate()
+        {
+            EnableWindow(
+                GetDlgItem(hwnd, id as i32),
+                i32::from(display.requests(index)),
+            );
+        }
         for id in [STUN, TCP_QOS] {
             EnableWindow(GetDlgItem(hwnd, id as i32), 0);
         }
@@ -1713,7 +1751,9 @@ unsafe extern "system" fn page_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LP
                     return 0;
                 }
 
-                CHROMA_444 | AI_UPSCALE | MIRROR_DISPLAY if (wp >> 16) as u32 == CBN_SELCHANGE => {
+                CHROMA_444 | AI_UPSCALE | MIRROR_DISPLAY | VIRTUAL_DISPLAY_COUNT
+                    if (wp >> 16) as u32 == CBN_SELCHANGE =>
+                {
                     update_enabled(hwnd);
                     return 0;
                 }
@@ -2355,7 +2395,8 @@ mod tests {
             );
             assert_no_overlaps(page);
             capture(page, "phaze-video");
-            let resolution = GetDlgItem(page, VIRTUAL_DISPLAY_RESOLUTION as i32);
+            let resolution = GetDlgItem(page, FIRST_VIRTUAL_DISPLAY_RESOLUTION as i32);
+            let second_resolution = GetDlgItem(page, (FIRST_VIRTUAL_DISPLAY_RESOLUTION + 1) as i32);
             assert!(!resolution.is_null());
             assert_eq!(IsWindowEnabled(resolution), 0);
             select(page, MIRROR_DISPLAY, 1);
@@ -2366,6 +2407,15 @@ mod tests {
                 0,
             );
             assert_ne!(IsWindowEnabled(resolution), 0);
+            assert_eq!(IsWindowEnabled(second_resolution), 0);
+            select(page, VIRTUAL_DISPLAY_COUNT, 1);
+            SendMessageW(
+                page,
+                WM_COMMAND,
+                VIRTUAL_DISPLAY_COUNT | ((CBN_SELCHANGE as usize) << 16),
+                0,
+            );
+            assert_ne!(IsWindowEnabled(second_resolution), 0);
             SendMessageW(page, WM_COMMAND, AUDIO_TAB, 0);
             assert_ne!(
                 GetWindowLongW(GetDlgItem(page, AUDIO_CUSTOM as i32), GWL_STYLE) as u32

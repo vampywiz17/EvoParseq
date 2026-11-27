@@ -19,6 +19,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("vendor-vi
 evoparseq-host-interop = { path = "../src-native/crates/host-interop" }
 evoparseq-socket-qos = { path = "../src-native/crates/socket-qos" }
 libc = "0.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
 log = "=0.4.35"
 anyhow = "1"
 xcursor = "=0.3.11"

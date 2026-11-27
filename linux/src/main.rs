@@ -65,6 +65,9 @@ mod native_core {
 mod clipboard_sync;
 #[path = "../../src-native/src/control.rs"]
 pub mod control;
+mod cursor_linux;
+#[path = "../../src-native/src/cursor_pixels.rs"]
+mod cursor_pixels;
 mod cursor_theme;
 #[path = "../../src-native/src/desktop_input.rs"]
 pub mod desktop_input;
@@ -186,7 +189,7 @@ struct Desktop {
     playback: Option<Arc<playback::Playback>>,
     telemetry: Option<Arc<telemetry::Session>>,
     metrics: telemetry::View,
-    screens: [Option<multi_display::Surface>; display_stream::STREAMS - 1],
+    screens: [Option<multi_display::Surface>; crate::display_stream::DESKTOP_DISPLAYS - 1],
 }
 
 fn account_worker(
@@ -492,7 +495,6 @@ impl eframe::App for Desktop {
                         playback.set_input_geometry(source);
                         multi_display::fit(ctx, source, &mut self.fitted_stream);
                     }
-                    self.desktop_input.cursor(ctx, &playback);
                     self.session_overlay(ctx, &playback);
                 } else {
                     self.launcher(ui, ctx);
@@ -504,6 +506,9 @@ impl eframe::App for Desktop {
             self.show_video,
         );
         if let Some(playback) = &self.playback {
+            if !self.show_video {
+                self.desktop_input.cursor(ctx, playback);
+            }
             playback.finish_clipboard(
                 self.desktop_input.enabled
                     && ctx.input(|i| i.focused)

@@ -190,6 +190,9 @@ impl Control {
         }
         let result = (|| -> Result<()> {
             match command {
+                Command::AddPhazeDisplay(_) => {
+                    anyhow::bail!("Phaze display selection requires a Phaze session")
+                }
                 Command::AddDisplay(stream) => {
                     let host = session.host.lock().unwrap_or_else(|e| e.into_inner());
                     anyhow::ensure!(

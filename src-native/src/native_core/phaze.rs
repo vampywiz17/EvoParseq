@@ -6,10 +6,12 @@ mod turn_research;
 use crate::platform::Desktop as _;
 use crate::{
     connection_settings::Manager,
-    interop_session::{self, normalized, Stream},
+    display_stream::DESKTOP_DISPLAYS,
+    interop_session::{self, normalized, SecondaryDisplays, Stream},
     window::{Event, Window},
 };
 use anyhow::Result;
+use evoparseq_host_interop::{DisplayCommand, Input, InputBatch};
 use std::{
     collections::VecDeque,
     sync::{atomic::Ordering, Arc},
@@ -18,6 +20,10 @@ use std::{
 
 struct View {
     window: Arc<Window>,
+    secondary: SecondaryDisplays,
+    owner: usize,
+    drag_buttons: u32,
+    secondary_position: bool,
     manager: Arc<Manager>,
     stream: Stream,
     received: u64,
@@ -47,6 +53,208 @@ struct View {
     carrier: &'static str,
 }
 impl View {
+    fn route_pointer(
+        &mut self,
+        source: &Window,
+        event: &Event,
+        output: Option<u32>,
+        input: &mut InputBatch,
+    ) -> bool {
+        let (x, y, button) = match *event {
+            Event::Motion(x, y) => (x, y, None),
+            Event::Button(false, button, x, y) => (x, y, Some(button)),
+            _ => return false,
+        };
+        if self.drag_buttons == 0 || !self.secondary.is_open() || source.native_relative_mouse() {
+            return false;
+        }
+        for slot in 0..DESKTOP_DISPLAYS {
+            let screen = self.window.displays.get(slot);
+            let (target, id) = if slot == 0 {
+                (self.window.as_ref(), output)
+            } else if let Some(screen) = &screen {
+                (
+                    screen.window.as_ref(),
+                    self.secondary
+                        .output(slot)
+                        .filter(|_| self.secondary.ready(slot)),
+                )
+            } else {
+                continue;
+            };
+            let Some(id) = id else { continue };
+            if target.handle() == source.handle()
+                || target.input_detached()
+                || target.native_relative_mouse()
+            {
+                continue;
+            }
+            let Some((x, y)) = source.pointer_in(target, x, y) else {
+                continue;
+            };
+            let Some((absolute_x, absolute_y)) = normalized(target.presented_viewport(), x, y)
+            else {
+                continue;
+            };
+            input.target(Some(id));
+            input.push(Input::Motion {
+                x: absolute_x,
+                y: absolute_y,
+                relative: false,
+            });
+            if let Some(button) = button {
+                input.extend(interop_session::button(
+                    target.presented_viewport(),
+                    false,
+                    button,
+                    x,
+                    y,
+                ));
+                self.drag_buttons &= !(1 << button);
+            }
+            return true;
+        }
+        false
+    }
+
+    fn input_event(
+        &mut self,
+        source: &Window,
+        event: Event,
+        output: Option<u32>,
+        input: &mut InputBatch,
+    ) -> Result<()> {
+        let slot = source.display_stream.load(Ordering::Acquire);
+        let target = if slot == 0 {
+            output
+        } else {
+            self.secondary.output(slot)
+        };
+        let viewport = source.presented_viewport();
+        let allowed = target.is_some()
+            && source.native_input_allowed()
+            && (slot == 0 || self.secondary.ready(slot));
+        let button = match &event {
+            Event::Button(down, button, ..) => Some((*down, *button)),
+            _ => None,
+        };
+        if allowed
+            && matches!(&event, Event::Motion(..) | Event::Button(false, ..))
+            && self.route_pointer(source, &event, output, input)
+        {
+            return Ok(());
+        }
+        input.target(target);
+        let before = input.len();
+        if matches!(event, Event::HidInputRelease | Event::Focus(false)) {
+            self.drag_buttons = 0;
+        }
+        translate(event, &mut self.keys, viewport, allowed, input)?;
+        if input.len() != before {
+            if let Some((down, button)) = button {
+                if down {
+                    self.drag_buttons |= 1 << button;
+                } else {
+                    self.drag_buttons &= !(1 << button);
+                }
+            }
+            align_initial_pointer(
+                if slot == 0 {
+                    &mut self.needs_initial_position
+                } else {
+                    &mut self.secondary_position
+                },
+                source.native_relative_mouse(),
+                viewport,
+                input,
+                before,
+            );
+        }
+        Ok(())
+    }
+
+    fn poll_screens(&mut self, output: Option<u32>, input: &mut InputBatch) -> Result<()> {
+        let open = self.secondary.is_open();
+        if !open && self.owner == 0 {
+            return Ok(());
+        }
+        let mut owner = usize::from(self.window.native_input_allowed());
+        for slot in 1..DESKTOP_DISPLAYS {
+            if let Some(screen) = self.window.displays.get(slot) {
+                let window = &screen.window;
+                let failed = window
+                    .video_report
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_ref()
+                    .is_some_and(|report| report.failure_stage.is_some());
+                if failed
+                    || self.secondary.timed_out(slot)
+                    || window.closing.load(Ordering::Acquire)
+                    || window.stop.stopped()
+                {
+                    self.secondary.close(slot);
+                    self.window.displays.close(slot);
+                } else if window.native_input_allowed() {
+                    owner = slot + 1;
+                }
+            }
+        }
+        if self.owner != owner {
+            input.target(None);
+            input.push(Input::Release);
+            self.keys.reset();
+            self.drag_buttons = 0;
+            self.needs_initial_position = true;
+            self.secondary_position = true;
+        }
+        self.owner = if open { owner } else { 0 };
+        for slot in 1..DESKTOP_DISPLAYS {
+            let Some(screen) = self.window.displays.get(slot) else {
+                continue;
+            };
+            let mut events = screen.batch.lock().unwrap_or_else(|e| e.into_inner());
+            screen.window.events.take_batch(&mut events);
+            while let Some(event) = events.pop_front() {
+                match event {
+                    Event::Shortcut(crate::input::Shortcut::Disconnect)
+                    | Event::NativeSession(crate::session_controls::Command::Disconnect) => {
+                        if self.owner == slot + 1 {
+                            input.target(None);
+                            input.push(Input::Release);
+                            self.keys.reset();
+                            self.drag_buttons = 0;
+                            self.owner = 0;
+                        }
+                        self.secondary.close(slot);
+                        self.window.displays.close(slot);
+                        events.clear();
+                    }
+                    Event::Shortcut(crate::input::Shortcut::Fullscreen) => screen
+                        .window
+                        .set_fullscreen(!screen.window.native_fullscreen()),
+                    Event::Shortcut(crate::input::Shortcut::ReleaseInput) => {
+                        screen.window.toggle_input_detached();
+                        if self.owner == slot + 1 {
+                            input.target(None);
+                            input.push(Input::Release);
+                            self.keys.reset();
+                            self.drag_buttons = 0;
+                        }
+                    }
+                    Event::Clipboard => screen.window.take_clipboard_event(),
+                    Event::Focus(_) => {}
+                    event if self.owner == slot + 1 => {
+                        self.input_event(&screen.window, event, output, input)?
+                    }
+                    _ => {}
+                }
+            }
+        }
+        input.target(None);
+        Ok(())
+    }
+
     fn publish(&self, state: &str) {
         let video = self.video.snapshot();
         let stream = self.stream.video();
@@ -277,7 +485,16 @@ impl evoparseq_host_interop::Sink for View {
             }
         };
         match frame {
-            Ok(frame) => self.window.set_cursor(Request::Image(Some(frame))),
+            Ok(frame) => {
+                for slot in 1..DESKTOP_DISPLAYS {
+                    if let Some(screen) = self.window.displays.get(slot) {
+                        screen
+                            .window
+                            .set_cursor(Request::Image(Some(frame.clone())));
+                    }
+                }
+                self.window.set_cursor(Request::Image(Some(frame)));
+            }
             Err(_) => crate::event_log::record(
                 "WARN",
                 "phaze_cursor_image_invalid",
@@ -342,6 +559,50 @@ impl evoparseq_host_interop::Sink for View {
             serde_json::json!({"count":outputs.len()}),
         );
     }
+    fn display_video_header_observed(&mut self, output: u32, match_mask: u8) {
+        crate::interop_session::log_display_video_header(output, match_mask);
+    }
+
+    fn parallel_display_probe(&mut self, status: &'static str) {
+        crate::interop_session::log_parallel_display_probe(status);
+    }
+
+    fn display_command(&mut self) -> Option<DisplayCommand> {
+        self.secondary.command()
+    }
+
+    fn secondary_video(&mut self, output: u32, encoded: &[u8], reset: bool) {
+        if let Some(slot) = self.secondary.slot(output) {
+            if let Some(screen) = self.window.displays.get(slot) {
+                if reset {
+                    screen.video.encoder_rebuilt();
+                }
+                if let Some(info) = self.secondary.inspect(slot, encoded, reset) {
+                    screen.video.submit(encoded, info);
+                }
+            }
+        }
+    }
+
+    fn secondary_cursor_mode(&mut self, output: u32, relative: bool, visible: bool) {
+        if let Some(screen) = self
+            .secondary
+            .slot(output)
+            .and_then(|slot| self.window.displays.get(slot))
+        {
+            screen.window.set_host_relative_mouse(relative);
+            screen
+                .window
+                .set_cursor(crate::cursor::Request::Visible(visible));
+        }
+    }
+
+    fn secondary_lost(&mut self, output: u32) {
+        if let Some(slot) = self.secondary.lost(output) {
+            self.window.displays.close(slot);
+        }
+    }
+
     fn video(&mut self, encoded: &[u8], reset: bool) -> Result<()> {
         if reset {
             self.video.encoder_rebuilt();
@@ -383,7 +644,7 @@ impl evoparseq_host_interop::Sink for View {
     fn poll(
         &mut self,
         output: Option<u32>,
-        commands: &mut Vec<evoparseq_host_interop::Input>,
+        commands: &mut InputBatch,
         controls: &mut Vec<evoparseq_host_interop::ClientControl>,
     ) -> Result<bool> {
         use super::session_model::{Command, Notification, Status, View as _};
@@ -401,6 +662,7 @@ impl evoparseq_host_interop::Sink for View {
         {
             anyhow::bail!("Phaze video failed: {stage}");
         }
+        self.poll_screens(output, commands)?;
         self.window.events.take_batch(&mut self.events);
         let desktop = crate::platform_windows::NativeDesktop(self.window.handle() as usize);
         if self
@@ -430,6 +692,7 @@ impl evoparseq_host_interop::Sink for View {
                 }
                 Event::Shortcut(crate::input::Shortcut::ReleaseInput) => {
                     self.keys.reset();
+                    self.drag_buttons = 0;
                     commands.push(Input::Release);
                     self.window.toggle_input_detached();
                 }
@@ -488,7 +751,34 @@ impl evoparseq_host_interop::Sink for View {
                                 self.window.set_fullscreen(video.fullscreen);
                                 self.stream.apply(config, output);
                             }
+                            Command::AddPhazeDisplay(id) => {
+                                anyhow::ensure!(
+                                    self.hid_devices == (false, false),
+                                    "Additional displays require normal input"
+                                );
+                                anyhow::ensure!(
+                                    self.secondary.available(id, output),
+                                    "Display is already open"
+                                );
+                                let slot = self.secondary.vacant().ok_or_else(|| {
+                                    anyhow::anyhow!("No additional display slot is available")
+                                })?;
+                                self.window
+                                    .session
+                                    .displays
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .validate_selection(&id.to_string(), false)?;
+                                self.window
+                                    .displays
+                                    .open_phaze(slot, id, self.manager.clone())?;
+                                self.secondary.open(slot, id, self.stream.config());
+                            }
                             Command::SelectDisplay(id) => {
+                                anyhow::ensure!(
+                                    self.secondary.slot(id.parse()?).is_none(),
+                                    "Display is already open"
+                                );
                                 self.window
                                     .session
                                     .displays
@@ -496,6 +786,7 @@ impl evoparseq_host_interop::Sink for View {
                                     .unwrap_or_else(|e| e.into_inner())
                                     .validate_selection(&id, self.hid_devices.0)?;
                                 self.keys.reset();
+                                self.drag_buttons = 0;
                                 commands.clear();
                                 commands.push(Input::Release);
                                 self.stream.select(id.parse()?);
@@ -522,6 +813,9 @@ impl evoparseq_host_interop::Sink for View {
                 }
                 Event::Focus(true) => self.needs_initial_position = true,
                 event => {
+                    if self.owner > 1 {
+                        continue;
+                    }
                     let reset = match event {
                         Event::Focus(false) => Some("focus_lost"),
                         Event::HidInputRelease => Some("input_released"),
@@ -549,16 +843,12 @@ impl evoparseq_host_interop::Sink for View {
                     };
                     let allowed = blocked_by.is_none();
                     let before = commands.len();
-                    translate(event, &mut self.keys, viewport, allowed, commands)?;
-                    if self.needs_initial_position && commands.len() != before {
-                        align_initial_pointer(
-                            &mut self.needs_initial_position,
-                            self.window.native_relative_mouse(),
-                            viewport,
-                            commands,
-                            before,
-                        );
+                    if reset.is_some() {
+                        self.drag_buttons = 0;
                     }
+                    let source = self.window.clone();
+                    self.input_event(&source, event, output, commands)?;
+                    commands.target(None);
                     if let Some((index, kind)) = kind {
                         let queued = commands.len() != before;
                         match index {
@@ -620,6 +910,10 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
     let _lifecycle = SessionWindow(window.clone());
     window.session.phaze.store(true, Ordering::Release);
     let saved = manager.view().0;
+    window.multidisplay_ready.store(
+        saved.phaze_input_mode.devices() == (false, false),
+        Ordering::Release,
+    );
     window.set_input_state(crate::input_state::State {
         mode: saved.native_core.video.mode(),
         ..Default::default()
@@ -669,6 +963,10 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
         events: VecDeque::new(),
         input_logged: [None; 4],
         needs_initial_position: true,
+        secondary: Default::default(),
+        owner: 0,
+        drag_buttons: 0,
+        secondary_position: true,
         interval_motion: 0,
         interval_buttons: [0; 2],
         interval_keys: [0; 2],
@@ -693,6 +991,7 @@ pub(super) fn run(session: &Session, peer: &str, manager: Arc<Manager>) -> Resul
             result=local=>result,
         }
     });
+    window.displays.clear();
     if let Err(error) = &result {
         crate::event_log::record(
             "ERROR",
@@ -738,7 +1037,7 @@ fn align_initial_pointer(
     pending: &mut bool,
     relative: bool,
     viewport: Option<crate::viewport::Viewport>,
-    commands: &mut Vec<evoparseq_host_interop::Input>,
+    commands: &mut InputBatch,
     first: usize,
 ) {
     use evoparseq_host_interop::Input;
@@ -770,7 +1069,7 @@ fn translate(
     keys: &mut evoparseq_host_interop::Keyboard,
     viewport: Option<crate::viewport::Viewport>,
     allowed: bool,
-    commands: &mut Vec<evoparseq_host_interop::Input>,
+    commands: &mut InputBatch,
 ) -> Result<()> {
     use evoparseq_host_interop::Input;
     match event {
@@ -858,6 +1157,10 @@ mod tests {
                 events: VecDeque::new(),
                 input_logged: [None; 4],
                 needs_initial_position: true,
+                secondary: Default::default(),
+                owner: 0,
+                drag_buttons: 0,
+                secondary_position: true,
                 interval_motion: 0,
                 interval_buttons: [0; 2],
                 interval_keys: [0; 2],
@@ -884,7 +1187,7 @@ mod tests {
             window
                 .events
                 .push(Event::NativeSession(Command::Apply(initial_video.clone())));
-            let mut commands = Vec::new();
+            let mut commands = InputBatch::default();
             let mut controls = Vec::new();
             assert!(view.poll(None, &mut commands, &mut controls)?);
             assert!(view.stream_request().is_none());
@@ -1095,12 +1398,135 @@ mod tests {
             window.events.push(Event::Scroll(1, 2));
             window.events.push(Event::HidInputRelease);
             assert!(view.poll(None, &mut commands, &mut controls)?);
-            assert_eq!(commands, [Input::Release]);
+            assert_eq!(
+                commands.iter().copied().collect::<Vec<_>>(),
+                [Input::Release]
+            );
             window
                 .events
                 .push(Event::NativeSession(Command::HideButton));
             assert!(view.poll(Some(8), &mut commands, &mut controls)?);
             assert!(manager.native_session_button_hidden());
+
+            // Exercise Phaze window dispatch with synthetic input and no host.
+            view.outputs(&[output(7), output(8), output(29)]);
+            view.hid_devices = (true, false);
+            window
+                .events
+                .push(Event::NativeSession(Command::AddPhazeDisplay(29)));
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+            assert!(view.display_command().is_none());
+            view.hid_devices = (false, false);
+            for id in [8, 67] {
+                window
+                    .events
+                    .push(Event::NativeSession(Command::AddPhazeDisplay(id)));
+                assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+                assert!(view.display_command().is_none());
+            }
+            window
+                .events
+                .push(Event::NativeSession(Command::AddPhazeDisplay(29)));
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+            assert!(matches!(
+                view.display_command(),
+                Some(DisplayCommand::Open(29, _))
+            ));
+            let screen = window
+                .displays
+                .get(1)
+                .context("Additional window was not created")?;
+            assert_eq!(screen.phaze_output, Some(29));
+            assert!(window.displays.has_phaze_output(29));
+            view.secondary_cursor_mode(29, false, true);
+            view.secondary_video(29, &[0], true);
+            assert!(!view.secondary.ready(1));
+            assert!(view
+                .secondary
+                .inspect(1, &[0, 0, 1, 0x65, 0x80], false)
+                .is_some());
+            window.events.drain();
+            screen.window.events.drain();
+
+            // Snapshot geometry is synthetic. It does not submit a frame to a
+            // decoder, move the system pointer, or use a real profile.
+            let prepare_input = |target: &Window, (width, height)| {
+                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                    SendMessageW, WM_NULL, WM_SETFOCUS,
+                };
+                let generation = target.begin_video();
+                target.set_video_ready_for(generation, true);
+                *target.video_report.lock().unwrap() = Some(crate::video_output::Snapshot {
+                    width: Some(width),
+                    height: Some(height),
+                    frames_presented: 1,
+                    ..Default::default()
+                });
+                unsafe {
+                    SendMessageW(target.handle(), WM_SETFOCUS, 0, 0);
+                    SendMessageW(target.handle(), WM_NULL, 0, 0);
+                }
+            };
+            prepare_input(&screen.window, (1280, 720));
+            screen.window.events.push(Event::Key(true, "KeyA", 0));
+            commands.clear();
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+            assert!(commands
+                .iter()
+                .any(|command| matches!(command, Input::Key { down: true, .. })));
+            assert_eq!(view.owner, 2);
+
+            let reference = screen
+                .window
+                .presented_viewport()
+                .context("Secondary viewport did not become ready")?;
+            let [l, t, r, b] = reference.rect().unwrap();
+            let (x, y) = ((l + r) / 2, (t + b) / 2);
+            let (dx, dy) = normalized(Some(reference), x, y).unwrap();
+            commands.clear();
+            view.input_event(
+                &screen.window,
+                Event::Button(true, 0, x, y),
+                Some(8),
+                &mut commands,
+            )?;
+            assert!(commands
+                .iter()
+                .any(|command| matches!(command, Input::Button { down: true, .. })));
+            assert_eq!(view.drag_buttons, 1);
+            assert!(dx > 0 && dy > 0);
+
+            screen
+                .window
+                .events
+                .push(Event::Shortcut(crate::input::Shortcut::ReleaseInput));
+            commands.clear();
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+            assert!(commands.iter().any(|command| *command == Input::Release));
+            assert_eq!(view.drag_buttons, 0);
+            screen
+                .window
+                .events
+                .push(Event::NativeSession(Command::Disconnect));
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+            assert!(matches!(
+                view.display_command(),
+                Some(DisplayCommand::Close(29))
+            ));
+            assert!(window.displays.get(1).is_none());
+
+            window
+                .events
+                .push(Event::NativeSession(Command::AddPhazeDisplay(29)));
+            assert!(view.poll(Some(8), &mut commands, &mut controls)?);
+            assert!(matches!(
+                view.display_command(),
+                Some(DisplayCommand::Open(29, _))
+            ));
+            view.secondary_lost(29);
+            assert!(window.displays.get(1).is_none());
+            assert!(view.display_command().is_none());
+
             window
                 .events
                 .push(Event::NativeSession(Command::Disconnect));
@@ -1181,19 +1607,22 @@ mod tests {
             relative: false,
         };
         let mut pending = true;
-        let mut commands = vec![down];
+        let mut commands: InputBatch = [down].into_iter().collect();
         align_initial_pointer(&mut pending, true, viewport, &mut commands, 0);
         assert!(pending);
-        assert_eq!(commands, [down]);
+        assert_eq!(commands.iter().copied().collect::<Vec<_>>(), [down]);
         align_initial_pointer(&mut pending, false, viewport, &mut commands, 0);
         assert!(!pending);
-        assert_eq!(commands, [position, down]);
+        assert_eq!(
+            commands.iter().copied().collect::<Vec<_>>(),
+            [position, down]
+        );
 
         pending = true;
-        commands = vec![position];
+        commands = [position].into_iter().collect();
         align_initial_pointer(&mut pending, false, viewport, &mut commands, 0);
         assert!(!pending);
-        assert_eq!(commands, [position]);
+        assert_eq!(commands.iter().copied().collect::<Vec<_>>(), [position]);
     }
     #[test]
     fn phaze_click_sends_only_the_button_and_focus_loss_releases() -> Result<()> {
@@ -1202,7 +1631,7 @@ mod tests {
             client: (1024, 768),
         });
         let mut keys = Keyboard::default();
-        let mut commands = Vec::new();
+        let mut commands = InputBatch::default();
         translate(
             Event::Button(true, 2, 512, 384),
             &mut keys,
@@ -1211,7 +1640,7 @@ mod tests {
             &mut commands,
         )?;
         assert_eq!(
-            commands,
+            commands.iter().copied().collect::<Vec<_>>(),
             [Input::Button {
                 button: 2,
                 x: 512,

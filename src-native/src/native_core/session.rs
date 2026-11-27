@@ -422,6 +422,7 @@ pub(super) fn run(
                             view.notify(Notification::Status(Status::Failed));
                         }
                     }
+                    session_model::Command::AddPhazeDisplay(_) => view.result(false),
                     session_model::Command::Disconnect => platform.stop(),
                     session_model::Command::HideButton => {
                         if manager
