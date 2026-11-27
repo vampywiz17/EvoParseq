@@ -28,6 +28,7 @@ pub struct Output {
     pub height: u32,
     pub active: bool,
     pub primary: bool,
+    pub refresh_fields: crate::display_refresh::Fields,
 }
 pub(crate) fn be(b: &[u8], i: usize) -> u32 {
     u32::from_be_bytes(b[i..i + 4].try_into().unwrap())
@@ -62,6 +63,10 @@ pub fn outputs(b: &[u8]) -> Result<Vec<Output>> {
             height: be(b, p + 12),
             active: b[p + 52] != 0,
             primary: b[p + 53] != 0,
+            refresh_fields: crate::display_refresh::Fields {
+                word_0: be(b, p + 28),
+                word_1: be(b, p + 32),
+            },
         });
         p += 54;
     }
@@ -117,7 +122,11 @@ pub(crate) fn ack_bandwidth(ack: &[u8]) -> Option<(f64, f64)> {
 
 /// Phaze 0.14.3 layout observed in the client serializer. The option value
 /// was corroborated by a successful stock session and an EvoParseq live test.
-pub(crate) fn hello(raw_audio: bool, layout: DisplayLayout) -> Vec<u8> {
+pub(crate) fn hello_with_refresh(
+    raw_audio: bool,
+    layout: DisplayLayout,
+    refresh: crate::display_refresh::Probe,
+) -> Vec<u8> {
     const CLIENT_DISPLAY_OPTION: u32 = 0x100;
     let mut flags = u32::from(raw_audio);
     if layout.enabled {
@@ -136,13 +145,26 @@ pub(crate) fn hello(raw_audio: bool, layout: DisplayLayout) -> Vec<u8> {
     for (index, resolution) in layout.resolutions().into_iter().take(count).enumerate() {
         let [width, height] = resolution.dimensions();
         const NAME: &[u8] = b"EvoParseq Display";
-        let id = 0x4556_5031u32 + index as u32;
+        let id = crate::display_refresh::descriptor_id(index);
         b.extend(id.to_be_bytes());
         b.extend((NAME.len() as u32).to_be_bytes());
         b.extend(NAME);
         // Arrange displays from left to right, with only the first primary.
         // x, y, logical size, rotation, pixel size, refresh, capabilities.
-        for word in [left, 0, width, height, 0, width, height, 60, 1, 0, 0] {
+        let fields = refresh.fields(index);
+        for word in [
+            left,
+            0,
+            width,
+            height,
+            0,
+            width,
+            height,
+            fields.word_0,
+            fields.word_1,
+            0,
+            0,
+        ] {
             b.extend(word.to_be_bytes());
         }
         // The serializer scales normalized floating values by 10,000.
@@ -152,6 +174,11 @@ pub(crate) fn hello(raw_audio: bool, layout: DisplayLayout) -> Vec<u8> {
         left += width;
     }
     b
+}
+
+#[cfg(test)]
+fn hello(raw_audio: bool, layout: DisplayLayout) -> Vec<u8> {
+    hello_with_refresh(raw_audio, layout, crate::display_refresh::Probe::default())
 }
 
 pub(crate) fn video_request(
@@ -1096,4 +1123,70 @@ mod stream_tests {
         .is_ok());
         Ok(())
     }
+}
+
+#[cfg(test)]
+#[test]
+fn refresh_probe_changes_only_the_requested_descriptor_word_and_reports_host_fields() -> Result<()>
+{
+    use crate::{
+        display_layout::DisplayCount,
+        display_refresh::{Fields, Probe},
+    };
+    let layout = DisplayLayout {
+        enabled: true,
+        count: DisplayCount::Two,
+        ..Default::default()
+    };
+    let probe = Probe::parse(layout, Some(std::ffi::OsStr::new("60,120")))?;
+    let baseline = hello(false, layout);
+    let request = hello_with_refresh(false, layout, probe);
+    assert_eq!(baseline.len(), request.len());
+    let name_len = be(&request, 13) as usize;
+    let stride = 8 + name_len + 54;
+    let second_refresh = 17 + name_len + stride + 28;
+    for (index, (&old, &new)) in baseline.iter().zip(&request).enumerate() {
+        if !(second_refresh..second_refresh + 4).contains(&index) {
+            assert_eq!(old, new, "unrelated hello byte {index}");
+        }
+    }
+    assert_eq!(be(&request, second_refresh), 120);
+    assert_eq!(be(&request, second_refresh + 4), 1);
+    // Host output IDs may differ from requested descriptor IDs. Parse the
+    // returned fields, not a guessed mapping from Windows screen numbering.
+    let mut reply = Vec::new();
+    reply.extend((request.len() as u32 + 3).to_be_bytes());
+    reply.extend(&request[5..9]);
+    reply.extend(0u32.to_be_bytes());
+    reply.extend(&request[9..]);
+    let second_entry = 12 + stride;
+    reply[second_entry..second_entry + 4].copy_from_slice(&17u32.to_be_bytes());
+    let host_refresh = second_entry + 8 + name_len + 28;
+    reply[host_refresh..host_refresh + 4].copy_from_slice(&24u32.to_be_bytes());
+    let parsed = outputs(&reply)?;
+    assert_eq!(
+        parsed[0].refresh_fields,
+        Fields {
+            word_0: 60,
+            word_1: 1
+        }
+    );
+    assert_eq!(parsed[1].id, 17);
+    assert_eq!(
+        parsed[1].refresh_fields,
+        Fields {
+            word_0: 24,
+            word_1: 1
+        }
+    );
+    assert_eq!(parsed[1].refresh_fields.candidate_hz(), Some(24.));
+    reply[host_refresh + 4..host_refresh + 8].fill(0);
+    let unknown = outputs(&reply)?;
+    assert_eq!(unknown[1].refresh_fields.word_0, 24);
+    assert_eq!(unknown[1].refresh_fields.candidate_hz(), None);
+    assert_eq!(
+        hello_with_refresh(false, DisplayLayout::default(), probe),
+        hello(false, DisplayLayout::default())
+    );
+    Ok(())
 }

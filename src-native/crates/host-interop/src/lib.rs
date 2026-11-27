@@ -7,6 +7,7 @@ mod control;
 mod cursor;
 mod datagram;
 pub mod display_layout;
+pub mod display_refresh;
 mod input;
 mod parallel_display_probe;
 mod transport;
@@ -213,6 +214,8 @@ pub trait Sink {
     fn display_layout(&self) -> display_layout::DisplayLayout {
         display_layout::DisplayLayout::default()
     }
+    /// Experimental refresh fields; neither requests nor replies prove the applied OS mode.
+    fn display_refresh_diagnostic(&mut self, _event: &display_refresh::Diagnostic<'_>) {}
     fn video_config(&self) -> VideoConfig {
         VideoConfig::default()
     }

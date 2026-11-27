@@ -51,6 +51,10 @@ from the host's virtual output. The same DP capture failure also occurred
 with the stock client when mirroring was disabled. Resolution changes apply
 when a new session starts. The supported presets are requests to the host.
 
+For experimental per-display refresh observations and a bounded startup-only
+60/120 Hz test override, see the [refresh probe](phaze-display-refresh-probe.md).
+These observations do not verify the host's applied Windows display mode.
+
 ## Audio and input
 
 The hello requests raw PCM with option bit 0 set, or AAC-LC with it clear.

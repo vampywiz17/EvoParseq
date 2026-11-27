@@ -405,6 +405,12 @@ impl evoparseq_host_interop::Sink for View {
     fn raw_audio(&self) -> bool {
         self.raw_audio
     }
+    fn display_refresh_diagnostic(
+        &mut self,
+        event: &evoparseq_host_interop::display_refresh::Diagnostic<'_>,
+    ) {
+        crate::interop_session::log_display_refresh(event);
+    }
     fn display_layout(&self) -> evoparseq_host_interop::display_layout::DisplayLayout {
         self.display_layout
     }
@@ -1170,6 +1176,7 @@ mod tests {
                 carrier: "direct UDP",
             };
             let output = |id| evoparseq_host_interop::Output {
+                refresh_fields: Default::default(),
                 id,
                 name: format!("Fixture {id}"),
                 width: 1920,

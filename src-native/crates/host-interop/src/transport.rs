@@ -720,15 +720,21 @@ pub async fn run(
         sink.usb_probe_event("started", None, 0);
     }
     let display_layout = sink.display_layout();
+    let refresh_probe = crate::display_refresh::Probe::from_environment(display_layout)?;
     if display_layout.enabled {
         sink.stage("requesting_client_display_layout");
     }
-    for p in reliable.frame(&wire::hello(sink.raw_audio(), display_layout))? {
+    for p in reliable.frame(&wire::hello_with_refresh(
+        sink.raw_audio(),
+        display_layout,
+        refresh_probe,
+    ))? {
         send(&mut c, &p)?;
     }
     let transmission_started = Instant::now();
     flush(&mut c, &socket, peer).await?;
     reliable.transmitted(transmission_started);
+    refresh_probe.hello_sent(display_layout, sink);
     sink.stage("waiting_outputs");
     let mut requested = false;
     let app_started = Instant::now();
@@ -933,6 +939,7 @@ pub async fn run(
                     Some(1) if frame.len() == 5 => sink.host_flags(wire::be(&frame, 1)),
                     Some(2) => {
                         let outputs = wire::outputs(&frame[1..])?;
+                        crate::display_refresh::outputs_received(&outputs, sink);
                         sink.outputs(&outputs);
                         if !requested {
                             // A headless host can publish the list before it
@@ -1179,6 +1186,7 @@ mod tests {
         let mut routes = DisplayRoutes::default();
         let mut client = Client::default();
         let targets = [7, 17, 9, 22, 50].map(|id| wire::Output {
+            refresh_fields: Default::default(),
             id,
             name: String::new(),
             width: 1920,
@@ -1341,6 +1349,7 @@ mod tests {
     #[test]
     fn startup_waits_for_an_active_output_and_prefers_the_primary() {
         let output = |id, active, primary| wire::Output {
+            refresh_fields: Default::default(),
             id,
             name: String::new(),
             width: 1920,
